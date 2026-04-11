@@ -19,6 +19,7 @@ _force_terminal = _sys.stdout.isatty() if hasattr(_sys.stdout, "isatty") else Fa
 from mtg_deck_engine.data.database import CardDatabase
 from mtg_deck_engine.legal import ATTRIBUTION, DISCLAIMER
 from mtg_deck_engine.models import Format
+from mtg_deck_engine.tiers import COMMAND_FEATURES, _PRO_UPGRADE_MSG, get_user_tier, require_pro
 
 # Heavy imports are lazy-loaded inside command functions to speed up
 # simple commands like `info` and `search`. Each cmd_* function imports
@@ -164,31 +165,38 @@ def main():
         parser.print_help()
         return
 
-    if args.command == "ingest":
+    # Check tier for pro-gated commands
+    command = args.command
+    feature = COMMAND_FEATURES.get(command, command)
+    if require_pro(feature):
+        console.print(_PRO_UPGRADE_MSG)
+        sys.exit(0)
+
+    if command == "ingest":
         cmd_ingest(args)
-    elif args.command == "analyze":
+    elif command == "analyze":
         cmd_analyze(args)
-    elif args.command == "probability":
+    elif command == "probability":
         cmd_probability(args)
-    elif args.command == "goldfish":
+    elif command == "goldfish":
         cmd_goldfish(args)
-    elif args.command == "gauntlet":
+    elif command == "gauntlet":
         cmd_gauntlet(args)
-    elif args.command == "save":
+    elif command == "save":
         cmd_save(args)
-    elif args.command == "compare":
+    elif command == "compare":
         cmd_compare(args)
-    elif args.command == "history":
+    elif command == "history":
         cmd_history(args)
-    elif args.command == "calc":
+    elif command == "calc":
         cmd_calc(args)
-    elif args.command == "diff":
+    elif command == "diff":
         cmd_diff(args)
-    elif args.command == "practice":
+    elif command == "practice":
         cmd_practice(args)
-    elif args.command == "search":
+    elif command == "search":
         cmd_search(args)
-    elif args.command == "info":
+    elif command == "info":
         cmd_info(args)
 
 
@@ -294,57 +302,78 @@ def cmd_analyze(args):
 
         console.print("  " + "  |  ".join(summary_parts))
 
-        # Power breakdown
-        console.print(
-            f"  [dim]Speed {power.speed:.0f} | Interaction {power.interaction:.0f} | "
-            f"Combo {power.combo_potential:.0f} | Mana {power.mana_efficiency:.0f} | "
-            f"WinCons {power.win_condition_quality:.0f} | Quality {power.card_quality:.0f}[/dim]"
-        )
+        is_pro = not require_pro("advanced_scoring")
 
-        # Castability warnings
+        # Power breakdown (pro: full breakdown, free: just the number)
+        if is_pro:
+            console.print(
+                f"  [dim]Speed {power.speed:.0f} | Interaction {power.interaction:.0f} | "
+                f"Combo {power.combo_potential:.0f} | Mana {power.mana_efficiency:.0f} | "
+                f"WinCons {power.win_condition_quality:.0f} | Quality {power.card_quality:.0f}[/dim]"
+            )
+            if power.reasons_up:
+                for r in power.reasons_up[:3]:
+                    console.print(f"    [green]+[/green] [dim]{r}[/dim]")
+            if power.reasons_down:
+                for r in power.reasons_down[:3]:
+                    console.print(f"    [red]-[/red] [dim]{r}[/dim]")
+        else:
+            console.print("  [dim]Upgrade to Pro for full power level breakdown[/dim]")
+
+        # Castability warnings (pro: all cards, free: top 2)
         if castability.unreliable_cards:
+            limit = 5 if is_pro else 2
             console.print(f"\n  [yellow]Casting concerns ({len(castability.unreliable_cards)} cards):[/yellow]")
-            for cc in castability.unreliable_cards[:5]:
+            for cc in castability.unreliable_cards[:limit]:
                 console.print(
                     f"    [dim]{cc.name} ({cc.mana_cost}): "
                     f"{cc.on_curve_probability * 100:.0f}% on curve[/dim]"
                 )
+            if not is_pro and len(castability.unreliable_cards) > limit:
+                console.print(f"    [dim]... +{len(castability.unreliable_cards) - limit} more (Pro)[/dim]")
 
-        # Missing essential staples
+        # Missing staples (pro: all, free: essentials only)
         if staples.missing:
             essentials = [s for s in staples.missing if s.priority == "essential"]
-            recommended = [s for s in staples.missing if s.priority == "recommended"]
             if essentials:
                 console.print(f"\n  [red]Missing essential staples:[/red]")
                 for s in essentials:
                     console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
-            if recommended:
-                console.print(f"  [yellow]Consider adding:[/yellow]")
-                for s in recommended[:5]:
-                    console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
+            if is_pro:
+                recommended = [s for s in staples.missing if s.priority == "recommended"]
+                if recommended:
+                    console.print(f"  [yellow]Consider adding:[/yellow]")
+                    for s in recommended[:5]:
+                        console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
 
         console.print()
 
-        # Probability layer (--deep)
+        # Probability layer (--deep) [PRO]
         if hasattr(args, "deep") and args.deep:
-            _run_and_render_probability(deck, args.sims)
-
-        # Export
-        if hasattr(args, "export") and args.export:
-            export_path = Path(args.export)
-            adv_dict = {
-                "mana_base_grade": adv.mana_base_grade,
-                "mana_base_notes": adv.mana_base_notes,
-                "synergies": [{"card_a": s.card_a, "card_b": s.card_b, "reason": s.reason} for s in adv.synergies],
-                "advanced_recommendations": adv.advanced_recommendations,
-            }
-            if export_path.suffix == ".json":
-                export_json(result, adv_dict, archetype.value, export_path)
-            elif export_path.suffix == ".html":
-                export_html(result, adv_dict, archetype.value, export_path)
+            if require_pro("deep_analysis"):
+                console.print("[yellow]--deep requires Pro tier.[/yellow] [dim]Set MTG_ENGINE_TIER=pro to unlock.[/dim]")
             else:
-                export_markdown(result, adv_dict, archetype.value, export_path)
-            console.print(f"[green]Report exported to {export_path}[/green]")
+                _run_and_render_probability(deck, args.sims)
+
+        # Export [PRO]
+        if hasattr(args, "export") and args.export:
+            if require_pro("export_reports"):
+                console.print("[yellow]--export requires Pro tier.[/yellow] [dim]Set MTG_ENGINE_TIER=pro to unlock.[/dim]")
+            else:
+                export_path = Path(args.export)
+                adv_dict = {
+                    "mana_base_grade": adv.mana_base_grade,
+                    "mana_base_notes": adv.mana_base_notes,
+                    "synergies": [{"card_a": s.card_a, "card_b": s.card_b, "reason": s.reason} for s in adv.synergies],
+                    "advanced_recommendations": adv.advanced_recommendations,
+                }
+                if export_path.suffix == ".json":
+                    export_json(result, adv_dict, archetype.value, export_path)
+                elif export_path.suffix == ".html":
+                    export_html(result, adv_dict, archetype.value, export_path)
+                else:
+                    export_markdown(result, adv_dict, archetype.value, export_path)
+                console.print(f"[green]Report exported to {export_path}[/green]")
 
     finally:
         db.close()

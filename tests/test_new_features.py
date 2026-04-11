@@ -242,11 +242,13 @@ class TestDiffCLI:
         assert "file_a" in r.stdout or "FILE_A" in r.stdout
 
     def test_diff_missing_files(self):
+        import os
+        env = {**os.environ, "MTG_ENGINE_TIER": "pro", "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
             [PYTHON, "-m", "mtg_deck_engine.cli", "diff", "fake_a.txt", "fake_b.txt"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
         )
-        assert r.returncode == 1
+        assert r.returncode == 1  # File not found error with pro tier
 
 
 # --- Practice CLI ---
