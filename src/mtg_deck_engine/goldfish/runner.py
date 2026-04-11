@@ -96,10 +96,10 @@ def run_goldfish_batch(
     if seed is not None:
         random.seed(seed)
 
-    # Ensure cards are classified
+    # Ensure cards are classified (copy tags to avoid mutating shared Card objects)
     for entry in deck.entries:
         if entry.card and not entry.card.tags:
-            entry.card.tags = classify_card(entry.card)
+            entry.card.tags = list(classify_card(entry.card))
 
     # Generate default objectives if none provided
     if objectives is None:

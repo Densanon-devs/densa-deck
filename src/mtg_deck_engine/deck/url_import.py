@@ -15,7 +15,7 @@ from mtg_deck_engine.models import DeckEntry, Zone
 _MOXFIELD_PATTERN = re.compile(r"moxfield\.com/decks/([a-zA-Z0-9_-]+)")
 _ARCHIDEKT_PATTERN = re.compile(r"archidekt\.com/(?:decks|api/decks)/(\d+)")
 
-MOXFIELD_API = "https://api2.moxfield.com/v3/decks/all"
+MOXFIELD_API = "https://api2.moxfield.com/v3/decks/all"  # Moxfield v3 public endpoint
 ARCHIDEKT_API = "https://archidekt.com/api/decks"
 
 

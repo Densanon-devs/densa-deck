@@ -47,11 +47,13 @@ def compare_decks(deck_a: Deck, deck_b: Deck) -> DeckComparison:
     """Compare two different decks."""
     comp = DeckComparison(name_a=deck_a.name, name_b=deck_b.name)
 
-    # Classify cards
+    # Classify cards (copy tags to avoid mutating shared Card objects)
     for deck in (deck_a, deck_b):
         for entry in deck.entries:
             if entry.card and not entry.card.tags:
                 entry.card.tags = list(classify_card(entry.card))
+            elif entry.card and entry.card.tags:
+                entry.card.tags = list(entry.card.tags)
 
     # Analyze both
     result_a = analyze_deck(deck_a)

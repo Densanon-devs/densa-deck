@@ -69,7 +69,7 @@ _CONFIG_PATH = Path.home() / ".mtg-deck-engine" / "config.json"
 _PRO_UPGRADE_MSG = (
     "[bold yellow]This feature requires MTG Deck Engine Pro.[/bold yellow]\n"
     "Free tier includes: card search, deck import, static analysis, mana curve, "
-    "basic recommendations, and the probability calculator.\n"
+    "basic recommendations, and the hypergeometric calculator (calc).\n"
     "[dim]To unlock: set MTG_ENGINE_TIER=pro or update ~/.mtg-deck-engine/config.json[/dim]"
 )
 
@@ -82,6 +82,9 @@ def get_user_tier() -> Tier:
         return Tier.PRO
     if env_tier == "free":
         return Tier.FREE
+    if env_tier:
+        import sys
+        print(f"Warning: unrecognized MTG_ENGINE_TIER='{env_tier}' (expected 'free' or 'pro')", file=sys.stderr)
 
     # 2. Config file
     if _CONFIG_PATH.exists():

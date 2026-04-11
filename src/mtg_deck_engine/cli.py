@@ -760,6 +760,16 @@ def cmd_calc(args):
     K = args.copies
     on_play = not args.draw
 
+    if N <= 0:
+        console.print("[red]Deck size must be positive.[/red]")
+        sys.exit(1)
+    if K < 0 or K > N:
+        console.print(f"[red]Copies must be between 0 and deck size ({N}).[/red]")
+        sys.exit(1)
+    if args.turns <= 0:
+        console.print("[red]Turns must be positive.[/red]")
+        sys.exit(1)
+
     console.print(Panel(
         f"[bold]Deck Size:[/bold] {N}  |  [bold]Copies:[/bold] {K}  |  "
         f"[bold]On the {'draw' if args.draw else 'play'}[/bold]",

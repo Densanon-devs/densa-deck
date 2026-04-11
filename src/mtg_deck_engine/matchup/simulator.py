@@ -79,10 +79,10 @@ def simulate_matchup(
     if seed is not None:
         random.seed(seed)
 
-    # Ensure classification
+    # Ensure classification (copy tags to avoid mutating shared Card objects)
     for entry in deck.entries:
         if entry.card and not entry.card.tags:
-            entry.card.tags = classify_card(entry.card)
+            entry.card.tags = list(classify_card(entry.card))
 
     is_commander = deck.format and deck.format.value in ("commander", "brawl", "oathbreaker", "duel")
     starting_life = 40 if is_commander else 20
