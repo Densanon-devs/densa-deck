@@ -502,24 +502,25 @@ def cmd_save(args):
 
         # Save
         store = VersionStore()
-        snap = store.save_version(
-            deck_id=args.deck_id,
-            name=deck_name,
-            format=deck.format.value if deck.format else None,
-            decklist=decklist,
-            zones=zones,
-            scores=result.scores,
-            metrics=metrics,
-            notes=args.notes,
-        )
-        store.close()
-
-        console.print(
-            f"[bold green]Saved {deck_name} v{snap.version_number}[/bold green] "
-            f"(id: {args.deck_id}, {len(decklist)} unique cards)"
-        )
-        if args.notes:
-            console.print(f"  [dim]Notes: {args.notes}[/dim]")
+        try:
+            snap = store.save_version(
+                deck_id=args.deck_id,
+                name=deck_name,
+                format=deck.format.value if deck.format else None,
+                decklist=decklist,
+                zones=zones,
+                scores=result.scores,
+                metrics=metrics,
+                notes=args.notes,
+            )
+            console.print(
+                f"[bold green]Saved {deck_name} v{snap.version_number}[/bold green] "
+                f"(id: {args.deck_id}, {len(decklist)} unique cards)"
+            )
+            if args.notes:
+                console.print(f"  [dim]Notes: {args.notes}[/dim]")
+        finally:
+            store.close()
 
     finally:
         db.close()
@@ -534,8 +535,8 @@ def cmd_compare(args):
             console.print(f"[yellow]Need at least 2 saved versions to compare. Found {len(versions)}.[/yellow]")
             return
 
-        v1_num = args.v1 if args.v1 else versions[-2].version_number
-        v2_num = args.v2 if args.v2 else versions[-1].version_number
+        v1_num = args.v1 if args.v1 is not None else versions[-2].version_number
+        v2_num = args.v2 if args.v2 is not None else versions[-1].version_number
 
         snap_a = store.get_version(args.deck_id, v1_num)
         snap_b = store.get_version(args.deck_id, v2_num)

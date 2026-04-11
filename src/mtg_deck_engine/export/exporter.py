@@ -275,6 +275,8 @@ def _md_to_html(md: str) -> str:
 def _inline_md(text: str) -> str:
     """Convert inline markdown (bold, italic, code) to HTML."""
     import re
+    from html import escape
+    text = escape(text)  # Escape HTML entities first to prevent injection
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
     text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)

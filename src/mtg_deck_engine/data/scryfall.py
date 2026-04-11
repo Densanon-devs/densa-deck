@@ -87,7 +87,7 @@ def parse_scryfall_card(raw: dict) -> Card | None:
                 CardFace(
                     name=face_raw.get("name", ""),
                     mana_cost=face_raw.get("mana_cost", ""),
-                    cmc=raw.get("cmc", 0.0),
+                    cmc=face_raw.get("cmc", raw.get("cmc", 0.0)),
                     type_line=face_raw.get("type_line", ""),
                     oracle_text=face_raw.get("oracle_text", ""),
                     power=face_raw.get("power"),

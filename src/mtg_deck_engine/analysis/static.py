@@ -53,10 +53,10 @@ def analyze_deck(deck: Deck) -> AnalysisResult:
         )
         return result
 
-    # Classify all cards
+    # Classify all cards (copy tags to avoid mutating shared Card objects)
     for entry in active_entries:
         if entry.card and not entry.card.tags:
-            entry.card.tags = classify_card(entry.card)
+            entry.card.tags = list(classify_card(entry.card))
 
     result.total_cards = sum(e.quantity for e in active_entries)
 

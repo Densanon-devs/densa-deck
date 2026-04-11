@@ -3,6 +3,10 @@
 Monetization is feature-gated, never data-gated. Raw card data and basic
 analysis are always free. Premium features include deep simulation, extended
 deck storage, coaching insights, and advanced matchup testing.
+
+NOTE: This module defines the tier model but is NOT yet enforced in the CLI.
+Enforcement will be wired in when the web/auth layer is built. The CLI
+currently allows all features for development and testing purposes.
 """
 
 from __future__ import annotations

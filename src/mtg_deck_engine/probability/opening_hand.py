@@ -129,11 +129,15 @@ def simulate_opening_hands(
         shuffled = pool.copy()
         random.shuffle(shuffled)
 
-        # London mulligan: draw 7 each time, put back cards equal to mulligans taken
+        # London mulligan: draw 7 each time, evaluate the effective hand size
         kept = False
         for mulls in range(4):  # 0, 1, 2, 3 mulligans
             hand_size = 7 - mulls
-            hand = shuffled[:7]  # Always see 7, put back `mulls` cards
+            hand = shuffled[:7]  # See 7, but evaluate keepability for effective hand_size
+            # Simulate bottoming: evaluate only the best hand_size cards
+            if mulls > 0:
+                scored = sorted(hand, key=lambda e: _bottom_score(e), reverse=True)
+                hand = scored[:hand_size]
             ev = evaluate_hand(hand, deck)
 
             mull_total[hand_size] = mull_total.get(hand_size, 0) + 1
@@ -256,3 +260,18 @@ def _score_hand(ev: HandEvaluation, deck: Deck) -> float:
         score = 0.0
 
     return min(score, 100.0)
+
+
+def _bottom_score(entry: DeckEntry) -> float:
+    """Score a card for keeping (higher = more keepable, lower = bottom first)."""
+    card = entry.card
+    if card is None:
+        return -100.0
+    if card.is_land:
+        return 50.0
+    score = max(0, 8 - card.cmc) * 5.0
+    if card.tags and (CardTag.RAMP in card.tags or CardTag.MANA_ROCK in card.tags):
+        score += 25.0
+    if card.tags and CardTag.CARD_DRAW in card.tags:
+        score += 15.0
+    return score

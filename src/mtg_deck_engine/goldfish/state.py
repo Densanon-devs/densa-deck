@@ -252,7 +252,7 @@ class GameState:
         self.phase = Phase.END
 
         # Discard to 7 (simplified)
-        while len(self.hand) > 7:
+        while len(self.hand) > 7 and self.hand:
             # Discard highest-CMC card
             worst = max(self.hand, key=lambda e: e.card.cmc if e.card else 0)
             self.hand.remove(worst)

@@ -119,22 +119,16 @@ def _compute_aggregates(report: GauntletReport, archetypes: list[ArchetypeProfil
 
     # Category scores
 
-    # Speed: based on avg turns to win across matchups where we win
-    win_turns = []
-    for m in report.matchups:
-        for g in m.game_results:
-            if g.won:
-                win_turns.append(g.turns_played)
-    if not win_turns:
-        # Estimate from avg_turns
-        avg_turns_all = sum(m.avg_turns for m in report.matchups) / len(report.matchups)
-        report.speed_score = max(0, min(100, (12 - avg_turns_all) / 12 * 100))
-    else:
-        avg_win_turn = sum(win_turns) / len(win_turns)
-        report.speed_score = round(max(0, min(100, (12 - avg_win_turn) / 8 * 100)), 1)
+    # Speed: estimate from average turns across matchups
+    avg_turns_all = sum(m.avg_turns for m in report.matchups) / len(report.matchups)
+    report.speed_score = round(max(0, min(100, (12 - avg_turns_all) / 8 * 100)), 1)
+
+    # Build archetype name lookup for category scoring
+    arch_name_map = {a.display_name: a.name for a in archetypes}
 
     # Resilience: win rate against high-interaction archetypes
-    high_interaction = [m for m in report.matchups if m.archetype_name in ("Control", "Stax", "Spellslinger")]
+    _HIGH_INTERACTION = {"control", "stax", "spellslinger"}
+    high_interaction = [m for m in report.matchups if arch_name_map.get(m.archetype_name, "").value in _HIGH_INTERACTION]
     if high_interaction:
         resilience_wr = sum(m.win_rate for m in high_interaction) / len(high_interaction)
         report.resilience_score = round(resilience_wr * 100, 1)
@@ -142,7 +136,8 @@ def _compute_aggregates(report: GauntletReport, archetypes: list[ArchetypeProfil
         report.resilience_score = report.overall_win_rate * 100
 
     # Interaction: how well we handle aggro/fast decks
-    fast_matchups = [m for m in report.matchups if m.archetype_name in ("Aggro", "Voltron", "Turbo / cEDH")]
+    _FAST_ARCHETYPES = {"aggro", "voltron", "turbo"}
+    fast_matchups = [m for m in report.matchups if arch_name_map.get(m.archetype_name, "").value in _FAST_ARCHETYPES]
     if fast_matchups:
         interaction_wr = sum(m.win_rate for m in fast_matchups) / len(fast_matchups)
         report.interaction_score = round(interaction_wr * 100, 1)
