@@ -19,8 +19,14 @@ pip install -e .
 # Download card data (~50MB from Scryfall)
 mtg-engine ingest
 
-# Analyze a deck
+# Analyze a deck (static analysis)
 mtg-engine analyze my_deck.txt --format commander
+
+# Deep analysis (includes probability layer)
+mtg-engine analyze my_deck.txt --format commander --deep
+
+# Standalone probability analysis
+mtg-engine probability my_deck.txt --format commander --card "Sol Ring"
 
 # Search cards
 mtg-engine search "Lightning Bolt"
@@ -64,7 +70,7 @@ All card data and basic analysis are **free forever**. Monetization is feature-g
 ## Roadmap
 
 - [x] Phase 1: Card data, deck import, classification, static analysis
-- [ ] Phase 2: Opening hand / mana probability calculator
+- [x] Phase 2: Opening hand / mana probability calculator
 - [ ] Phase 3: Goldfish simulation engine (Pro)
 - [ ] Phase 4: Matchup framework and benchmark gauntlet (Pro)
 - [ ] Phase 5: Version comparison and change tracking (Pro)

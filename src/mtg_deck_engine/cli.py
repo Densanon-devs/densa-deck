@@ -18,6 +18,9 @@ from mtg_deck_engine.deck.resolver import resolve_deck
 from mtg_deck_engine.deck.validator import validate_deck
 from mtg_deck_engine.legal import ATTRIBUTION, DISCLAIMER
 from mtg_deck_engine.models import AnalysisResult, Format
+from mtg_deck_engine.probability.key_cards import analyze_card_access, analyze_role_access
+from mtg_deck_engine.probability.mana_development import ManaDevelopmentReport, analyze_mana_development
+from mtg_deck_engine.probability.opening_hand import OpeningHandReport, simulate_opening_hands
 
 console = Console()
 
@@ -50,6 +53,27 @@ def main():
         help="Deck format",
     )
     analyze_parser.add_argument("--db", type=str, help="Custom database path")
+    analyze_parser.add_argument(
+        "--deep", action="store_true",
+        help="Include probability analysis (opening hands, mana odds, key card access)",
+    )
+    analyze_parser.add_argument(
+        "--sims", type=int, default=10000,
+        help="Number of Monte Carlo simulations for opening hand analysis (default: 10000)",
+    )
+
+    # probability command
+    prob_parser = subparsers.add_parser("probability", help="Run probability analysis on a decklist")
+    prob_parser.add_argument("file", type=str, help="Path to decklist file")
+    prob_parser.add_argument("--name", type=str, default=None, help="Deck name")
+    prob_parser.add_argument(
+        "--format", type=str, default=None, choices=[f.value for f in Format], help="Deck format",
+    )
+    prob_parser.add_argument("--db", type=str, help="Custom database path")
+    prob_parser.add_argument("--sims", type=int, default=10000, help="Monte Carlo simulations")
+    prob_parser.add_argument(
+        "--card", action="append", dest="cards", help="Track specific card (repeatable)",
+    )
 
     # search command
     search_parser = subparsers.add_parser("search", help="Search for cards")
@@ -70,6 +94,8 @@ def main():
         cmd_ingest(args)
     elif args.command == "analyze":
         cmd_analyze(args)
+    elif args.command == "probability":
+        cmd_probability(args)
     elif args.command == "search":
         cmd_search(args)
     elif args.command == "info":
@@ -130,6 +156,10 @@ def cmd_analyze(args):
         # Display
         _render_dashboard(result, deck)
 
+        # Probability layer (--deep)
+        if hasattr(args, "deep") and args.deep:
+            _run_and_render_probability(deck, args.sims)
+
     finally:
         db.close()
 
@@ -173,6 +203,74 @@ def cmd_info(args):
         ))
     finally:
         db.close()
+
+
+def cmd_probability(args):
+    """Dedicated probability analysis command."""
+    db = _get_db(args)
+    try:
+        if db.card_count() == 0:
+            console.print("[red]No cards in database. Run 'mtg-engine ingest' first.[/red]")
+            sys.exit(1)
+
+        file_path = Path(args.file)
+        if not file_path.exists():
+            console.print(f"[red]File not found: {file_path}[/red]")
+            sys.exit(1)
+
+        text = file_path.read_text(encoding="utf-8")
+        deck_name = args.name or file_path.stem
+
+        entries = parse_auto(text)
+        if not entries:
+            console.print("[red]No cards found in decklist.[/red]")
+            sys.exit(1)
+
+        fmt = Format(args.format) if args.format else None
+        deck = resolve_deck(entries, db, name=deck_name, format=fmt)
+
+        console.print(
+            Panel(
+                f"[bold]{deck_name}[/bold]"
+                + (f"  |  Format: {deck.format.value}" if deck.format else "")
+                + f"  |  {deck.total_cards} cards",
+                title="[bold cyan]MTG Deck Engine — Probability Analysis[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+
+        _run_and_render_probability(deck, args.sims, card_names=args.cards)
+
+        console.print(f"\n[dim]{ATTRIBUTION}[/dim]")
+        console.print(f"[dim]{DISCLAIMER}[/dim]\n")
+
+    finally:
+        db.close()
+
+
+def _run_and_render_probability(deck, sims: int = 10000, card_names: list[str] | None = None):
+    """Run all probability analyses and render results."""
+    console.print()
+    console.print("[bold magenta]--- Probability Analysis ---[/bold magenta]")
+
+    # Mana development
+    mana_report = analyze_mana_development(deck)
+    _render_mana_development(mana_report)
+
+    # Opening hands
+    console.print("[dim]Running opening hand simulation...[/dim]")
+    hand_report = simulate_opening_hands(deck, simulations=sims)
+    _render_opening_hands(hand_report)
+
+    # Key card access
+    card_results = analyze_card_access(deck, card_names=card_names)
+    if card_results:
+        _render_card_access(card_results)
+
+    # Role access
+    role_results = analyze_role_access(deck)
+    if role_results:
+        _render_role_access(role_results)
 
 
 # =============================================================================
@@ -390,6 +488,224 @@ def _render_recommendations(result: AnalysisResult):
         title="[bold green]Recommendations[/bold green]",
         border_style="green",
     ))
+
+
+# =============================================================================
+# Probability rendering
+# =============================================================================
+
+
+def _render_mana_development(report: ManaDevelopmentReport):
+    """Render mana development probability tables."""
+    console.print()
+
+    # Summary stats
+    console.print(Panel(
+        f"[bold]Lands:[/bold] {report.land_count}  |  "
+        f"[bold]Ramp:[/bold] {report.ramp_count}  |  "
+        f"[bold]Total Sources:[/bold] {report.mana_source_count}  |  "
+        f"[bold]Deck Size:[/bold] {report.deck_size}",
+        title="[bold yellow]Mana Development[/bold yellow]",
+        border_style="yellow",
+    ))
+
+    # Key milestones
+    table = Table(title="Mana Milestones", show_header=True, header_style="bold yellow")
+    table.add_column("Milestone", width=30)
+    table.add_column("Probability", justify="right", width=12)
+    table.add_column("Rating", width=12)
+
+    milestones = [
+        ("2 lands by turn 2", report.two_lands_by_t2),
+        ("3 lands by turn 3", report.three_lands_by_t3),
+        ("4 mana by turn 4 (w/ ramp)", report.four_mana_by_t4),
+        ("5 mana by turn 5 (w/ ramp)", report.five_mana_by_t5),
+    ]
+
+    if report.commander_on_curve > 0:
+        milestones.append(
+            (f"Commander on curve (CMC {report.commander_cmc:.0f})", report.commander_on_curve)
+        )
+
+    for name, prob in milestones:
+        pct = f"{prob * 100:.1f}%"
+        rating = _prob_rating(prob)
+        table.add_row(name, pct, rating)
+
+    # Failure rates
+    table.add_row("", "", "")
+    table.add_row(
+        "Mana screw (<2 lands by T3)",
+        f"{report.mana_screw_rate * 100:.1f}%",
+        _inverse_prob_rating(report.mana_screw_rate),
+    )
+    table.add_row(
+        "Mana flood (6+ lands in first 10)",
+        f"{report.mana_flood_rate * 100:.1f}%",
+        _inverse_prob_rating(report.mana_flood_rate),
+    )
+
+    console.print(table)
+
+    # Turn-by-turn expected mana
+    turn_table = Table(title="Expected Mana by Turn", show_header=True, header_style="bold")
+    turn_table.add_column("Turn", justify="center", width=6)
+    turn_table.add_column("Exp. Lands", justify="right", width=10)
+    turn_table.add_column("Exp. Mana", justify="right", width=10)
+
+    for turn in range(1, 8):
+        exp_l = report.expected_lands_by_turn.get(turn, 0)
+        exp_m = report.expected_mana_by_turn.get(turn, 0)
+        turn_table.add_row(str(turn), f"{exp_l:.1f}", f"{exp_m:.1f}")
+
+    console.print(turn_table)
+    console.print()
+
+
+def _render_opening_hands(report: OpeningHandReport):
+    """Render opening hand simulation results."""
+    if report.simulations == 0:
+        return
+
+    console.print(Panel(
+        f"[bold]Simulations:[/bold] {report.simulations:,}  |  "
+        f"[bold]Keep Rate:[/bold] {report.keep_rate * 100:.1f}%  |  "
+        f"[bold]Avg Lands:[/bold] {report.average_lands:.1f}  |  "
+        f"[bold]Avg Score:[/bold] {report.average_score:.0f}/100",
+        title="[bold blue]Opening Hand Analysis[/bold blue]",
+        border_style="blue",
+    ))
+
+    # Mulligan keep rates
+    mull_table = Table(title="Mulligan Keep Rates", show_header=True, header_style="bold blue")
+    mull_table.add_column("Hand Size", justify="center", width=10)
+    mull_table.add_column("Keep Rate", justify="right", width=12)
+
+    for size in [7, 6, 5, 4]:
+        rate = report.mulligan_keep_rates.get(size, 0)
+        mull_table.add_row(str(size), f"{rate * 100:.1f}%")
+
+    console.print(mull_table)
+
+    # Archetype distribution
+    if report.archetype_distribution:
+        arch_table = Table(title="Opener Archetypes", show_header=True, header_style="bold")
+        arch_table.add_column("Archetype", width=15)
+        arch_table.add_column("Frequency", justify="right", width=10)
+        arch_table.add_column("", min_width=25)
+
+        for arch, freq in sorted(report.archetype_distribution.items(), key=lambda x: -x[1]):
+            bar_len = int(freq * 30)
+            bar = "█" * bar_len
+            arch_table.add_row(arch.replace("_", " ").title(), f"{freq * 100:.1f}%", f"[cyan]{bar}[/cyan]")
+
+        console.print(arch_table)
+
+    # Land count distribution
+    if report.land_count_distribution:
+        land_table = Table(title="Opening Hand Land Distribution", show_header=True, header_style="bold")
+        land_table.add_column("Lands", justify="center", width=6)
+        land_table.add_column("Frequency", justify="right", width=10)
+        land_table.add_column("", min_width=25)
+
+        for count, freq in sorted(report.land_count_distribution.items()):
+            bar_len = int(freq * 40)
+            bar = "█" * bar_len
+            land_table.add_row(str(count), f"{freq * 100:.1f}%", f"[green]{bar}[/green]")
+
+        console.print(land_table)
+
+    console.print()
+
+
+def _render_card_access(results: list):
+    """Render key card access probabilities."""
+    table = Table(title="Key Card Access (% chance by turn)", show_header=True, header_style="bold magenta")
+    table.add_column("Card", width=28)
+    table.add_column("Copies", justify="center", width=6)
+    for t in range(1, 8):
+        table.add_column(f"T{t}", justify="right", width=7)
+
+    for result in results:
+        row = [result.name, str(result.copies_in_deck)]
+        for t in range(1, 8):
+            p = result.by_turn.get(t, 0)
+            pct = f"{p * 100:.0f}%"
+            if p >= 0.8:
+                row.append(f"[green]{pct}[/green]")
+            elif p >= 0.5:
+                row.append(f"[yellow]{pct}[/yellow]")
+            else:
+                row.append(f"[dim]{pct}[/dim]")
+        table.add_row(*row)
+
+    console.print(table)
+    console.print()
+
+
+def _render_role_access(results: list):
+    """Render role access probabilities."""
+    table = Table(title="Role Access (% chance of at least 1 by turn)", show_header=True, header_style="bold cyan")
+    table.add_column("Role", width=20)
+    table.add_column("In Deck", justify="center", width=7)
+    for t in [1, 2, 3, 4, 5]:
+        table.add_column(f"T{t}", justify="right", width=7)
+
+    role_names = {
+        "ramp": "Ramp",
+        "card_draw": "Card Draw",
+        "targeted_removal": "Removal",
+        "board_wipe": "Board Wipe",
+        "counterspell": "Counter",
+        "mana_rock": "Mana Rock",
+        "mana_dork": "Mana Dork",
+        "tutor": "Tutor",
+    }
+
+    for result in results:
+        label = role_names.get(result.role, result.role.replace("_", " ").title())
+        row = [label, str(result.total_in_deck)]
+        for t in [1, 2, 3, 4, 5]:
+            p = result.by_turn.get(t, 0)
+            pct = f"{p * 100:.0f}%"
+            if p >= 0.8:
+                row.append(f"[green]{pct}[/green]")
+            elif p >= 0.5:
+                row.append(f"[yellow]{pct}[/yellow]")
+            else:
+                row.append(f"[dim]{pct}[/dim]")
+        table.add_row(*row)
+
+    console.print(table)
+    console.print()
+
+
+def _prob_rating(prob: float) -> str:
+    """Rate a probability (higher is better)."""
+    if prob >= 0.90:
+        return "[bold green]Excellent[/bold green]"
+    elif prob >= 0.75:
+        return "[green]Good[/green]"
+    elif prob >= 0.60:
+        return "[yellow]Fair[/yellow]"
+    elif prob >= 0.40:
+        return "[red]Weak[/red]"
+    else:
+        return "[bold red]Critical[/bold red]"
+
+
+def _inverse_prob_rating(prob: float) -> str:
+    """Rate a probability where lower is better (failure rates)."""
+    if prob <= 0.05:
+        return "[bold green]Excellent[/bold green]"
+    elif prob <= 0.10:
+        return "[green]Good[/green]"
+    elif prob <= 0.20:
+        return "[yellow]Fair[/yellow]"
+    elif prob <= 0.35:
+        return "[red]Weak[/red]"
+    else:
+        return "[bold red]Critical[/bold red]"
 
 
 if __name__ == "__main__":
