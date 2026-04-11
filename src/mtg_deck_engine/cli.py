@@ -22,6 +22,8 @@ from mtg_deck_engine.probability.key_cards import analyze_card_access, analyze_r
 from mtg_deck_engine.probability.mana_development import ManaDevelopmentReport, analyze_mana_development
 from mtg_deck_engine.probability.opening_hand import OpeningHandReport, simulate_opening_hands
 from mtg_deck_engine.goldfish.runner import GoldfishReport, run_goldfish_batch
+from mtg_deck_engine.matchup.archetypes import ArchetypeName, get_archetype, get_default_gauntlet
+from mtg_deck_engine.matchup.gauntlet import GauntletReport, run_gauntlet
 
 console = Console()
 
@@ -87,6 +89,17 @@ def main():
     gf_parser.add_argument("--sims", type=int, default=1000, help="Number of games to simulate")
     gf_parser.add_argument("--turns", type=int, default=10, help="Max turns per game (default: 10)")
 
+    # gauntlet command
+    gt_parser = subparsers.add_parser("gauntlet", help="Run matchup gauntlet against archetype field")
+    gt_parser.add_argument("file", type=str, help="Path to decklist file")
+    gt_parser.add_argument("--name", type=str, default=None, help="Deck name")
+    gt_parser.add_argument(
+        "--format", type=str, default=None, choices=[f.value for f in Format], help="Deck format",
+    )
+    gt_parser.add_argument("--db", type=str, help="Custom database path")
+    gt_parser.add_argument("--sims", type=int, default=500, help="Games per matchup (default: 500)")
+    gt_parser.add_argument("--turns", type=int, default=12, help="Max turns per game (default: 12)")
+
     # search command
     search_parser = subparsers.add_parser("search", help="Search for cards")
     search_parser.add_argument("query", type=str, help="Search query")
@@ -110,6 +123,8 @@ def main():
         cmd_probability(args)
     elif args.command == "goldfish":
         cmd_goldfish(args)
+    elif args.command == "gauntlet":
+        cmd_gauntlet(args)
     elif args.command == "search":
         cmd_search(args)
     elif args.command == "info":
@@ -299,6 +314,50 @@ def cmd_goldfish(args):
         console.print(f"[dim]Running {args.sims} goldfish games ({args.turns} turns each)...[/dim]")
         report = run_goldfish_batch(deck, simulations=args.sims, max_turns=args.turns)
         _render_goldfish_report(report)
+
+        console.print(f"\n[dim]{ATTRIBUTION}[/dim]")
+        console.print(f"[dim]{DISCLAIMER}[/dim]\n")
+
+    finally:
+        db.close()
+
+
+def cmd_gauntlet(args):
+    """Run matchup gauntlet against archetype field."""
+    db = _get_db(args)
+    try:
+        if db.card_count() == 0:
+            console.print("[red]No cards in database. Run 'mtg-engine ingest' first.[/red]")
+            sys.exit(1)
+
+        file_path = Path(args.file)
+        if not file_path.exists():
+            console.print(f"[red]File not found: {file_path}[/red]")
+            sys.exit(1)
+
+        text = file_path.read_text(encoding="utf-8")
+        deck_name = args.name or file_path.stem
+
+        entries = parse_auto(text)
+        if not entries:
+            console.print("[red]No cards found in decklist.[/red]")
+            sys.exit(1)
+
+        fmt = Format(args.format) if args.format else None
+        deck = resolve_deck(entries, db, name=deck_name, format=fmt)
+
+        console.print(
+            Panel(
+                f"[bold]{deck_name}[/bold]"
+                + (f"  |  Format: {deck.format.value}" if deck.format else "")
+                + f"  |  {deck.total_cards} cards",
+                title="[bold cyan]MTG Deck Engine — Meta Gauntlet[/bold cyan]",
+                border_style="cyan",
+            )
+        )
+
+        report = run_gauntlet(deck, simulations=args.sims, max_turns=args.turns)
+        _render_gauntlet_report(report)
 
         console.print(f"\n[dim]{ATTRIBUTION}[/dim]")
         console.print(f"[dim]{DISCLAIMER}[/dim]\n")
@@ -867,6 +926,83 @@ def _render_goldfish_report(report: GoldfishReport):
 
         console.print(spell_table)
 
+    console.print()
+
+
+# =============================================================================
+# Gauntlet rendering
+# =============================================================================
+
+
+def _render_gauntlet_report(report: GauntletReport):
+    """Render matchup gauntlet results."""
+    console.print()
+
+    # Summary
+    console.print(Panel(
+        f"[bold]Total Games:[/bold] {report.total_games:,}  |  "
+        f"[bold]Overall Win Rate:[/bold] {report.overall_win_rate * 100:.1f}%  |  "
+        f"[bold]Weighted Win Rate:[/bold] {report.weighted_win_rate * 100:.1f}%\n"
+        f"[bold]Best:[/bold] vs {report.best_matchup} ({report.best_win_rate * 100:.0f}%)  |  "
+        f"[bold]Worst:[/bold] vs {report.worst_matchup} ({report.worst_win_rate * 100:.0f}%)",
+        title="[bold magenta]Meta Positioning[/bold magenta]",
+        border_style="magenta",
+    ))
+
+    # Matchup matrix
+    table = Table(title="Matchup Results", show_header=True, header_style="bold")
+    table.add_column("Archetype", width=18)
+    table.add_column("Win Rate", justify="right", width=9)
+    table.add_column("W-L", justify="center", width=9)
+    table.add_column("Avg Turns", justify="right", width=9)
+    table.add_column("Removed", justify="right", width=8)
+    table.add_column("Countered", justify="right", width=9)
+    table.add_column("Wiped", justify="right", width=7)
+    table.add_column("", min_width=15)
+
+    for m in sorted(report.matchups, key=lambda x: -x.win_rate):
+        wr = m.win_rate
+        pct = f"{wr * 100:.1f}%"
+        bar_len = int(wr * 15)
+        bar = "█" * bar_len
+
+        if wr >= 0.60:
+            color = "green"
+        elif wr >= 0.45:
+            color = "yellow"
+        else:
+            color = "red"
+
+        table.add_row(
+            m.archetype_name,
+            f"[{color}]{pct}[/{color}]",
+            f"{m.wins}-{m.losses}",
+            f"{m.avg_turns}",
+            f"{m.avg_permanents_removed:.1f}",
+            f"{m.avg_spells_countered:.1f}",
+            f"{m.avg_wipes_suffered:.1f}",
+            f"[{color}]{bar}[/{color}]",
+        )
+
+    console.print(table)
+
+    # Category scores
+    score_table = Table(title="Meta Scores", show_header=True, header_style="bold cyan")
+    score_table.add_column("Category", width=15)
+    score_table.add_column("Score", justify="right", width=8)
+    score_table.add_column("Rating", width=12)
+
+    scores = [
+        ("Speed", report.speed_score),
+        ("Resilience", report.resilience_score),
+        ("Interaction", report.interaction_score),
+        ("Consistency", report.consistency_score),
+    ]
+
+    for name, score in scores:
+        score_table.add_row(name, f"{score:.0f}", _score_rating(score))
+
+    console.print(score_table)
     console.print()
 
 

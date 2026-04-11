@@ -31,6 +31,9 @@ mtg-engine probability my_deck.txt --format commander --card "Sol Ring"
 # Goldfish simulation (solo play testing)
 mtg-engine goldfish my_deck.txt --format commander --sims 1000 --turns 10
 
+# Meta gauntlet (matchup testing vs archetype field)
+mtg-engine gauntlet my_deck.txt --format commander --sims 500
+
 # Search cards
 mtg-engine search "Lightning Bolt"
 
@@ -75,7 +78,7 @@ All card data and basic analysis are **free forever**. Monetization is feature-g
 - [x] Phase 1: Card data, deck import, classification, static analysis
 - [x] Phase 2: Opening hand / mana probability calculator
 - [x] Phase 3: Goldfish simulation engine (Pro)
-- [ ] Phase 4: Matchup framework and benchmark gauntlet (Pro)
+- [x] Phase 4: Matchup framework and benchmark gauntlet (Pro)
 - [ ] Phase 5: Version comparison and change tracking (Pro)
 - [ ] Phase 6: Advanced heuristics and format modules (Pro)
 
