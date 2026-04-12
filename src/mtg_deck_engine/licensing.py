@@ -5,7 +5,7 @@ Stripe session_id + a salt. The app validates by re-hashing the segments
 and checking the checksum (no need to know the original session_id).
 
 The hash function is intentionally identical to the JavaScript version
-on densanon.com/mtg-engine-success.html so keys generated in the browser
+on toolkit.densanon.com/mtg-engine-success.html so keys generated in the browser
 validate correctly in the desktop app.
 
 Format: MTG-XXXX-XXXX-XXXX

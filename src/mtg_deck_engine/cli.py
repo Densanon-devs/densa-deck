@@ -479,7 +479,7 @@ def cmd_license(args):
         if license is None:
             console.print(Panel(
                 "[dim]No license installed.[/dim]\n\n"
-                "Purchase Pro at [bold]densanon.com/mtg-engine[/bold]\n"
+                "Purchase Pro at [bold]toolkit.densanon.com/mtg-engine.html[/bold]\n"
                 "Then run [bold]mtg-engine license activate KEY[/bold]",
                 title="License Status",
             ))
