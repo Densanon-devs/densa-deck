@@ -1,175 +1,209 @@
-"""Tests for the license key system."""
+"""Tests for the hash-based license key system."""
 
 import json
 import tempfile
-from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from mtg_deck_engine.licensing import (
+    LICENSE_PATH,
+    MASTER_KEY,
     License,
-    generate_keypair,
-    sign_license_payload,
+    _hash_key,
+    generate_license_key,
+    validate_key,
     verify_license_key,
 )
 
 
-def _make_payload(email="test@example.com", tier="pro", days=365):
-    return {
-        "id": "test-id-12345",
-        "email": email,
-        "product": "mtg-deck-engine-pro",
-        "tier": tier,
-        "issued": datetime.now().date().isoformat(),
-        "expires": "never" if tier == "lifetime" else (datetime.now() + timedelta(days=days)).date().isoformat(),
-    }
+class TestHashFunction:
+    def test_deterministic(self):
+        """Same input always produces same hash."""
+        a = _hash_key("cs_test_abc123")
+        b = _hash_key("cs_test_abc123")
+        assert a == b
+
+    def test_different_inputs(self):
+        """Different inputs produce different hashes."""
+        a = _hash_key("cs_test_abc123")
+        b = _hash_key("cs_test_xyz789")
+        assert a != b
+
+    def test_case_insensitive(self):
+        """Hash normalizes to lowercase."""
+        a = _hash_key("ABC123")
+        b = _hash_key("abc123")
+        assert a == b
+
+    def test_empty_string(self):
+        """Empty string still produces a valid hash."""
+        h = _hash_key("")
+        assert isinstance(h, str)
+        assert len(h) > 0
 
 
 class TestKeyGeneration:
-    def test_generate_keypair_returns_valid_keys(self):
-        priv, pub = generate_keypair()
-        assert len(bytes.fromhex(priv)) == 32
-        assert len(bytes.fromhex(pub)) == 32
-        assert priv != pub
+    def test_format(self):
+        """Generated keys match the MTG-XXXX-XXXX-XXXX format."""
+        key = generate_license_key("cs_test_session_abc123")
+        import re
+        assert re.match(r"^MTG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
 
-    def test_keypair_unique(self):
-        priv1, _ = generate_keypair()
-        priv2, _ = generate_keypair()
-        assert priv1 != priv2
+    def test_deterministic(self):
+        """Same seed always produces same key."""
+        a = generate_license_key("cs_test_abc")
+        b = generate_license_key("cs_test_abc")
+        assert a == b
+
+    def test_different_seeds_different_keys(self):
+        a = generate_license_key("cs_test_abc")
+        b = generate_license_key("cs_test_xyz")
+        assert a != b
+
+    def test_generated_key_validates(self):
+        key = generate_license_key("cs_test_real_session")
+        assert validate_key(key) is True
 
 
-class TestLicenseSignAndVerify:
-    def test_sign_and_verify_round_trip(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload()
-        key = sign_license_payload(payload, priv)
-        license = verify_license_key(key, public_key_hex=pub)
-        assert license.valid is True
-        assert license.email == "test@example.com"
-        assert license.tier == "pro"
-        assert license.product == "mtg-deck-engine-pro"
+class TestKeyValidation:
+    def test_master_key_validates(self):
+        assert validate_key(MASTER_KEY) is True
 
-    def test_lifetime_license(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload(tier="lifetime")
-        key = sign_license_payload(payload, priv)
-        license = verify_license_key(key, public_key_hex=pub)
-        assert license.valid is True
-        assert license.expires == "never"
-        assert license.is_active() is True
-        assert license.grants_pro() is True
-
-    def test_tampered_license_rejected(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload(email="original@example.com")
-        key = sign_license_payload(payload, priv)
-        # Tamper with the key (flip a character in the encoded payload)
-        tampered = key[:20] + "X" + key[21:]
-        license = verify_license_key(tampered, public_key_hex=pub)
-        assert license.valid is False
-
-    def test_wrong_public_key_rejected(self):
-        priv1, _ = generate_keypair()
-        _, pub2 = generate_keypair()
-        payload = _make_payload()
-        key = sign_license_payload(payload, priv1)
-        license = verify_license_key(key, public_key_hex=pub2)
-        assert license.valid is False
-        assert "signature" in license.error.lower() or "verification" in license.error.lower()
-
-    def test_wrong_product_rejected(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload()
-        payload["product"] = "some-other-product"
-        key = sign_license_payload(payload, priv)
-        license = verify_license_key(key, public_key_hex=pub)
-        assert license.valid is False
-        assert "product" in license.error.lower()
+    def test_generated_key_validates(self):
+        key = generate_license_key("test-session-id")
+        assert validate_key(key) is True
 
     def test_invalid_format_rejected(self):
-        license = verify_license_key("not-a-real-key")
-        assert license.valid is False
-        assert "format" in license.error.lower() or "invalid" in license.error.lower()
+        assert validate_key("not-a-valid-key") is False
+        assert validate_key("") is False
+        assert validate_key("MTG-ABCD-EFGH") is False  # Missing third segment
+        assert validate_key("DBR-ABCD-EFGH-IJKL") is False  # Wrong prefix
 
-    def test_empty_string_rejected(self):
-        license = verify_license_key("")
-        assert license.valid is False
+    def test_tampered_key_rejected(self):
+        key = generate_license_key("test-session")
+        # Change the last character of the checksum segment
+        tampered = key[:-1] + ("X" if key[-1] != "X" else "Y")
+        assert validate_key(tampered) is False
 
-    def test_expired_license_not_active(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload(days=-30)  # Expired 30 days ago
-        key = sign_license_payload(payload, priv)
-        license = verify_license_key(key, public_key_hex=pub)
-        assert license.valid is True  # Signature is valid
-        assert license.is_active() is False  # But expired
-        assert license.grants_pro() is False
+    def test_random_uppercase_rejected(self):
+        assert validate_key("MTG-ABCD-1234-WXYZ") is False
+
+    def test_case_insensitive_format(self):
+        """Lowercase keys still validate (gets normalized)."""
+        key = generate_license_key("test")
+        assert validate_key(key.lower()) is True
+
+    def test_whitespace_stripped(self):
+        key = generate_license_key("test")
+        assert validate_key(f"  {key}  ") is True
 
 
 class TestLicenseObject:
-    def test_active_license_grants_pro(self):
-        license = License(
-            id="x", email="a@b.com", product="mtg-deck-engine-pro",
-            tier="pro", issued="2026-01-01",
-            expires=(datetime.now() + timedelta(days=30)).date().isoformat(),
-            valid=True,
-        )
-        assert license.is_active() is True
-        assert license.grants_pro() is True
+    def test_valid_license(self):
+        key = generate_license_key("test")
+        result = verify_license_key(key)
+        assert result.valid is True
+        assert result.grants_pro() is True
+        assert result.is_master is False
 
-    def test_invalid_license_does_not_grant(self):
-        license = License(
-            id="x", email="a@b.com", product="mtg-deck-engine-pro",
-            tier="pro", issued="2026-01-01", expires="never", valid=False,
-        )
-        assert license.grants_pro() is False
+    def test_master_license(self):
+        result = verify_license_key(MASTER_KEY)
+        assert result.valid is True
+        assert result.is_master is True
+        assert result.grants_pro() is True
 
-    def test_lifetime_never_expires(self):
-        license = License(
-            id="x", email="a@b.com", product="mtg-deck-engine-pro",
-            tier="lifetime", issued="2026-01-01", expires="never", valid=True,
-        )
-        assert license.is_active() is True
-        assert license.grants_pro() is True
+    def test_invalid_license(self):
+        result = verify_license_key("MTG-1234-5678-9999")
+        assert result.valid is False
+        assert result.grants_pro() is False
+        assert result.error != ""
+
+    def test_empty_license(self):
+        result = verify_license_key("")
+        assert result.valid is False
+        assert "empty" in result.error.lower()
 
 
 class TestLicenseFileIO:
     def test_save_and_load_license(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload()
-        key = sign_license_payload(payload, priv)
-
-        # Patch PUBLIC_KEY_HEX and LICENSE_PATH for the test
+        key = generate_license_key("test_session")
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        with patch("mtg_deck_engine.licensing.PUBLIC_KEY_HEX", pub):
-            with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-                from mtg_deck_engine.licensing import load_saved_license, save_license
-                result = save_license(key)
-                assert result.valid is True
+        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
+            from mtg_deck_engine.licensing import load_saved_license, save_license
+            result = save_license(key)
+            assert result.valid is True
+            assert tmp_path.exists()
 
-                loaded = load_saved_license()
-                assert loaded is not None
-                assert loaded.valid is True
-                assert loaded.email == "test@example.com"
+            loaded = load_saved_license()
+            assert loaded is not None
+            assert loaded.valid is True
+            assert loaded.key == key
+            assert loaded.activated_at != ""
 
     def test_load_no_license(self):
         tmp_path = Path(tempfile.mkdtemp()) / "no-license.key"
         with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
             from mtg_deck_engine.licensing import load_saved_license
-            result = load_saved_license()
-            assert result is None
+            assert load_saved_license() is None
+
+    def test_save_invalid_key_does_not_persist(self):
+        tmp_path = Path(tempfile.mkdtemp()) / "license.key"
+        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
+            from mtg_deck_engine.licensing import save_license
+            result = save_license("not-a-valid-key")
+            assert result.valid is False
+            assert not tmp_path.exists()
 
     def test_remove_license(self):
-        priv, pub = generate_keypair()
-        payload = _make_payload()
-        key = sign_license_payload(payload, priv)
-
+        key = generate_license_key("test")
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-        with patch("mtg_deck_engine.licensing.PUBLIC_KEY_HEX", pub):
-            with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-                from mtg_deck_engine.licensing import remove_license, save_license
-                save_license(key)
-                assert tmp_path.exists()
-                assert remove_license() is True
-                assert not tmp_path.exists()
-                assert remove_license() is False  # Already gone
+        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
+            from mtg_deck_engine.licensing import remove_license, save_license
+            save_license(key)
+            assert tmp_path.exists()
+            assert remove_license() is True
+            assert not tmp_path.exists()
+            assert remove_license() is False  # Already removed
+
+    def test_master_key_is_savable(self):
+        tmp_path = Path(tempfile.mkdtemp()) / "license.key"
+        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
+            from mtg_deck_engine.licensing import load_saved_license, save_license
+            result = save_license(MASTER_KEY)
+            assert result.valid is True
+            loaded = load_saved_license()
+            assert loaded is not None
+            assert loaded.is_master is True
+
+
+class TestJavaScriptCompatibility:
+    """Critical: keys generated in the browser must validate in Python.
+
+    These are KNOWN-GOOD values verified against the JavaScript implementation
+    in densanon-site/mtg-engine-success.html. If you change LICENSE_SALT or the
+    hash function in either place, both will need to be updated and these
+    tests will catch the drift.
+    """
+
+    def test_js_compat_seed_1(self):
+        """seed 'cs_test_abc123' must produce 'MTG-5PFE-E100-3F9V' in both impls."""
+        assert generate_license_key("cs_test_abc123") == "MTG-5PFE-E100-3F9V"
+
+    def test_js_compat_seed_2(self):
+        """seed 'cs_test_KNOWN' must produce 'MTG-9IAN-TM00-WBB1' in both impls."""
+        assert generate_license_key("cs_test_KNOWN") == "MTG-9IAN-TM00-WBB1"
+
+    def test_js_compat_hash_1(self):
+        """Lower-level hash check for JS compat."""
+        assert _hash_key("cs_test_abc123") == "5pfee1"
+
+    def test_js_compat_hash_2(self):
+        assert _hash_key("cs_test_KNOWN") == "9iantm"
+
+    def test_known_session_id_produces_known_key(self):
+        seed = "cs_test_known_session_id_for_test"
+        key = generate_license_key(seed)
+        import re
+        assert re.match(r"^MTG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
+        assert generate_license_key(seed) == key
+        assert validate_key(key) is True

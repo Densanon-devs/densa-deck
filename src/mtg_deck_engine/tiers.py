@@ -95,7 +95,7 @@ def get_user_tier() -> Tier:
         if license and license.grants_pro():
             return Tier.PRO
     except ImportError:
-        pass  # cryptography not installed
+        pass
 
     # 3. Config file
     if _CONFIG_PATH.exists():

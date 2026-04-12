@@ -454,12 +454,12 @@ def cmd_license(args):
 
     if action == "activate":
         result = save_license(args.key)
-        if result.valid and result.grants_pro():
+        if result.valid:
+            label = "Master Key" if result.is_master else "Pro License"
             console.print(Panel(
-                f"[bold green]License activated successfully![/bold green]\n\n"
-                f"[bold]Email:[/bold] {result.email}\n"
-                f"[bold]Tier:[/bold] {result.tier}\n"
-                f"[bold]Expires:[/bold] {result.expires}\n\n"
+                f"[bold green]{label} activated![/bold green]\n\n"
+                f"[bold]Key:[/bold] {result.key}\n"
+                f"[bold]Activated:[/bold] {result.activated_at[:19] if result.activated_at else 'now'}\n\n"
                 f"[dim]Saved to {LICENSE_PATH}[/dim]",
                 title="MTG Deck Engine Pro",
                 border_style="green",
@@ -467,8 +467,8 @@ def cmd_license(args):
         else:
             console.print(Panel(
                 f"[bold red]License activation failed[/bold red]\n\n"
-                f"[red]{result.error or 'Unknown error'}[/red]\n\n"
-                f"[dim]If you believe this is a mistake, contact support.[/dim]",
+                f"[red]{result.error or 'Invalid key'}[/red]\n\n"
+                f"[dim]If you purchased and believe this is an error, contact admin@densanon.com[/dim]",
                 title="License Error",
                 border_style="red",
             ))
@@ -479,32 +479,24 @@ def cmd_license(args):
         if license is None:
             console.print(Panel(
                 "[dim]No license installed.[/dim]\n\n"
-                "Run [bold]mtg-engine license activate KEY[/bold] to activate Pro.",
+                "Purchase Pro at [bold]densanon.com/mtg-engine[/bold]\n"
+                "Then run [bold]mtg-engine license activate KEY[/bold]",
                 title="License Status",
             ))
-        elif license.valid and license.grants_pro():
-            status = "[bold green]ACTIVE[/bold green]"
-            if license.expires != "never":
-                from datetime import datetime
-                try:
-                    exp = datetime.fromisoformat(license.expires)
-                    if datetime.now() > exp:
-                        status = "[bold red]EXPIRED[/bold red]"
-                except ValueError:
-                    pass
+        elif license.valid:
+            label = "Master Key" if license.is_master else "Pro License"
             console.print(Panel(
-                f"[bold]Status:[/bold] {status}\n"
-                f"[bold]Email:[/bold] {license.email}\n"
-                f"[bold]Tier:[/bold] {license.tier}\n"
-                f"[bold]Issued:[/bold] {license.issued}\n"
-                f"[bold]Expires:[/bold] {license.expires}\n"
-                f"[bold]ID:[/bold] {license.id}",
+                f"[bold]Status:[/bold] [bold green]ACTIVE[/bold green]\n"
+                f"[bold]Type:[/bold] {label}\n"
+                f"[bold]Key:[/bold] {license.key}\n"
+                f"[bold]Activated:[/bold] {license.activated_at[:19] if license.activated_at else 'unknown'}",
                 title="MTG Deck Engine Pro License",
-                border_style="green" if license.is_active() else "red",
+                border_style="green",
             ))
         else:
             console.print(Panel(
-                f"[red]License invalid: {license.error}[/red]",
+                f"[red]License invalid: {license.error}[/red]\n\n"
+                f"Run [bold]mtg-engine license remove[/bold] then re-activate.",
                 title="License Error",
                 border_style="red",
             ))

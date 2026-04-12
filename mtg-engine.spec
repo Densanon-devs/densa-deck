@@ -19,7 +19,6 @@ hidden_imports = (
     + collect_submodules("rich")
     + collect_submodules("pydantic")
     + collect_submodules("httpx")
-    + collect_submodules("cryptography")
 )
 
 a = Analysis(
