@@ -67,6 +67,8 @@ COMMAND_FEATURES: dict[str, str] = {
     "practice": "mulligan_practice",
     "analyst": "analyst",  # model-management subcommand — Pro-only
     "coach": "analyst",    # interactive REPL — uses analyst backend, Pro-gated
+    "app": "info",         # GUI launcher — free tier can launch; Pro features gated inside
+    "register-protocol": "info",  # Registry helper; always available
 }
 
 _CONFIG_PATH = Path.home() / ".mtg-deck-engine" / "config.json"

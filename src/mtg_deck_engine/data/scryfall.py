@@ -20,8 +20,13 @@ BULK_TYPE = "oracle_cards"  # One entry per unique card (no reprints)
 
 
 async def fetch_bulk_data_url() -> str:
-    """Get the download URL for the oracle cards bulk file."""
-    async with httpx.AsyncClient() as client:
+    """Get the download URL for the oracle cards bulk file.
+
+    30-second timeout so a hung Scryfall API doesn't stall an ingest thread
+    forever — the caller (CLI or app) times out and surfaces an error instead
+    of appearing to freeze indefinitely.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(SCRYFALL_BULK_API, headers={"Accept": "application/json"})
         resp.raise_for_status()
         data = resp.json()

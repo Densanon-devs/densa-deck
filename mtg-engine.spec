@@ -19,13 +19,21 @@ hidden_imports = (
     + collect_submodules("rich")
     + collect_submodules("pydantic")
     + collect_submodules("httpx")
+    # pywebview is optional but add it when present so the desktop app
+    # ships inside the bundle without needing a separate install.
+    + collect_submodules("webview", on_error="ignore")
 )
 
 a = Analysis(
     ["src/mtg_deck_engine/__main__.py"],
     pathex=["src"],
     binaries=[],
-    datas=[],
+    # Ship the desktop app's HTML/CSS/JS assets inside the bundle. Without
+    # this PyInstaller strips the static/ dir and the frozen app launches
+    # with a blank window.
+    datas=[
+        ("src/mtg_deck_engine/app/static/*", "mtg_deck_engine/app/static"),
+    ],
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},

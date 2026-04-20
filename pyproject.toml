@@ -22,6 +22,11 @@ dev = [
 ]
 desktop = [
     "pyinstaller>=6.0",
+    # GUI shell for the desktop app (Stage A). pywebview wraps a native
+    # OS webview + exposes a Python API to the HTML/JS frontend. Smaller
+    # than Electron (~20 MB overhead vs ~150 MB) and doesn't need a
+    # separate browser runtime. Optional — CLI still works without it.
+    "pywebview>=5.0",
 ]
 analyst = [
     # Local GGUF inference for the LLM analyst layer. Optional — the analyst
@@ -34,6 +39,12 @@ mtg-engine = "mtg_deck_engine.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Bundle the desktop app's HTML/CSS/JS so it ships inside the wheel and
+# the PyInstaller frozen binary finds them at STATIC_DIR.
+# Note: static/*.js covers both app.js and tour.js.
+"mtg_deck_engine.app" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.ruff]
 target-version = "py311"

@@ -218,6 +218,31 @@ def main():
         help="RNG seed for the coach LLM. Default: 42 (deterministic).",
     )
 
+    # app command — launch the desktop GUI (Stage A)
+    app_parser = subparsers.add_parser(
+        "app", help="Launch the desktop app (GUI over this engine)")
+    app_parser.add_argument(
+        "--debug", action="store_true",
+        help="Enable pywebview devtools for frontend debugging",
+    )
+    # Hidden arg — when the OS launches us via the mtg-engine:// URI scheme
+    # it passes the URL as the first positional arg. We parse + auto-activate.
+    app_parser.add_argument(
+        "activation_url", nargs="?", default=None,
+        help="(internal) mtg-engine:// URI from OS deep-link handler",
+    )
+
+    # register-protocol command — register the mtg-engine:// URI scheme so
+    # the Stripe success page can deep-link an activation into the app.
+    reg_parser = subparsers.add_parser(
+        "register-protocol",
+        help="Register the mtg-engine:// URI scheme (Windows)",
+    )
+    reg_parser.add_argument(
+        "--unregister", action="store_true",
+        help="Remove the registration instead of adding it",
+    )
+
     # analyst command (Pro) — manage the local GGUF model for the LLM analyst layer
     analyst_parser = subparsers.add_parser(
         "analyst", help="Manage the local LLM analyst model (Pro)")
@@ -275,6 +300,10 @@ def main():
         cmd_analyst(args)
     elif command == "coach":
         cmd_coach(args)
+    elif command == "app":
+        cmd_app(args)
+    elif command == "register-protocol":
+        cmd_register_protocol(args)
 
 
 def _get_db(args) -> CardDatabase:
@@ -1186,6 +1215,116 @@ def cmd_practice(args):
 
     finally:
         db.close()
+
+
+def cmd_app(args):
+    """Launch the desktop GUI. Optional dependency (`pip install .[desktop]`).
+
+    If invoked with a `mtg-engine://activate?key=...` URL as the positional
+    arg (via the OS's URI scheme handler), auto-activates that key before
+    showing the window. Any errors at activation surface as a toast inside
+    the app, not a CLI crash.
+    """
+    try:
+        from mtg_deck_engine.app.main import run as app_run
+    except ImportError as e:
+        console.print(f"[red]Failed to import app module: {e}[/red]")
+        console.print("[dim]Install with: pip install 'mtg-deck-engine[desktop]'[/dim]")
+        sys.exit(1)
+
+    activation_url = getattr(args, "activation_url", None)
+    if activation_url:
+        _handle_activation_url(activation_url)
+
+    app_run(debug=getattr(args, "debug", False))
+
+
+def _handle_activation_url(url: str):
+    """Parse a mtg-engine:// URL and activate a license if one is present."""
+    from urllib.parse import parse_qs, urlparse
+    try:
+        parsed = urlparse(url)
+        # Valid URLs look like mtg-engine://activate?key=MTG-XXXX-XXXX-XXXX.
+        # Anything else (wrong scheme, missing key) is a no-op — we prefer
+        # a quiet failure so a bogus deep-link can't block the app launch.
+        if parsed.scheme != "mtg-engine":
+            return
+        action = parsed.netloc or parsed.path.lstrip("/").split("/")[0]
+        if action != "activate":
+            return
+        params = parse_qs(parsed.query or "")
+        key = (params.get("key") or [None])[0]
+        if not key:
+            return
+        from mtg_deck_engine.licensing import save_license
+        result = save_license(key)
+        if result.valid:
+            console.print(f"[green]Activated Pro license from deep link.[/green]")
+        else:
+            console.print(f"[yellow]Deep-link activation failed — invalid key.[/yellow]")
+    except Exception as e:
+        console.print(f"[yellow]Deep-link parse failed ({e}); launching normally.[/yellow]")
+
+
+def cmd_register_protocol(args):
+    """Register (or unregister) the mtg-engine:// URI scheme on Windows.
+
+    Writes to HKCU\\Software\\Classes\\mtg-engine so it's per-user and doesn't
+    require admin. On non-Windows, prints a platform note — Linux/Mac desktop
+    file registration can be added later.
+    """
+    if sys.platform != "win32":
+        console.print(
+            "[yellow]Protocol registration is Windows-only for now.[/yellow]\n"
+            "[dim]On Linux, create a .desktop file with MimeType=x-scheme-handler/mtg-engine. "
+            "On Mac, use LSSetDefaultHandlerForURLScheme.[/dim]"
+        )
+        return
+
+    try:
+        import winreg
+    except ImportError:
+        console.print("[red]winreg not available — can't register the protocol.[/red]")
+        return
+
+    exe = sys.executable
+    # Invoke through `python -m mtg_deck_engine app "<url>"` so we don't need
+    # to know the installed shortcut path. In the PyInstaller bundle the
+    # packaged exe will substitute this during installer-time registration.
+    module_cmd = f'"{exe}" -m mtg_deck_engine app "%1"'
+
+    base_path = r"Software\Classes\mtg-engine"
+    shell_cmd_path = base_path + r"\shell\open\command"
+
+    if args.unregister:
+        try:
+            # winreg has no recursive delete; walk the tree.
+            for sub in (r"\shell\open\command", r"\shell\open", r"\shell", ""):
+                try:
+                    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base_path + sub)
+                except FileNotFoundError:
+                    pass
+            console.print("[green]Protocol unregistered.[/green]")
+        except OSError as e:
+            console.print(f"[red]Unregister failed: {e}[/red]")
+        return
+
+    try:
+        root = winreg.CreateKey(winreg.HKEY_CURRENT_USER, base_path)
+        winreg.SetValueEx(root, "", 0, winreg.REG_SZ, "URL:MTG Deck Engine Protocol")
+        winreg.SetValueEx(root, "URL Protocol", 0, winreg.REG_SZ, "")
+        winreg.CloseKey(root)
+
+        cmd_key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, shell_cmd_path)
+        winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, module_cmd)
+        winreg.CloseKey(cmd_key)
+
+        console.print(
+            f"[green]Registered mtg-engine:// -> {module_cmd}[/green]\n"
+            "[dim]Test with: start mtg-engine://activate?key=MTG-TEST-TEST-TEST[/dim]"
+        )
+    except OSError as e:
+        console.print(f"[red]Registration failed: {e}[/red]")
 
 
 def cmd_coach(args):
