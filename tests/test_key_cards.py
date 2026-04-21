@@ -1,7 +1,7 @@
 """Tests for key card access calculator."""
 
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
-from mtg_deck_engine.probability.key_cards import (
+from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.probability.key_cards import (
     analyze_card_access,
     analyze_package_access,
     analyze_role_access,

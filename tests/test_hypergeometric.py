@@ -2,7 +2,7 @@
 
 import pytest
 
-from mtg_deck_engine.probability.hypergeometric import (
+from densa_deck.probability.hypergeometric import (
     cards_seen_by_turn,
     expected_copies,
     hypergeometric_cdf,

@@ -2,9 +2,9 @@
 
 import random
 
-from mtg_deck_engine.goldfish.heuristics import play_turn
-from mtg_deck_engine.goldfish.mulligan import mulligan_phase
-from mtg_deck_engine.goldfish.objectives import (
+from densa_deck.goldfish.heuristics import play_turn
+from densa_deck.goldfish.mulligan import mulligan_phase
+from densa_deck.goldfish.objectives import (
     Objective,
     ObjectiveType,
     check_objectives,
@@ -13,9 +13,9 @@ from mtg_deck_engine.goldfish.objectives import (
     default_objectives,
     ramp_by_turn,
 )
-from mtg_deck_engine.goldfish.runner import run_goldfish_batch
-from mtg_deck_engine.goldfish.state import GameState, Permanent
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.goldfish.runner import run_goldfish_batch
+from densa_deck.goldfish.state import GameState, Permanent
+from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
 
 
 def _make_card(name, is_land=False, cmc=0.0, tags=None, power=None, toughness=None, **kw):

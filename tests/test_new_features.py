@@ -3,12 +3,12 @@
 import subprocess
 import sys
 
-from mtg_deck_engine.analysis.castability import analyze_castability
-from mtg_deck_engine.analysis.deck_diff import compare_decks
-from mtg_deck_engine.analysis.power_level import PowerBreakdown, estimate_power_level
-from mtg_deck_engine.analysis.staples import check_staples
-from mtg_deck_engine.deck.url_import import detect_url
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Color, Deck, DeckEntry, Format, Zone
+from densa_deck.analysis.castability import analyze_castability
+from densa_deck.analysis.deck_diff import compare_decks
+from densa_deck.analysis.power_level import PowerBreakdown, estimate_power_level
+from densa_deck.analysis.staples import check_staples
+from densa_deck.deck.url_import import detect_url
+from densa_deck.models import Card, CardLayout, CardTag, Color, Deck, DeckEntry, Format, Zone
 
 PYTHON = sys.executable
 
@@ -214,7 +214,7 @@ class TestCalcCLI:
     def test_calc_basic(self):
         env = {**__import__("os").environ, "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "calc", "--deck", "99", "--copies", "1", "--turns", "5"],
+            [PYTHON, "-m", "densa_deck.cli", "calc", "--deck", "99", "--copies", "1", "--turns", "5"],
             capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
         )
         assert r.returncode == 0
@@ -222,7 +222,7 @@ class TestCalcCLI:
 
     def test_calc_help(self):
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "calc", "--help"],
+            [PYTHON, "-m", "densa_deck.cli", "calc", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 0
@@ -235,7 +235,7 @@ class TestCalcCLI:
 class TestDiffCLI:
     def test_diff_help(self):
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "diff", "--help"],
+            [PYTHON, "-m", "densa_deck.cli", "diff", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 0
@@ -245,7 +245,7 @@ class TestDiffCLI:
         import os
         env = {**os.environ, "MTG_ENGINE_TIER": "pro", "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "diff", "fake_a.txt", "fake_b.txt"],
+            [PYTHON, "-m", "densa_deck.cli", "diff", "fake_a.txt", "fake_b.txt"],
             capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
         )
         assert r.returncode == 1  # File not found error with pro tier
@@ -256,7 +256,7 @@ class TestDiffCLI:
 class TestPracticeCLI:
     def test_practice_help(self):
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "practice", "--help"],
+            [PYTHON, "-m", "densa_deck.cli", "practice", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert r.returncode == 0

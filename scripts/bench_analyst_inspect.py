@@ -22,9 +22,9 @@ if hasattr(sys.stdout, "reconfigure"):
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO / "src"))
 
-from mtg_deck_engine.analyst import AnalystRunner  # noqa: E402
-from mtg_deck_engine.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
-from mtg_deck_engine.benchmarks.analyst_gauntlet import default_cases  # noqa: E402
+from densa_deck.analyst import AnalystRunner  # noqa: E402
+from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
+from densa_deck.benchmarks.analyst_gauntlet import default_cases  # noqa: E402
 
 
 MODELS = [

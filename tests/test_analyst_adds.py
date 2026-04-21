@@ -19,17 +19,17 @@ import tempfile
 
 import pytest
 
-from mtg_deck_engine.analyst import AnalystRunner, MockBackend
-from mtg_deck_engine.analyst.add_candidates import find_add_candidates, render_add_table
-from mtg_deck_engine.analyst.prompts import add_suggestions_prompt
-from mtg_deck_engine.analyst.verifiers import (
+from densa_deck.analyst import AnalystRunner, MockBackend
+from densa_deck.analyst.add_candidates import find_add_candidates, render_add_table
+from densa_deck.analyst.prompts import add_suggestions_prompt
+from densa_deck.analyst.verifiers import (
     TagPick,
     VerificationError,
     verify_add_picks_constraints,
 )
-from mtg_deck_engine.analysis.power_level import PowerBreakdown
-from mtg_deck_engine.data.database import CardDatabase
-from mtg_deck_engine.models import (
+from densa_deck.analysis.power_level import PowerBreakdown
+from densa_deck.data.database import CardDatabase
+from densa_deck.models import (
     AnalysisResult,
     Card,
     CardLayout,
@@ -234,7 +234,7 @@ class TestVerifyAddPicksConstraints:
 
     def test_rejects_off_color_even_if_tag_valid(self):
         """If the candidate table is mis-populated (bug upstream), the verifier still catches it."""
-        from mtg_deck_engine.analyst.add_candidates import AddCandidate
+        from densa_deck.analyst.add_candidates import AddCandidate
         off_color_card = _mk_card("Counterspell", cmc=2,
                                   colors=[Color.BLUE], color_identity=[Color.BLUE])
         cand = AddCandidate(tag="a01", card=off_color_card, role=CardTag.COUNTERSPELL)
@@ -245,7 +245,7 @@ class TestVerifyAddPicksConstraints:
         assert "a01" in ei.value.hint
 
     def test_rejects_banned_card(self):
-        from mtg_deck_engine.analyst.add_candidates import AddCandidate
+        from densa_deck.analyst.add_candidates import AddCandidate
         banned_card = _mk_card("Primeval Titan", cmc=6,
                                color_identity=[Color.GREEN],
                                commander_legal=Legality.BANNED)
@@ -363,7 +363,7 @@ class TestRunnerAddSuggestions:
     def test_swaps_pair_cut_with_replacement_at_same_role(self, seeded_db):
         """A ramp cut should get paired with an in-color ramp add, not a random card."""
         # Build a deck with a cuttable ramp piece (synthetic high-CMC ramp)
-        from mtg_deck_engine.models import Card, CardLayout, Color, DeckEntry, Zone
+        from densa_deck.models import Card, CardLayout, Color, DeckEntry, Zone
 
         def _mk(name, cmc, tags, ci=None, mana_cost="{5}", is_creature=False):
             return DeckEntry(card_name=name, quantity=1, zone=Zone.MAINBOARD,
@@ -425,7 +425,7 @@ class TestRunnerAddSuggestions:
         The old behavior walked role_axes and suggested a swap toward RAMP
         (first role) even when ramp was at target. The fix: only try gap
         roles for no-tag cuts; when no gaps, emit no swap for that cut."""
-        from mtg_deck_engine.models import Card, CardLayout, Color, DeckEntry, Zone
+        from densa_deck.models import Card, CardLayout, Color, DeckEntry, Zone
 
         # Build a balanced deck: ramp/draw/interaction all at target, with
         # a single untagged high-CMC vanilla card that should surface as a

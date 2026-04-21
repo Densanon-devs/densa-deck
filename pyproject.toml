@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mtg-deck-engine"
+name = "densa-deck"
 version = "0.1.0"
 description = "MTG deck analysis, goldfish testing, matchup simulation, and player insight engine"
 requires-python = ">=3.11"
@@ -35,7 +35,7 @@ analyst = [
 ]
 
 [project.scripts]
-mtg-engine = "mtg_deck_engine.cli:main"
+densa-deck = "densa_deck.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -44,7 +44,7 @@ where = ["src"]
 # Bundle the desktop app's HTML/CSS/JS so it ships inside the wheel and
 # the PyInstaller frozen binary finds them at STATIC_DIR.
 # Note: static/*.js covers both app.js and tour.js.
-"mtg_deck_engine.app" = ["static/*.html", "static/*.css", "static/*.js"]
+"densa_deck.app" = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.ruff]
 target-version = "py311"

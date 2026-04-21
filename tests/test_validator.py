@@ -1,7 +1,7 @@
 """Tests for deck validation."""
 
-from mtg_deck_engine.deck.validator import validate_deck
-from mtg_deck_engine.models import (
+from densa_deck.deck.validator import validate_deck
+from densa_deck.models import (
     Card,
     CardLayout,
     Color,

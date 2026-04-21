@@ -1,4 +1,4 @@
-"""Build script for the MTG Deck Engine desktop binary.
+"""Build script for the Densa Deck desktop binary.
 
 Usage:
     python scripts/build_desktop.py
@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SPEC_FILE = REPO_ROOT / "mtg-engine.spec"
+SPEC_FILE = REPO_ROOT / "densa-deck.spec"
 BUILD_DIR = REPO_ROOT / "build"
 DIST_DIR = REPO_ROOT / "dist"
 
@@ -53,7 +53,7 @@ def build():
 
 
 def verify():
-    binary = DIST_DIR / "mtg-engine" / ("mtg-engine.exe" if sys.platform == "win32" else "mtg-engine")
+    binary = DIST_DIR / "densa-deck" / ("densa-deck.exe" if sys.platform == "win32" else "densa-deck")
     if not binary.exists():
         print(f"ERROR: Binary not found at {binary}")
         return False
@@ -64,7 +64,7 @@ def verify():
         print(f"ERROR: Binary failed to run: {result.stderr}")
         return False
 
-    if "mtg-engine" not in result.stdout.lower():
+    if "densa-deck" not in result.stdout.lower():
         print(f"WARNING: Unexpected output: {result.stdout[:200]}")
         return False
 
@@ -74,7 +74,7 @@ def verify():
 
 def main():
     print("=" * 60)
-    print("Building MTG Deck Engine Desktop Binary")
+    print("Building Densa Deck Desktop Binary")
     print("=" * 60)
 
     if not check_pyinstaller():
@@ -90,7 +90,7 @@ def main():
         print("Verification failed.")
         sys.exit(1)
 
-    output_dir = DIST_DIR / "mtg-engine"
+    output_dir = DIST_DIR / "densa-deck"
     size_mb = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file()) / (1024 * 1024)
 
     print()
@@ -100,9 +100,9 @@ def main():
     print(f"Output: {output_dir}")
     print(f"Size:   {size_mb:.1f} MB")
     print()
-    print("To distribute, zip the entire mtg-engine folder:")
+    print("To distribute, zip the entire densa-deck folder:")
     print(f"  cd {DIST_DIR}")
-    print("  zip -r mtg-engine-windows.zip mtg-engine/")
+    print("  zip -r densa-deck-windows.zip densa-deck/")
     print()
 
 

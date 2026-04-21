@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Densa Deck</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-title">
+      <span class="logo">Densa Deck</span>
+      <span class="tier-badge" id="tier-badge">Free</span>
+    </div>
+    <nav class="app-tabs">
+      <button class="tab-btn active" data-view="analyze">Analyze</button>
+      <button class="tab-btn" data-view="decks">My Decks</button>
+      <button class="tab-btn" data-view="coach">Coach</button>
+      <button class="tab-btn" data-view="settings">Settings</button>
+    </nav>
+  </header>
+
+  <div id="update-banner" class="update-banner hidden">
+    <span id="update-banner-body"></span>
+    <button class="banner-close" data-target="update-banner" title="Dismiss">×</button>
+  </div>
+  <div id="setup-banner" class="setup-banner hidden">
+    <span id="setup-banner-body"></span>
+    <button class="banner-close" data-target="setup-banner" title="Dismiss">×</button>
+  </div>
+
+  <main class="app-main">
+    <!-- ============ ANALYZE VIEW ============ -->
+    <section id="view-analyze" class="view active">
+      <div class="panel-row">
+        <div class="panel deck-input-panel">
+          <h2>Paste a decklist</h2>
+          <p class="panel-hint">One card per line. Section headers (Commander, Mainboard, Sideboard) recognized. Quantity prefix optional.</p>
+
+          <div class="url-import-row">
+            <input type="text" id="url-import-input" placeholder="https://moxfield.com/decks/... or https://archidekt.com/decks/...">
+            <button id="url-import-btn" class="btn btn-outline">Import from URL</button>
+            <span id="url-import-status" class="status-text"></span>
+          </div>
+
+          <textarea id="decklist-input" placeholder="Commander:
+1 Atraxa, Praetors' Voice
+
+Mainboard:
+1 Sol Ring
+1 Arcane Signet
+..."></textarea>
+
+          <div class="deck-meta">
+            <label>Deck name
+              <input type="text" id="deck-name-input" placeholder="My Atraxa deck">
+            </label>
+            <label>Format
+              <select id="format-select">
+                <option value="commander">Commander</option>
+                <option value="modern">Modern</option>
+                <option value="standard">Standard</option>
+                <option value="legacy">Legacy</option>
+                <option value="vintage">Vintage</option>
+                <option value="pauper">Pauper</option>
+                <option value="pioneer">Pioneer</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="deck-actions">
+            <button id="analyze-btn" class="btn btn-primary">Analyze</button>
+            <button id="save-btn" class="btn btn-outline" title="Save a snapshot of this deck for later editing + comparison">Save a version</button>
+            <button id="goldfish-btn" class="btn btn-outline" title="Pro: thousands of solo games, kill turn distribution">Goldfish (Pro)</button>
+            <button id="gauntlet-btn" class="btn btn-outline" title="Pro: test vs 11 archetype profiles">Gauntlet (Pro)</button>
+            <span id="analyze-status" class="status-text"></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="analysis-result" class="analysis-result hidden"></div>
+      <div id="goldfish-result" class="analysis-result hidden"></div>
+      <div id="gauntlet-result" class="analysis-result hidden"></div>
+    </section>
+
+    <!-- ============ MY DECKS VIEW ============ -->
+    <section id="view-decks" class="view">
+      <div class="panel-row">
+        <aside class="deck-sidebar">
+          <div class="sidebar-header">
+            <h2>Saved decks</h2>
+            <button id="refresh-decks-btn" class="btn-icon" title="Refresh list">↻</button>
+          </div>
+          <p class="sidebar-hint">Save from the Analyze tab to build a history. Re-open here to edit and save new versions.</p>
+          <ul id="deck-list" class="deck-list"></ul>
+        </aside>
+
+        <div class="deck-editor">
+          <div id="deck-editor-empty" class="editor-empty">
+            <p>Select a saved deck on the left, or save your first deck from the Analyze tab.</p>
+          </div>
+
+          <div id="deck-editor-open" class="editor-open hidden">
+            <h2 id="editor-deck-name"></h2>
+            <div class="editor-meta">
+              <span id="editor-version-number"></span>
+              <span id="editor-saved-at"></span>
+              <span id="editor-card-count"></span>
+            </div>
+
+            <textarea id="editor-textarea" class="editor-textarea"></textarea>
+
+            <div class="editor-notes">
+              <label>Version notes (optional)
+                <input type="text" id="editor-notes-input" placeholder="What did you change?">
+              </label>
+            </div>
+
+            <div class="editor-actions">
+              <button id="editor-save-version-btn" class="btn btn-primary">Save as new version</button>
+              <button id="editor-analyze-btn" class="btn btn-outline">Analyze current text</button>
+              <button id="editor-history-btn" class="btn btn-outline">Version history</button>
+              <button id="editor-delete-btn" class="btn btn-danger" title="Delete the entire deck + all versions">Delete deck</button>
+            </div>
+
+            <div id="editor-history" class="editor-history hidden">
+              <h3>Version history</h3>
+              <table id="history-table">
+                <thead>
+                  <tr>
+                    <th>Version</th>
+                    <th>Saved</th>
+                    <th>Cards</th>
+                    <th>Notes</th>
+                    <th>Diff</th>
+                  </tr>
+                </thead>
+                <tbody id="history-body"></tbody>
+              </table>
+              <div id="diff-panel" class="diff-panel hidden"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COACH VIEW ============ -->
+    <section id="view-coach" class="view">
+      <div class="panel-row">
+        <aside class="coach-sidebar">
+          <div class="sidebar-header">
+            <h2>Coach sessions</h2>
+          </div>
+          <p class="sidebar-hint">Start a session on one of your saved decks, then ask questions about it. Each session keeps its own history.</p>
+
+          <div class="coach-new-session">
+            <label>Start from saved deck
+              <select id="coach-deck-select"><option value="">(choose...)</option></select>
+            </label>
+            <button id="coach-start-btn" class="btn btn-primary">Start session</button>
+          </div>
+
+          <h3 class="section-sub-h">Active sessions</h3>
+          <ul id="coach-sessions-list" class="deck-list"></ul>
+        </aside>
+
+        <div class="coach-chat">
+          <div id="coach-empty" class="editor-empty">
+            <p>Save a deck on the My Decks tab, then start a coach session here. The coach knows your deck's structure, power level, and card list — ask it anything about deckbuilding.</p>
+          </div>
+
+          <div id="coach-active" class="coach-active hidden">
+            <div class="coach-header">
+              <h2 id="coach-deck-name"></h2>
+              <span id="coach-deck-meta" class="status-text"></span>
+              <div class="coach-header-actions">
+                <button id="coach-reset-btn" class="btn btn-outline" title="Clear conversation history, keep the deck">Reset</button>
+                <button id="coach-close-btn" class="btn btn-danger" title="End session">End</button>
+              </div>
+            </div>
+
+            <div id="coach-messages" class="coach-messages"></div>
+
+            <form id="coach-form" class="coach-form">
+              <textarea id="coach-input" rows="2" placeholder="Ask about your deck — 'why is my ramp count low?', 'what's the biggest weakness?', etc."></textarea>
+              <button type="submit" id="coach-send-btn" class="btn btn-primary">Send</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS VIEW ============ -->
+    <section id="view-settings" class="view">
+      <div class="panel settings-panel">
+        <h2>Tier</h2>
+        <div id="tier-status" class="settings-row"></div>
+
+        <h2>Activate Pro license</h2>
+        <div class="settings-row license-input-row">
+          <input type="text" id="license-key-input" placeholder="DD-XXXX-XXXX-XXXX">
+          <button id="license-activate-btn" class="btn btn-primary">Activate</button>
+          <span id="license-status" class="status-text"></span>
+        </div>
+        <p class="panel-hint">Your license key was emailed / shown on the receipt page after purchase. If you lost it, contact admin@densanon.com with your Stripe receipt.</p>
+
+        <h2>Setup</h2>
+        <div id="system-status" class="settings-row system-status">(loading...)</div>
+
+        <div class="settings-row">
+          <h3>Card database</h3>
+          <p class="panel-hint">Downloads the full Scryfall oracle data (~250 MB compressed, ~1 GB parsed in SQLite). One-time setup.</p>
+          <div class="setup-action-row">
+            <button id="ingest-btn" class="btn btn-primary">Install card database</button>
+            <span id="ingest-status" class="status-text"></span>
+          </div>
+          <div id="ingest-progress-wrap" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="ingest-progress-fill" class="progress-fill"></div></div>
+            <div id="ingest-progress-msg" class="progress-msg"></div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <h3>About this build</h3>
+          <div id="about-panel" class="about-panel">
+            <p><strong>Densa Deck</strong> <span id="about-version">v-</span></p>
+            <p class="panel-hint">Local deck analysis, simulation, and AI coaching. All analysis runs on your machine; card data and the optional analyst model are downloaded once and never leave your computer.</p>
+            <p class="panel-hint">
+              <a href="#" class="external-link" data-url="https://toolkit.densanon.com/densa-deck.html">Product page</a>
+              &nbsp;&middot;&nbsp;
+              <a href="#" class="external-link" data-url="https://github.com/densanon-devs/densa-deck">Source</a>
+            </p>
+            <p class="panel-hint">Not affiliated with Wizards of the Coast. Card data via <a href="#" class="external-link" data-url="https://scryfall.com">Scryfall</a>.</p>
+            <p><button id="replay-tour-btn" class="btn btn-outline" style="padding:6px 14px;font-size:0.82rem">Show first-run tour again</button></p>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <h3>Analyst model (optional, Pro)</h3>
+          <p class="panel-hint">Local LLM for executive summary + cut suggestions. Runs fully offline after download. Choose 0.5B (~400 MB, faster) or 3B (~1.8 GB, better prose).</p>
+          <div class="setup-action-row">
+            <select id="analyst-model-select">
+              <option value="qwen2.5-3b" selected>Qwen 2.5 3B (recommended)</option>
+              <option value="qwen2.5-0.5b">Qwen 2.5 0.5B (fastest)</option>
+            </select>
+            <button id="analyst-pull-btn" class="btn btn-primary">Download analyst model</button>
+            <span id="analyst-pull-status" class="status-text"></span>
+          </div>
+          <div id="analyst-pull-progress-wrap" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="analyst-pull-progress-fill" class="progress-fill"></div></div>
+            <div id="analyst-pull-progress-msg" class="progress-msg"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- First-run tour overlay. Hidden by default; activated by tour.js -->
+  <div id="tour-overlay" class="tour-overlay hidden" aria-hidden="true">
+    <div id="tour-spotlight" class="tour-spotlight"></div>
+    <div id="tour-card" class="tour-card">
+      <div class="tour-card-header">
+        <span id="tour-step-index" class="tour-step-index">1 / 7</span>
+        <button id="tour-skip-btn" class="tour-skip" title="Skip the tour">Skip</button>
+      </div>
+      <h3 id="tour-title"></h3>
+      <div id="tour-body" class="tour-body"></div>
+      <div class="tour-card-actions">
+        <button id="tour-back-btn" class="btn btn-outline">Back</button>
+        <button id="tour-next-btn" class="btn btn-primary">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="tour.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

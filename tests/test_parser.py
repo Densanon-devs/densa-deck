@@ -1,7 +1,7 @@
 """Tests for deck parsing."""
 
-from mtg_deck_engine.deck.parser import parse_auto, parse_csv, parse_decklist
-from mtg_deck_engine.models import Zone
+from densa_deck.deck.parser import parse_auto, parse_csv, parse_decklist
+from densa_deck.models import Zone
 
 
 def test_basic_quantity_name():

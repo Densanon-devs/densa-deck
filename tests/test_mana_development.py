@@ -1,7 +1,7 @@
 """Tests for mana development probability calculator."""
 
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
-from mtg_deck_engine.probability.mana_development import analyze_mana_development
+from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.probability.mana_development import analyze_mana_development
 
 
 def _make_card(name: str, is_land: bool = False, cmc: float = 0, tags: list[CardTag] | None = None) -> Card:

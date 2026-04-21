@@ -21,10 +21,10 @@ sys.path.insert(0, str(_REPO / "src"))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from mtg_deck_engine.analyst import AnalystRunner  # noqa: E402
-from mtg_deck_engine.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
-from mtg_deck_engine.analyst.candidates import rank_cut_candidates  # noqa: E402
-from mtg_deck_engine.benchmarks.analyst_gauntlet import default_cases  # noqa: E402
+from densa_deck.analyst import AnalystRunner  # noqa: E402
+from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
+from densa_deck.analyst.candidates import rank_cut_candidates  # noqa: E402
+from densa_deck.benchmarks.analyst_gauntlet import default_cases  # noqa: E402
 
 
 MODEL_PATHS = {

@@ -2,15 +2,15 @@
 
 import random
 
-from mtg_deck_engine.matchup.archetypes import (
+from densa_deck.matchup.archetypes import (
     ARCHETYPES,
     ArchetypeName,
     get_archetype,
     get_default_gauntlet,
 )
-from mtg_deck_engine.matchup.gauntlet import run_gauntlet
-from mtg_deck_engine.matchup.simulator import simulate_matchup
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.matchup.gauntlet import run_gauntlet
+from densa_deck.matchup.simulator import simulate_matchup
+from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
 
 
 def _make_card(name, is_land=False, cmc=0.0, tags=None, power=None, toughness=None, **kw):

@@ -4,7 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from mtg_deck_engine.analysis.advanced import (
+from densa_deck.analysis.advanced import (
     AdvancedReport,
     analyze_pips,
     analyze_win_conditions,
@@ -12,21 +12,21 @@ from mtg_deck_engine.analysis.advanced import (
     grade_mana_base,
     run_advanced_analysis,
 )
-from mtg_deck_engine.benchmarks.suites import (
+from densa_deck.benchmarks.suites import (
     BUILTIN_SUITES,
     get_suite,
     list_suites,
     load_suite,
     save_suite,
 )
-from mtg_deck_engine.export.exporter import export_html, export_json, export_markdown
-from mtg_deck_engine.formats.profiles import (
+from densa_deck.export.exporter import export_html, export_json, export_markdown
+from densa_deck.formats.profiles import (
     DeckArchetype,
     detect_archetype,
     format_recommendations,
     get_format_profile,
 )
-from mtg_deck_engine.models import (
+from densa_deck.models import (
     AnalysisResult,
     Card,
     CardLayout,

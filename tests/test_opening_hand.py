@@ -1,7 +1,7 @@
 """Tests for opening hand analysis."""
 
-from mtg_deck_engine.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
-from mtg_deck_engine.probability.opening_hand import (
+from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.probability.opening_hand import (
     HandEvaluation,
     OpenerArchetype,
     evaluate_hand,

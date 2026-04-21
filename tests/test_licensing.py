@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from mtg_deck_engine.licensing import (
+from densa_deck.licensing import (
     LICENSE_PATH,
     MASTER_KEY,
     License,
@@ -44,10 +44,10 @@ class TestHashFunction:
 
 class TestKeyGeneration:
     def test_format(self):
-        """Generated keys match the MTG-XXXX-XXXX-XXXX format."""
+        """Generated keys match the DD-XXXX-XXXX-XXXX format."""
         key = generate_license_key("cs_test_session_abc123")
         import re
-        assert re.match(r"^MTG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
+        assert re.match(r"^DD-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
 
     def test_deterministic(self):
         """Same seed always produces same key."""
@@ -76,7 +76,7 @@ class TestKeyValidation:
     def test_invalid_format_rejected(self):
         assert validate_key("not-a-valid-key") is False
         assert validate_key("") is False
-        assert validate_key("MTG-ABCD-EFGH") is False  # Missing third segment
+        assert validate_key("DD-ABCD-EFGH") is False  # Missing third segment
         assert validate_key("DBR-ABCD-EFGH-IJKL") is False  # Wrong prefix
 
     def test_tampered_key_rejected(self):
@@ -86,7 +86,7 @@ class TestKeyValidation:
         assert validate_key(tampered) is False
 
     def test_random_uppercase_rejected(self):
-        assert validate_key("MTG-ABCD-1234-WXYZ") is False
+        assert validate_key("DD-ABCD-1234-WXYZ") is False
 
     def test_case_insensitive_format(self):
         """Lowercase keys still validate (gets normalized)."""
@@ -113,7 +113,7 @@ class TestLicenseObject:
         assert result.grants_pro() is True
 
     def test_invalid_license(self):
-        result = verify_license_key("MTG-1234-5678-9999")
+        result = verify_license_key("DD-1234-5678-9999")
         assert result.valid is False
         assert result.grants_pro() is False
         assert result.error != ""
@@ -128,8 +128,8 @@ class TestLicenseFileIO:
     def test_save_and_load_license(self):
         key = generate_license_key("test_session")
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-            from mtg_deck_engine.licensing import load_saved_license, save_license
+        with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):
+            from densa_deck.licensing import load_saved_license, save_license
             result = save_license(key)
             assert result.valid is True
             assert tmp_path.exists()
@@ -142,14 +142,14 @@ class TestLicenseFileIO:
 
     def test_load_no_license(self):
         tmp_path = Path(tempfile.mkdtemp()) / "no-license.key"
-        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-            from mtg_deck_engine.licensing import load_saved_license
+        with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):
+            from densa_deck.licensing import load_saved_license
             assert load_saved_license() is None
 
     def test_save_invalid_key_does_not_persist(self):
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-            from mtg_deck_engine.licensing import save_license
+        with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):
+            from densa_deck.licensing import save_license
             result = save_license("not-a-valid-key")
             assert result.valid is False
             assert not tmp_path.exists()
@@ -157,8 +157,8 @@ class TestLicenseFileIO:
     def test_remove_license(self):
         key = generate_license_key("test")
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-            from mtg_deck_engine.licensing import remove_license, save_license
+        with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):
+            from densa_deck.licensing import remove_license, save_license
             save_license(key)
             assert tmp_path.exists()
             assert remove_license() is True
@@ -167,8 +167,8 @@ class TestLicenseFileIO:
 
     def test_master_key_is_savable(self):
         tmp_path = Path(tempfile.mkdtemp()) / "license.key"
-        with patch("mtg_deck_engine.licensing.LICENSE_PATH", tmp_path):
-            from mtg_deck_engine.licensing import load_saved_license, save_license
+        with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):
+            from densa_deck.licensing import load_saved_license, save_license
             result = save_license(MASTER_KEY)
             assert result.valid is True
             loaded = load_saved_license()
@@ -180,30 +180,30 @@ class TestJavaScriptCompatibility:
     """Critical: keys generated in the browser must validate in Python.
 
     These are KNOWN-GOOD values verified against the JavaScript implementation
-    in densanon-site/mtg-engine-success.html. If you change LICENSE_SALT or the
+    in densanon-site/densa-deck-success.html. If you change LICENSE_SALT or the
     hash function in either place, both will need to be updated and these
     tests will catch the drift.
     """
 
     def test_js_compat_seed_1(self):
-        """seed 'cs_test_abc123' must produce 'MTG-5PFE-E100-3F9V' in both impls."""
-        assert generate_license_key("cs_test_abc123") == "MTG-5PFE-E100-3F9V"
+        """seed 'cs_test_abc123' must produce 'DD-QZQJ-6T00-L1PE' in both impls."""
+        assert generate_license_key("cs_test_abc123") == "DD-QZQJ-6T00-L1PE"
 
     def test_js_compat_seed_2(self):
-        """seed 'cs_test_KNOWN' must produce 'MTG-9IAN-TM00-WBB1' in both impls."""
-        assert generate_license_key("cs_test_KNOWN") == "MTG-9IAN-TM00-WBB1"
+        """seed 'cs_test_KNOWN' must produce 'DD-UHYP-YG00-6FOO' in both impls."""
+        assert generate_license_key("cs_test_KNOWN") == "DD-UHYP-YG00-6FOO"
 
     def test_js_compat_hash_1(self):
         """Lower-level hash check for JS compat."""
-        assert _hash_key("cs_test_abc123") == "5pfee1"
+        assert _hash_key("cs_test_abc123") == "qzqj6t"
 
     def test_js_compat_hash_2(self):
-        assert _hash_key("cs_test_KNOWN") == "9iantm"
+        assert _hash_key("cs_test_KNOWN") == "uhypyg"
 
     def test_known_session_id_produces_known_key(self):
         seed = "cs_test_known_session_id_for_test"
         key = generate_license_key(seed)
         import re
-        assert re.match(r"^MTG-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
+        assert re.match(r"^DD-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$", key)
         assert generate_license_key(seed) == key
         assert validate_key(key) is True

@@ -15,14 +15,14 @@ Covers:
 
 import pytest
 
-from mtg_deck_engine.analyst import AnalystRunner, MockBackend
-from mtg_deck_engine.analyst.candidates import rank_cut_candidates, render_cut_table
-from mtg_deck_engine.analyst.pipeline import generate_with_verify
-from mtg_deck_engine.analyst.prompts import (
+from densa_deck.analyst import AnalystRunner, MockBackend
+from densa_deck.analyst.candidates import rank_cut_candidates, render_cut_table
+from densa_deck.analyst.pipeline import generate_with_verify
+from densa_deck.analyst.prompts import (
     cut_suggestions_prompt,
     executive_summary_prompt,
 )
-from mtg_deck_engine.analyst.verifiers import (
+from densa_deck.analyst.verifiers import (
     TagPick,
     VerificationError,
     parse_tag_picks,
@@ -30,8 +30,8 @@ from mtg_deck_engine.analyst.verifiers import (
     verify_prose_output,
     verify_tags_in_table,
 )
-from mtg_deck_engine.analysis.power_level import PowerBreakdown
-from mtg_deck_engine.models import (
+from densa_deck.analysis.power_level import PowerBreakdown
+from densa_deck.models import (
     AnalysisResult,
     Card,
     CardLayout,
@@ -491,14 +491,14 @@ class TestPlaygroupPower:
 
 class TestPlaygroupPowerValidator:
     def test_valid_values_pass(self):
-        from mtg_deck_engine.cli import _playgroup_power_type
+        from densa_deck.cli import _playgroup_power_type
         assert _playgroup_power_type("1.0") == 1.0
         assert _playgroup_power_type("5.5") == 5.5
         assert _playgroup_power_type("10.0") == 10.0
 
     def test_out_of_range_rejected(self):
         import argparse
-        from mtg_deck_engine.cli import _playgroup_power_type
+        from densa_deck.cli import _playgroup_power_type
         with pytest.raises(argparse.ArgumentTypeError):
             _playgroup_power_type("0")
         with pytest.raises(argparse.ArgumentTypeError):
@@ -508,7 +508,7 @@ class TestPlaygroupPowerValidator:
 
     def test_non_numeric_rejected(self):
         import argparse
-        from mtg_deck_engine.cli import _playgroup_power_type
+        from densa_deck.cli import _playgroup_power_type
         with pytest.raises(argparse.ArgumentTypeError):
             _playgroup_power_type("high")
 

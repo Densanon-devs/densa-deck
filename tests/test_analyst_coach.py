@@ -10,8 +10,8 @@ Coverage:
 
 import pytest
 
-from mtg_deck_engine.analyst import MockBackend
-from mtg_deck_engine.analyst.coach import (
+from densa_deck.analyst import MockBackend
+from densa_deck.analyst.coach import (
     CoachSession,
     build_deck_sheet,
     coach_step,

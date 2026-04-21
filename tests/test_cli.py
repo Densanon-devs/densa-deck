@@ -7,11 +7,11 @@ PYTHON = sys.executable
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess:
-    """Run mtg-engine CLI with given args."""
+    """Run densa-deck CLI with given args."""
     import os
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     return subprocess.run(
-        [PYTHON, "-m", "mtg_deck_engine.cli", *args],
+        [PYTHON, "-m", "densa_deck.cli", *args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
@@ -24,7 +24,7 @@ class TestCLIBasics:
     def test_no_args_shows_help(self):
         r = _run_cli()
         assert r.returncode == 0
-        assert "mtg-engine" in r.stdout or "usage" in r.stdout.lower()
+        assert "densa-deck" in r.stdout or "usage" in r.stdout.lower()
 
     def test_help_flag(self):
         r = _run_cli("--help")

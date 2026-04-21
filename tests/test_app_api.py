@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from mtg_deck_engine.app.api import AppApi, _snapshot_to_text
-from mtg_deck_engine.data.database import CardDatabase
-from mtg_deck_engine.models import Card, CardLayout, Color, Legality
+from densa_deck.app.api import AppApi, _snapshot_to_text
+from densa_deck.data.database import CardDatabase
+from densa_deck.models import Card, CardLayout, Color, Legality
 
 
 @pytest.fixture
@@ -200,7 +200,7 @@ class TestSnapshotToText:
         the same card names + quantities. This is what makes editing safe —
         the user can load, edit, and re-save without the format shifting
         under them."""
-        from mtg_deck_engine.versioning.storage import DeckSnapshot
+        from densa_deck.versioning.storage import DeckSnapshot
 
         snap = DeckSnapshot(
             deck_id="test", version_number=1,
@@ -216,7 +216,7 @@ class TestSnapshotToText:
         assert "30 Forest" in text
 
     def test_empty_snapshot_produces_empty_text(self):
-        from mtg_deck_engine.versioning.storage import DeckSnapshot
+        from densa_deck.versioning.storage import DeckSnapshot
         snap = DeckSnapshot(deck_id="empty", version_number=1, decklist={}, zones={})
         text = _snapshot_to_text(snap)
         # Empty but not a crash — just an empty string-ish
@@ -225,7 +225,7 @@ class TestSnapshotToText:
     def test_preserves_quantities_above_one(self):
         """Non-Commander formats can have 4-ofs. Text reconstruction must
         preserve the quantity so the saved deck round-trips correctly."""
-        from mtg_deck_engine.versioning.storage import DeckSnapshot
+        from densa_deck.versioning.storage import DeckSnapshot
         snap = DeckSnapshot(
             deck_id="modern-deck", version_number=1,
             decklist={"Lightning Bolt": 4, "Mountain": 20},
@@ -353,7 +353,7 @@ class TestCoachSessions:
 
     def test_ask_then_reset_then_close(self, api_with_cards):
         # Use a deterministic mock backend so the ask path doesn't touch a real LLM
-        from mtg_deck_engine.analyst import MockBackend
+        from densa_deck.analyst import MockBackend
         api_with_cards._coach_backend = MockBackend(
             default="Your deck's interaction count is on the low side — consider adding two more removal spells.",
         )
@@ -400,7 +400,7 @@ class TestAutoUpdater:
         assert len(r["data"]["version"]) >= 3  # at least "0.1"
 
     def test_version_comparison(self):
-        from mtg_deck_engine.app.api import _is_newer
+        from densa_deck.app.api import _is_newer
         assert _is_newer("0.2.0", "0.1.0") is True
         assert _is_newer("0.1.1", "0.1.0") is True
         assert _is_newer("0.1.0", "0.1.0") is False
@@ -422,36 +422,36 @@ class TestAutoUpdater:
 
 class TestDeepLinkParser:
     def test_valid_activate_url(self):
-        from mtg_deck_engine.cli import _handle_activation_url
-        from mtg_deck_engine.licensing import load_saved_license, remove_license
+        from densa_deck.cli import _handle_activation_url
+        from densa_deck.licensing import load_saved_license, remove_license
         # This test will attempt to save an invalid license (the handler
         # passes whatever key is in the URL to save_license, which validates
         # format before persisting). A clearly-bad key should NOT persist.
         import tempfile
         # Isolate license file so the test doesn't mutate the real user config
-        import mtg_deck_engine.licensing as licensing_mod
+        import densa_deck.licensing as licensing_mod
         orig = licensing_mod.LICENSE_PATH
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 from pathlib import Path
                 licensing_mod.LICENSE_PATH = Path(tmp) / "lic.json"
                 # An invalid key — handler should not crash
-                _handle_activation_url("mtg-engine://activate?key=INVALID-KEY")
+                _handle_activation_url("densa-deck://activate?key=INVALID-KEY")
                 # No license saved (invalid key)
                 assert licensing_mod.LICENSE_PATH.exists() is False
         finally:
             licensing_mod.LICENSE_PATH = orig
 
     def test_non_matching_scheme_is_noop(self):
-        from mtg_deck_engine.cli import _handle_activation_url
+        from densa_deck.cli import _handle_activation_url
         # Should not raise on URLs with the wrong scheme
         _handle_activation_url("https://example.com/activate?key=X")
         _handle_activation_url("not-even-a-url")
 
     def test_missing_key_is_noop(self):
-        from mtg_deck_engine.cli import _handle_activation_url
-        _handle_activation_url("mtg-engine://activate")  # no query
-        _handle_activation_url("mtg-engine://activate?foo=bar")  # wrong param
+        from densa_deck.cli import _handle_activation_url
+        _handle_activation_url("densa-deck://activate")  # no query
+        _handle_activation_url("densa-deck://activate?foo=bar")  # wrong param
 
 
 class TestSessionPersistence:
@@ -474,7 +474,7 @@ class TestSessionPersistence:
 
         api1 = AppApi(db_path=card_db, version_db_path=version_db, session_path=session_path)
         # Deterministic backend so ask() doesn't need an LLM
-        from mtg_deck_engine.analyst import MockBackend
+        from densa_deck.analyst import MockBackend
         api1._coach_backend = MockBackend(default="persisted response")
         start = api1.coach_start(decklist_text="1 Sol Ring\n", name="TestDeck")
         token = start["data"]["token"]
@@ -676,7 +676,7 @@ class TestAtomicWrites:
         """If write_text raises (disk full, perms, etc.) the partial tmp file
         is unlinked so subsequent retries don't trip over an abandoned
         `.tmp` squatter in the way of the next rename."""
-        from mtg_deck_engine.app.api import _atomic_write_json
+        from densa_deck.app.api import _atomic_write_json
         target = tmp_path / "state.json"
         tmp_file = target.with_suffix(target.suffix + ".tmp")
         original_write_text = Path.write_text
@@ -718,7 +718,7 @@ class TestConcurrencyLocks:
         a single backend even under rapid concurrent calls."""
         import threading
         init_calls = []
-        from mtg_deck_engine.analyst import MockBackend
+        from densa_deck.analyst import MockBackend
         orig = MockBackend.__init__
 
         def tracking_init(self, *args, **kwargs):

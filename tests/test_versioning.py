@@ -3,9 +3,9 @@
 import tempfile
 from pathlib import Path
 
-from mtg_deck_engine.versioning.impact import ImpactReport, analyze_impact
-from mtg_deck_engine.versioning.storage import DeckDiff, DeckSnapshot, VersionStore, diff_versions
-from mtg_deck_engine.versioning.trends import TrendReport, analyze_trends
+from densa_deck.versioning.impact import ImpactReport, analyze_impact
+from densa_deck.versioning.storage import DeckDiff, DeckSnapshot, VersionStore, diff_versions
+from densa_deck.versioning.trends import TrendReport, analyze_trends
 
 
 def _tmp_store() -> VersionStore:

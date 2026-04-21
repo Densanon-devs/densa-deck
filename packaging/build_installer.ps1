@@ -9,7 +9,7 @@
 #   powershell -ExecutionPolicy Bypass -File packaging\build_installer.ps1
 #
 # Outputs:
-#   dist\mtg-engine\              -> PyInstaller bundle (folder mode)
+#   dist\densa-deck\              -> PyInstaller bundle (folder mode)
 #   dist\MTG-Deck-Engine-Setup-<ver>.exe -> Inno Setup installer
 #
 # Code signing: add `& signtool sign ...` calls after the build steps if a
@@ -24,7 +24,7 @@ Push-Location $RepoRoot
 try {
     # Step 1: PyInstaller — folder mode (faster startup than single-file)
     Write-Host "[1/2] Running PyInstaller..." -ForegroundColor Cyan
-    pyinstaller mtg-engine.spec --clean --noconfirm
+    pyinstaller densa-deck.spec --clean --noconfirm
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
 
     # Step 2: Inno Setup

@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from mtg_deck_engine.tiers import (
+from densa_deck.tiers import (
     COMMAND_FEATURES,
     FEATURE_TIERS,
     Tier,
@@ -109,7 +109,7 @@ class TestTierCLIEnforcement:
         for cmd in ["info", "calc --deck 60 --copies 4"]:
             args = cmd.split()
             r = subprocess.run(
-                [PYTHON, "-m", "mtg_deck_engine.cli"] + args,
+                [PYTHON, "-m", "densa_deck.cli"] + args,
                 capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
             )
             assert r.returncode == 0, f"'{cmd}' should work on free tier, got: {r.stderr[:200]}"
@@ -127,7 +127,7 @@ class TestTierCLIEnforcement:
         for cmd in pro_commands:
             args = cmd.split()
             r = subprocess.run(
-                [PYTHON, "-m", "mtg_deck_engine.cli"] + args,
+                [PYTHON, "-m", "densa_deck.cli"] + args,
                 capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
             )
             # Should exit 0 with upgrade message, NOT crash with file-not-found
@@ -139,7 +139,7 @@ class TestTierCLIEnforcement:
         env = {**os.environ, "MTG_ENGINE_TIER": "pro", "PYTHONIOENCODING": "utf-8"}
         # These will fail on missing files, but they should NOT show the tier message
         r = subprocess.run(
-            [PYTHON, "-m", "mtg_deck_engine.cli", "goldfish", "nonexistent.txt"],
+            [PYTHON, "-m", "densa_deck.cli", "goldfish", "nonexistent.txt"],
             capture_output=True, timeout=10, env=env, encoding="utf-8", errors="replace",
         )
         # Should fail on missing file or empty db, NOT on tier check

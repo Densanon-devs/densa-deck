@@ -1,6 +1,6 @@
 """Run the analyst gauntlet against multiple local GGUF models back-to-back.
 
-Usage (from mtg-deck-engine root):
+Usage (from densa-deck root):
     PYTHONPATH=src py -3.10 scripts/bench_analyst_models.py
 
 The script iterates a list of (label, path) tuples, running the default
@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-# Make `mtg_deck_engine` importable without installing the package — this
+# Make `densa_deck` importable without installing the package — this
 # script is expected to run from the repo root against whatever Python
 # has a working llama-cpp-python install (3.10 with 0.3.20 + CUDA here).
 _REPO = Path(__file__).resolve().parent.parent
@@ -26,9 +26,9 @@ sys.path.insert(0, str(_REPO / "src"))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from mtg_deck_engine.analyst import AnalystRunner  # noqa: E402
-from mtg_deck_engine.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
-from mtg_deck_engine.benchmarks.analyst_gauntlet import (  # noqa: E402
+from densa_deck.analyst import AnalystRunner  # noqa: E402
+from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
+from densa_deck.benchmarks.analyst_gauntlet import (  # noqa: E402
     default_cases,
     print_report,
     run_gauntlet,

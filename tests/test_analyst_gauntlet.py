@@ -9,8 +9,8 @@ gauntlet catches its cheating.
 
 import pytest
 
-from mtg_deck_engine.analyst import AnalystRunner, MockBackend
-from mtg_deck_engine.benchmarks.analyst_gauntlet import (
+from densa_deck.analyst import AnalystRunner, MockBackend
+from densa_deck.benchmarks.analyst_gauntlet import (
     default_cases,
     mini_cases,
     print_report,
@@ -62,7 +62,7 @@ class TestGauntletCatchesHallucination:
 
 class TestScoreCase:
     def test_invalid_cut_name_fails_hard_ok(self):
-        from mtg_deck_engine.analyst.runner import AnalystResult, CutSuggestion
+        from densa_deck.analyst.runner import AnalystResult, CutSuggestion
         case = mini_cases()[0]
         forged = AnalystResult()
         forged.cuts_verified = True
