@@ -1477,9 +1477,17 @@ def cmd_analyst(args):
     if action == "show" or action is None:
         backend = LlamaCppBackend()
         status = "[green]ready[/green]" if backend.is_available() else "[yellow]not installed[/yellow]"
+        # Also report llama_cpp importability so users (and the frozen-exe
+        # smoke test) can tell "file missing" from "library failed to load".
+        try:
+            import llama_cpp  # noqa: F401
+            lib_status = "[green]importable[/green]"
+        except Exception as lib_err:
+            lib_status = f"[red]import failed: {lib_err}[/red]"
         console.print(Panel(
             f"[bold]Path:[/bold] {backend.model_path}\n"
-            f"[bold]Status:[/bold] {status}\n\n"
+            f"[bold]File status:[/bold] {status}\n"
+            f"[bold]llama-cpp-python:[/bold] {lib_status}\n\n"
             f"[dim]Run `densa-deck analyst pull` to install the default model.[/dim]",
             title="MTG Analyst Model",
             border_style="cyan",

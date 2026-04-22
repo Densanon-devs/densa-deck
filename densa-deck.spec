@@ -28,8 +28,17 @@ hidden_imports = (
     + collect_submodules("webview", on_error="ignore")
     # llama-cpp-python powers the optional analyst model. Lazy-imported
     # inside densa_deck.analyst so PyInstaller's static analysis misses
-    # it — list explicitly.
+    # it — list explicitly. Also pull in its transitive runtime deps
+    # (numpy, jinja2/markupsafe, diskcache, typing_extensions) because
+    # llama_cpp imports several of them at module load time and missing
+    # any one reproduces the "No module named X" error we hit on user
+    # first-run of v0.1.2.
     + collect_submodules("llama_cpp", on_error="ignore")
+    + collect_submodules("numpy", on_error="ignore")
+    + collect_submodules("jinja2", on_error="ignore")
+    + collect_submodules("markupsafe", on_error="ignore")
+    + collect_submodules("diskcache", on_error="ignore")
+    + ["typing_extensions"]
 )
 
 # llama-cpp-python ships native DLLs (llama.dll, ggml-*.dll, mtmd.dll)
@@ -57,7 +66,11 @@ a = Analysis(
     excludes=[
         "tkinter",
         "matplotlib",
-        "numpy",
+        # numpy must stay included — llama-cpp-python imports it at
+        # module load time and removing it causes the analyst model
+        # panel to show "Model file is present but llama-cpp-python
+        # failed to load (No module named 'numpy')" after a fresh
+        # download.
         "pandas",
         "PIL",
         "test",

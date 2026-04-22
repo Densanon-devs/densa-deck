@@ -1,4 +1,4 @@
-DENSA DECK — v0.1.2
+DENSA DECK — v0.1.3
 =====================
 
 Local deck analysis and AI coaching for Magic: The Gathering.
