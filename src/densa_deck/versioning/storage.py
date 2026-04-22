@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,19 +79,30 @@ class VersionStore:
             db_path = DEFAULT_DB_PATH.parent / "versions.db"
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+        # Thread-local connections — the desktop app shares one VersionStore
+        # across the dispatcher thread and any background worker threads,
+        # and sqlite3.Connection is pinned to its creating thread by default.
+        self._local = threading.local()
+        self._schema_lock = threading.Lock()
+        self._schema_ready = False
 
     def connect(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.executescript(_VERSION_SCHEMA)
-        return self._conn
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.execute("PRAGMA journal_mode=WAL")
+            with self._schema_lock:
+                if not self._schema_ready:
+                    conn.executescript(_VERSION_SCHEMA)
+                    self._schema_ready = True
+            self._local.conn = conn
+        return conn
 
     def close(self):
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     def save_version(
         self,

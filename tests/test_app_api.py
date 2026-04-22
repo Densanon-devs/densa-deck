@@ -737,6 +737,73 @@ class TestConcurrencyLocks:
         assert len(init_calls) == 1
         assert api_with_cards._coach_backend is not None
 
+    def test_card_database_usable_from_background_thread(self, tmp_path):
+        """Regression lock for the SmartScreen-hostile bug reported against
+        v0.1.0: _do_ingest ran on a worker thread but reused a CardDatabase
+        whose sqlite3.Connection had been created on the dispatcher thread,
+        raising 'SQLite objects created in a thread can only be used in that
+        same thread.' Thread-local connections fix it — each thread that
+        calls connect() gets its own handle, and concurrent use is safe
+        under WAL mode."""
+        import threading
+        from densa_deck.data.database import CardDatabase
+
+        db = CardDatabase(db_path=tmp_path / "cards.db")
+        # Touch the DB on the current (main) thread to cache a connection.
+        assert db.card_count() == 0
+
+        results = {}
+
+        def worker():
+            # Without the thread-local fix this raises a ProgrammingError
+            # "SQLite objects created in a thread...".
+            try:
+                results["count"] = db.card_count()
+                db.set_metadata("worker_touch", "ok")
+                results["meta"] = db.get_metadata("worker_touch")
+            except Exception as e:  # pragma: no cover — kept explicit for diagnosis
+                results["error"] = repr(e)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert "error" not in results, results.get("error")
+        assert results["count"] == 0
+        assert results["meta"] == "ok"
+
+    def test_version_store_usable_from_background_thread(self, tmp_path):
+        """Same threading guarantee for VersionStore — deck saves happen
+        from background operations too."""
+        import threading
+        from densa_deck.versioning.storage import VersionStore
+
+        store = VersionStore(db_path=tmp_path / "versions.db")
+        store.connect()  # warm main-thread connection
+
+        results = {}
+
+        def worker():
+            try:
+                store.save_version(
+                    deck_id="deck-xyz",
+                    name="Threaded deck",
+                    format="commander",
+                    decklist={"Sol Ring": 1},
+                    zones={"mainboard": ["Sol Ring"]},
+                )
+                versions = store.get_all_versions("deck-xyz")
+                results["count"] = len(versions)
+            except Exception as e:  # pragma: no cover
+                results["error"] = repr(e)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert "error" not in results, results.get("error")
+        assert results["count"] == 1
+
 
 class TestErrorEnvelope:
     def test_uncaught_exceptions_become_error_dicts(self, api):

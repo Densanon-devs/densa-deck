@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 from densa_deck.models import Card, CardFace, CardLayout, CardTag, Color, Legality
@@ -83,21 +84,34 @@ class CardDatabase:
     def __init__(self, db_path: Path | str = DEFAULT_DB_PATH):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+        # sqlite3 Connection objects aren't safe to share across threads.
+        # The desktop app shares one CardDatabase between the pywebview
+        # dispatcher thread and the background ingest thread, so hand each
+        # thread its own connection. WAL mode (set below) lets concurrent
+        # readers coexist with a single writer at the SQLite level.
+        self._local = threading.local()
+        self._schema_lock = threading.Lock()
+        self._schema_ready = False
 
     def connect(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.db_path))
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=NORMAL")
-            self._conn.executescript(_SCHEMA)
-            _apply_migrations(self._conn)
-        return self._conn
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            with self._schema_lock:
+                if not self._schema_ready:
+                    conn.executescript(_SCHEMA)
+                    _apply_migrations(conn)
+                    self._schema_ready = True
+            self._local.conn = conn
+        return conn
 
     def close(self):
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
 
     def get_metadata(self, key: str) -> str | None:
         conn = self.connect()
