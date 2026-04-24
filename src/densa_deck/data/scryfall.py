@@ -20,11 +20,27 @@ BULK_TYPE = "oracle_cards"  # One entry per unique card (no reprints)
 
 
 async def fetch_bulk_data_url() -> str:
-    """Get the download URL for the oracle cards bulk file.
+    """Backwards-compatible accessor that only returns the download URL.
 
-    30-second timeout so a hung Scryfall API doesn't stall an ingest thread
-    forever — the caller (CLI or app) times out and surfaces an error instead
-    of appearing to freeze indefinitely.
+    Prefer `fetch_bulk_data_manifest` when you also need the `updated_at`
+    timestamp for update-check comparisons.
+    """
+    entry = await fetch_bulk_data_manifest()
+    return entry["download_uri"]
+
+
+async def fetch_bulk_data_manifest() -> dict:
+    """Return the full Scryfall bulk-data manifest entry for oracle_cards.
+
+    The entry includes `download_uri`, `updated_at` (ISO 8601), `size`
+    (bytes), and `content_type`. The `updated_at` timestamp is what the
+    "is my local card DB out of date?" check compares against — Scryfall
+    regenerates the bulk file whenever new cards are added to their
+    Oracle, which is typically once per set release but can happen
+    between sets for errata.
+
+    30-second timeout so a hung Scryfall API doesn't stall an ingest
+    thread forever.
     """
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(SCRYFALL_BULK_API, headers={"Accept": "application/json"})
@@ -32,7 +48,7 @@ async def fetch_bulk_data_url() -> str:
         data = resp.json()
         for item in data["data"]:
             if item["type"] == BULK_TYPE:
-                return item["download_uri"]
+                return item
     raise RuntimeError(f"Could not find bulk data type '{BULK_TYPE}' in Scryfall API response")
 
 

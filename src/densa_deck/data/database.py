@@ -222,6 +222,30 @@ class CardDatabase:
         )
         conn.commit()
 
+    def snapshot_oracle_identities(self) -> dict[str, str]:
+        """Return a {oracle_id: identity_hash} map of the current card set.
+
+        The identity_hash concatenates oracle-level fields that could
+        change when Scryfall reissues the bulk (name, oracle_text, type,
+        legalities, mana_cost). Two snapshots taken around an ingest can
+        be diffed to produce added / removed / updated card lists for
+        the "what changed since your last sync" modal.
+
+        Cheap: returns ~35k rows (one per oracle card), each row is two
+        short strings. Memory footprint ~3-4 MB peak, done twice per
+        update ingest.
+        """
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT oracle_id, name, oracle_text, type_line, legalities, mana_cost FROM cards"
+        ).fetchall()
+        out: dict[str, str] = {}
+        for oid, name, text, tl, legs, cost in rows:
+            # Cheap hash: newline-joined; we only compare equality, not
+            # semantic content, so collision risk is a non-issue.
+            out[oid] = f"{name}\n{text or ''}\n{tl or ''}\n{legs or ''}\n{cost or ''}"
+        return out
+
 
 def _card_to_row(card: Card) -> tuple:
     data = card.model_dump(mode="json")

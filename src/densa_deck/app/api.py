@@ -118,6 +118,11 @@ class AppApi:
         # start was created" etc. on the Settings tab. Read via
         # get_load_warnings() or as part of get_system_status().
         self._load_warnings: list[str] = []
+        # Populated by _do_ingest when the ingest was an UPDATE (i.e. the
+        # card DB already had cards pre-ingest). Frontend fetches this
+        # via get_last_ingest_diff() to render the "what changed" modal.
+        # None on first-run ingests and after dismiss_last_ingest_diff().
+        self._last_ingest_diff: dict | None = None
         # Persistence path for coach sessions — load on init so a user who
         # restarts the app finds their prior conversations intact.
         self._session_path = (
@@ -1156,7 +1161,7 @@ class AppApi:
                 return
 
             from densa_deck.data.scryfall import (
-                download_bulk_file, fetch_bulk_data_url, load_bulk_file,
+                download_bulk_file, fetch_bulk_data_manifest, load_bulk_file,
             )
 
             cache_dir = db.db_path.parent / "bulk"
@@ -1165,8 +1170,22 @@ class AppApi:
 
             loop = asyncio.new_event_loop()
             try:
-                # Phase 1: resolve the bulk-data URL (tiny HTTP call)
-                url = loop.run_until_complete(fetch_bulk_data_url())
+                # Snapshot the pre-ingest card set so the frontend's
+                # "what changed" diff modal can report added / removed /
+                # updated oracle_ids after the ingest completes. Empty on
+                # first-run (existing == 0), in which case the UI skips
+                # the diff view entirely.
+                pre_snapshot: dict[str, str] = {}
+                if existing > 0:
+                    pre_snapshot = db.snapshot_oracle_identities()
+
+                # Phase 1: resolve the bulk-data manifest (tiny HTTP call).
+                # We fetch the full manifest entry, not just the URL, so we
+                # can record the Scryfall `updated_at` timestamp in metadata
+                # — that's what future update-check comparisons key off.
+                manifest = loop.run_until_complete(fetch_bulk_data_manifest())
+                url = manifest["download_uri"]
+                remote_updated_at = manifest.get("updated_at", "")
                 if self._shutdown_event.is_set():
                     self._update_progress("ingest", message="Ingest cancelled (app closing)", done=True, running=False)
                     return
@@ -1186,6 +1205,27 @@ class AppApi:
                 # Phase 4: write to SQLite
                 db.upsert_cards(cards)
                 db.set_metadata("last_ingest", str(len(cards)))
+                # Bulk manifest timestamp — what the "update available"
+                # check compares against so we don't re-ingest just because
+                # a day passed; we only pull when Scryfall itself has a
+                # newer build.
+                if remote_updated_at:
+                    db.set_metadata("scryfall_bulk_updated_at", remote_updated_at)
+                # Local ingest completion timestamp — for UI display ("last
+                # synced 3 days ago") and for the "check at most once per
+                # 24h even if auto-check is on" throttle.
+                db.set_metadata("last_ingest_completed_at", _now_iso())
+
+                # Capture the post-ingest snapshot and stash the diff on
+                # the progress dict so the frontend can fetch it once
+                # it sees done=True. Skip entirely for first-run ingests.
+                if pre_snapshot:
+                    post_snapshot = db.snapshot_oracle_identities()
+                    self._last_ingest_diff = _compute_card_db_diff(
+                        pre_snapshot, post_snapshot,
+                    )
+                else:
+                    self._last_ingest_diff = None
 
                 self._update_progress(
                     "ingest",
@@ -1473,6 +1513,54 @@ class AppApi:
 # =============================================================================
 # Serialization helpers
 # =============================================================================
+
+
+def _compute_card_db_diff(
+    pre: dict[str, str], post: dict[str, str], top_n: int = 500,
+) -> dict:
+    """Diff two snapshots of oracle_id -> identity_hash and summarize.
+
+    Called after an update-path ingest (i.e. when there was an existing
+    card DB before the re-ingest). Returns a dict the frontend can
+    render as a collapsible "what changed" modal:
+
+      {
+        "added": [name, ...],    # oracle_ids in post but not pre
+        "removed": [name, ...],  # in pre but not post — rare (ban/errata)
+        "updated": [name, ...],  # in both but the identity hash changed
+        "counts": {"added": N, "removed": N, "updated": N},
+        "truncated": bool,       # list trimmed to top_n for render speed
+      }
+
+    Names are derived from the identity-hash's first line (which is the
+    card name — see CardDatabase.snapshot_oracle_identities).
+    """
+    def _name_of(identity: str) -> str:
+        return identity.split("\n", 1)[0] if identity else ""
+
+    pre_ids = set(pre.keys())
+    post_ids = set(post.keys())
+    added_ids = sorted(post_ids - pre_ids, key=lambda i: _name_of(post[i]))
+    removed_ids = sorted(pre_ids - post_ids, key=lambda i: _name_of(pre[i]))
+    shared = pre_ids & post_ids
+    updated_ids = sorted(
+        (oid for oid in shared if pre[oid] != post[oid]),
+        key=lambda i: _name_of(post[i]),
+    )
+
+    def _trim(ids, source):
+        return [_name_of(source[i]) for i in ids[:top_n]]
+
+    counts = {"added": len(added_ids), "removed": len(removed_ids), "updated": len(updated_ids)}
+    truncated = any(c > top_n for c in counts.values())
+    return {
+        "added": _trim(added_ids, post),
+        "removed": _trim(removed_ids, pre),
+        "updated": _trim(updated_ids, post),
+        "counts": counts,
+        "truncated": truncated,
+        "top_n": top_n,
+    }
 
 
 def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
