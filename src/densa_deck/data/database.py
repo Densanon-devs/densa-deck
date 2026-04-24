@@ -222,6 +222,163 @@ class CardDatabase:
         )
         conn.commit()
 
+    def search_structured(
+        self,
+        *,
+        name: str | None = None,
+        colors: list[str] | None = None,
+        color_match: str = "identity",
+        cmc_min: float | None = None,
+        cmc_max: float | None = None,
+        types: list[str] | None = None,
+        format_legal: str | None = None,
+        rarity: str | None = None,
+        max_price: float | None = None,
+        set_code: str | None = None,
+        limit: int = 60,
+        offset: int = 0,
+    ) -> tuple[list[Card], int]:
+        """SQL-filtered card search powering the deckbuilder's left column.
+
+        Parameters map to the JSON body the frontend POSTs:
+          name          — substring, case-insensitive (SQL LIKE %name%).
+          colors        — subset of {"W","U","B","R","G","C"}. "C" means
+                          colorless (empty color_identity).
+          color_match   — "identity" (card's color_identity is a subset
+                          of `colors` — commander rule) or "any" (card
+                          has at least one of the selected colors).
+          cmc_min/max   — inclusive bounds.
+          types         — any-of list of type-line substrings
+                          (creature / instant / sorcery / artifact /
+                          enchantment / planeswalker / land / battle).
+          format_legal  — returns only cards whose legalities[format]
+                          is "legal" (not "restricted" / "banned").
+          rarity        — common / uncommon / rare / mythic.
+          max_price     — USD ceiling. NULL price_usd rows are NOT
+                          excluded (unknown price passes the filter).
+          set_code      — 3-letter set code, exact match.
+          limit, offset — pagination.
+
+        Returns (cards, total_matching_count). total_count is computed
+        against the SAME filter set so the frontend can paginate /
+        "Load more" without re-querying the filter shape.
+
+        Rationale: dedicated SQL path rather than post-filtering
+        `search()` — over a 35k-row table, a LIKE + JSON-contains chain
+        with proper indexes returns in tens of ms; a Python-side filter
+        after loading all cards is seconds.
+        """
+        # The JSON `legalities` and `color_identity` columns don't have
+        # dedicated indexes — SQLite's LIKE on small TEXT fields is fast
+        # enough at 35k rows that optimising those is premature. name
+        # LIKE uses idx_cards_name_lower, cmc BETWEEN uses a table scan,
+        # price uses idx_cards_price.
+        conditions: list[str] = []
+        params: list = []
+
+        if name and name.strip():
+            conditions.append("name LIKE ? COLLATE NOCASE")
+            params.append(f"%{name.strip()}%")
+
+        if cmc_min is not None:
+            conditions.append("cmc >= ?")
+            params.append(float(cmc_min))
+        if cmc_max is not None:
+            conditions.append("cmc <= ?")
+            params.append(float(cmc_max))
+
+        if set_code and set_code.strip():
+            conditions.append("set_code = ? COLLATE NOCASE")
+            params.append(set_code.strip().lower())
+
+        if rarity and rarity.strip():
+            conditions.append("rarity = ? COLLATE NOCASE")
+            params.append(rarity.strip().lower())
+
+        if max_price is not None:
+            # Cards with NULL price are kept — we treat "unknown" as
+            # "don't exclude" rather than "expensive", so budget queries
+            # still surface new cards Scryfall hasn't priced yet.
+            conditions.append("(price_usd IS NULL OR price_usd <= ?)")
+            params.append(float(max_price))
+
+        # Types: each token becomes an individual LIKE against type_line,
+        # joined with OR — mirrors the "show me creatures OR instants" UX.
+        if types:
+            type_fragments = []
+            for t in types:
+                tok = (t or "").strip().lower()
+                if not tok:
+                    continue
+                type_fragments.append("type_line LIKE ? COLLATE NOCASE")
+                params.append(f"%{tok}%")
+            if type_fragments:
+                conditions.append("(" + " OR ".join(type_fragments) + ")")
+
+        # Format legality: legalities JSON literally contains `"commander":"legal"`.
+        # This is a substring match on the serialized JSON column. Scryfall
+        # statuses like "restricted" / "banned" are NOT matched so the
+        # deckbuilder only surfaces playable cards for the picked format.
+        if format_legal and format_legal.strip():
+            fmt = format_legal.strip().lower()
+            conditions.append("legalities LIKE ?")
+            params.append(f'%"{fmt}": "legal"%')
+
+        # Colors: this filter is the expensive one because color_identity
+        # is a JSON array in SQLite. We split into two modes:
+        #   - "identity": card.color_identity ⊆ selected — the commander
+        #     rule. Implemented by requiring the card has ZERO colors
+        #     NOT in the selected set.
+        #   - "any": card has at least one of the selected colors.
+        # Colorless ("C") is special: identity=[] means the card fits
+        # any color-identity filter, and in "any" mode we OR in a
+        # "empty array" check so the user can explicitly pull colorless
+        # cards alongside W/U/B.
+        if colors:
+            selected = [c.strip().upper() for c in colors if c and c.strip()]
+            colorful = [c for c in selected if c in {"W", "U", "B", "R", "G"}]
+            wants_colorless = "C" in selected
+            if color_match == "any":
+                any_parts = []
+                for c in colorful:
+                    any_parts.append('color_identity LIKE ?')
+                    params.append(f'%"{c}"%')
+                if wants_colorless:
+                    any_parts.append("color_identity = '[]'")
+                if any_parts:
+                    conditions.append("(" + " OR ".join(any_parts) + ")")
+            else:
+                # identity mode: allow only cards whose color identity is a
+                # subset of `selected`. We express this by requiring the card
+                # NOT contain any color NOT in the selection.
+                excluded = [c for c in ("W", "U", "B", "R", "G") if c not in colorful]
+                for c in excluded:
+                    conditions.append('color_identity NOT LIKE ?')
+                    params.append(f'%"{c}"%')
+
+        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        conn = self.connect()
+
+        # Total count — runs against the same filter set so pagination
+        # "page X of Y" and the "Load more" button's enabled/disabled
+        # state are coherent.
+        total_row = conn.execute(
+            f"SELECT COUNT(*) FROM cards {where_clause}",
+            params,
+        ).fetchone()
+        total = int(total_row[0]) if total_row else 0
+
+        # Results — sorted by name so pagination is stable and the user
+        # sees the same ordering on repeat queries.
+        page_rows = conn.execute(
+            f"""SELECT data_json FROM cards {where_clause}
+                ORDER BY name COLLATE NOCASE
+                LIMIT ? OFFSET ?""",
+            params + [int(limit), int(offset)],
+        ).fetchall()
+        cards = [_card_from_json(r[0]) for r in page_rows]
+        return cards, total
+
     def snapshot_oracle_identities(self) -> dict[str, str]:
         """Return a {oracle_id: identity_hash} map of the current card set.
 

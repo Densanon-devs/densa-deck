@@ -16,6 +16,7 @@
     </div>
     <nav class="app-tabs">
       <button class="tab-btn active" data-view="analyze">Analyze</button>
+      <button class="tab-btn" data-view="build">Build</button>
       <button class="tab-btn" data-view="decks">My Decks</button>
       <button class="tab-btn" data-view="coach">Coach</button>
       <button class="tab-btn" data-view="settings">Settings</button>
@@ -90,6 +91,156 @@ Mainboard:
       <div id="analysis-result" class="analysis-result hidden"></div>
       <div id="goldfish-result" class="analysis-result hidden"></div>
       <div id="gauntlet-result" class="analysis-result hidden"></div>
+    </section>
+
+    <!-- ============ BUILD VIEW ============ -->
+    <section id="view-build" class="view">
+      <div class="build-grid">
+        <!-- Search column -->
+        <aside class="build-search-col">
+          <div class="build-search-header">
+            <h2>Card search</h2>
+            <span id="build-search-status" class="status-text"></span>
+          </div>
+          <input type="text" id="build-search-input" class="build-search-input" placeholder="Card name (e.g. Sol Ring)">
+
+          <details class="build-filters" open>
+            <summary>Filters</summary>
+            <div class="filter-group">
+              <label class="filter-label">Colors</label>
+              <div class="color-filters">
+                <label><input type="checkbox" class="filter-color" value="W"> W</label>
+                <label><input type="checkbox" class="filter-color" value="U"> U</label>
+                <label><input type="checkbox" class="filter-color" value="B"> B</label>
+                <label><input type="checkbox" class="filter-color" value="R"> R</label>
+                <label><input type="checkbox" class="filter-color" value="G"> G</label>
+                <label><input type="checkbox" class="filter-color" value="C"> Colorless</label>
+              </div>
+              <label class="filter-inline">
+                <input type="radio" name="color-match-mode" value="identity" checked>
+                Commander identity (no new colors)
+              </label>
+              <label class="filter-inline">
+                <input type="radio" name="color-match-mode" value="any">
+                Any of selected
+              </label>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label">Mana value</label>
+              <div class="cmc-range">
+                <input type="number" id="filter-cmc-min" placeholder="min" min="0" max="20">
+                <span>to</span>
+                <input type="number" id="filter-cmc-max" placeholder="max" min="0" max="20">
+              </div>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label">Types</label>
+              <select id="filter-type" multiple size="7">
+                <option value="creature">Creature</option>
+                <option value="instant">Instant</option>
+                <option value="sorcery">Sorcery</option>
+                <option value="artifact">Artifact</option>
+                <option value="enchantment">Enchantment</option>
+                <option value="planeswalker">Planeswalker</option>
+                <option value="land">Land</option>
+                <option value="battle">Battle</option>
+              </select>
+              <p class="panel-hint subtle">Ctrl-click to select multiple.</p>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label">Format legal</label>
+              <select id="filter-format">
+                <option value="">(any)</option>
+                <option value="commander" selected>Commander</option>
+                <option value="modern">Modern</option>
+                <option value="standard">Standard</option>
+                <option value="legacy">Legacy</option>
+                <option value="vintage">Vintage</option>
+                <option value="pauper">Pauper</option>
+                <option value="pioneer">Pioneer</option>
+              </select>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label">Rarity</label>
+              <select id="filter-rarity">
+                <option value="">(any)</option>
+                <option value="common">Common</option>
+                <option value="uncommon">Uncommon</option>
+                <option value="rare">Rare</option>
+                <option value="mythic">Mythic</option>
+              </select>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label">Max price (USD)</label>
+              <input type="number" id="filter-max-price" placeholder="(any)" min="0" step="0.5">
+            </div>
+
+            <div class="filter-group">
+              <button id="build-search-clear" class="btn btn-outline btn-slim">Clear filters</button>
+            </div>
+          </details>
+
+          <div id="build-search-results" class="build-search-results"></div>
+          <div class="build-search-footer">
+            <button id="build-search-more-btn" class="btn btn-outline btn-slim hidden">Load more</button>
+          </div>
+        </aside>
+
+        <!-- Deck column -->
+        <div class="build-deck-col">
+          <div class="build-deck-header">
+            <h2 id="build-deck-title">Untitled deck</h2>
+            <div class="build-deck-meta">
+              <span id="build-deck-count">0 cards</span>
+              <span id="build-deck-format-note"></span>
+              <span id="build-deck-validity" class="status-text"></span>
+            </div>
+          </div>
+
+          <div class="build-deck-controls">
+            <label>Name
+              <input type="text" id="build-deck-name" placeholder="My new deck">
+            </label>
+            <label>Format
+              <select id="build-deck-format">
+                <option value="commander" selected>Commander</option>
+                <option value="modern">Modern</option>
+                <option value="standard">Standard</option>
+                <option value="legacy">Legacy</option>
+                <option value="vintage">Vintage</option>
+                <option value="pauper">Pauper</option>
+                <option value="pioneer">Pioneer</option>
+              </select>
+            </label>
+            <div class="build-deck-actions">
+              <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a new deck (Pro)">Save deck (Pro)</button>
+              <button id="build-clear-btn" class="btn btn-outline btn-slim" title="Clear all cards from the current draft">Clear</button>
+              <span id="build-save-status" class="status-text"></span>
+            </div>
+          </div>
+
+          <div class="build-zone-tabs">
+            <button class="zone-tab active" data-zone="mainboard">Mainboard</button>
+            <button class="zone-tab" data-zone="sideboard">Sideboard</button>
+            <button class="zone-tab" data-zone="commander">Commander</button>
+          </div>
+
+          <div id="build-deck-body" class="build-deck-body"></div>
+        </div>
+
+        <!-- Stats column -->
+        <aside class="build-stats-col">
+          <h2>Stats</h2>
+          <div id="build-stats-body" class="build-stats-body">
+            <p class="panel-hint">Add cards to see live stats.</p>
+          </div>
+        </aside>
+      </div>
     </section>
 
     <!-- ============ MY DECKS VIEW ============ -->
@@ -304,6 +455,29 @@ Mainboard:
     </section>
   </main>
 
+  <!-- Pro-gate modal — shown when a free-tier user tries a Pro action
+       from the builder (save deck). Draft is preserved. -->
+  <div id="pro-gate-modal" class="modal-overlay pro-gate-modal hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Upgrade to Pro to save decks</h2>
+        <button id="pro-gate-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <p>Your draft is preserved — no work is lost. Save, version tracking,
+          goldfish simulation, matchup gauntlet, deck-vs-deck duels, and the
+          AI coach are Pro features.</p>
+        <p>Pro is a one-time <strong>$49.99</strong> purchase (currently
+          <strong>$39.99</strong> launch-week with code <code>LAUNCH</code>).
+          Activate your key on the Settings tab after purchase.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="pro-gate-buy-btn" class="btn btn-primary">Open pricing page</button>
+        <button id="pro-gate-dismiss-btn" class="btn btn-outline">Keep editing draft</button>
+      </div>
+    </div>
+  </div>
+
   <!-- What-changed modal — shown after an update-path ingest finishes.
        Three collapsible sections (Added / Updated / Removed) listing card
        names alphabetically. Populated from get_last_ingest_diff. -->
@@ -341,5 +515,6 @@ Mainboard:
 
   <script src="tour.js"></script>
   <script src="app.js"></script>
+  <script src="builder.js"></script>
 </body>
 </html>

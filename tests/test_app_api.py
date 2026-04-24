@@ -1137,3 +1137,124 @@ class TestCardDbUpdate:
         assert diff["removed"] == ["Card C"]
         assert diff["updated"] == ["Card B"]
         assert diff["truncated"] is False
+
+
+# ---------------------------------------------------------------- v0.2.0 Build-tab APIs
+
+
+class TestBuilder:
+    """API-level coverage for the Build-tab endpoints. Uses the same tiny
+    `api_with_cards` library — no real Scryfall ingest needed."""
+
+    def test_search_cards_shape(self, api_with_cards):
+        r = api_with_cards.search_cards({"name": "Sol"})
+        assert r["ok"] is True
+        d = r["data"]
+        assert d["total"] >= 1
+        names = [c["name"] for c in d["cards"]]
+        assert "Sol Ring" in names
+        # Trimmed builder-dict shape — not the full Card object
+        first = d["cards"][0]
+        assert "mana_cost" in first
+        assert "image_url" in first
+        assert "color_identity" in first
+
+    def test_search_cards_requires_ingest(self, api):
+        r = api.search_cards({"name": "anything"})
+        assert r["ok"] is False
+        assert r.get("error_type") == "IngestRequired"
+
+    def test_search_cards_caps_limit(self, api_with_cards):
+        # Ask for 5000 — backend must cap at 120 to keep the bridge payload small.
+        r = api_with_cards.search_cards({"limit": 5000})
+        assert r["ok"] is True
+        assert r["data"]["limit"] == 120
+
+    def test_get_card_single_lookup(self, api_with_cards):
+        r = api_with_cards.get_card("Sol Ring")
+        assert r["ok"] is True
+        d = r["data"]
+        assert d["name"] == "Sol Ring"
+        # include_full=True adds oracle_text
+        assert "oracle_text" in d
+
+    def test_get_card_missing_returns_error(self, api_with_cards):
+        r = api_with_cards.get_card("Nonexistent Card")
+        assert r["ok"] is False
+        assert "no card" in r["error"].lower()
+
+    def test_builder_draft_roundtrip(self, api, monkeypatch, tmp_path):
+        # Redirect the draft path to tmp so the test doesn't touch the
+        # user's ~/.densa-deck/drafts.json.
+        from densa_deck.app import api as api_mod
+        draft_path = tmp_path / "drafts.json"
+        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
+
+        # First load: no draft yet
+        r = api.load_builder_draft()
+        assert r["ok"] is True
+        assert r["data"] is None
+
+        # Save + reload
+        payload = {
+            "name": "My Brew",
+            "format": "commander",
+            "mainboard": {"Sol Ring": {"qty": 1, "cmc": 1}},
+            "sideboard": {},
+            "commander": {"Atraxa, Praetors' Voice": {"qty": 1, "cmc": 4}},
+        }
+        r = api.save_builder_draft(payload)
+        assert r["ok"] is True
+        assert draft_path.exists()
+
+        r2 = api.load_builder_draft()
+        assert r2["ok"] is True
+        assert r2["data"]["name"] == "My Brew"
+        assert "Sol Ring" in r2["data"]["mainboard"]
+
+    def test_builder_draft_corrupt_file_quarantines(self, api, monkeypatch, tmp_path):
+        from densa_deck.app import api as api_mod
+        draft_path = tmp_path / "drafts.json"
+        draft_path.write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
+
+        r = api.load_builder_draft()
+        assert r["ok"] is True
+        assert r["data"] is None
+        # Corrupt file was moved aside; a .corrupt-*.bak sibling exists.
+        siblings = list(tmp_path.glob("drafts.json.corrupt-*.bak"))
+        assert len(siblings) == 1
+
+    def test_clear_builder_draft_removes_file(self, api, monkeypatch, tmp_path):
+        from densa_deck.app import api as api_mod
+        draft_path = tmp_path / "drafts.json"
+        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
+
+        api.save_builder_draft({"name": "x", "format": "commander",
+                                "mainboard": {}, "sideboard": {}, "commander": {}})
+        assert draft_path.exists()
+        api.clear_builder_draft()
+        assert not draft_path.exists()
+
+    def test_save_builder_as_deck_free_tier_returns_pro_required(self, api_with_cards, monkeypatch):
+        # Force the free tier regardless of the test runner's env.
+        monkeypatch.setenv("MTG_ENGINE_TIER", "free")
+        # Clear the tier cache in the env-based lookup — get_user_tier
+        # re-reads the env var each call so no invalidation is needed.
+        text = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
+        r = api_with_cards.save_builder_as_deck(
+            deck_id="test", name="Test", format_="commander", decklist_text=text,
+        )
+        assert r["ok"] is False
+        assert r.get("error_type") == "ProRequired"
+
+    def test_save_builder_as_deck_pro_writes_version(self, api_with_cards, monkeypatch):
+        monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
+        text = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
+        r = api_with_cards.save_builder_as_deck(
+            deck_id="test-pro", name="Test Pro", format_="commander", decklist_text=text,
+        )
+        assert r["ok"] is True
+        # Version 1 saved; visible via list_saved_decks
+        listing = api_with_cards.list_saved_decks()
+        assert any(d["deck_id"] == "test-pro" for d in listing["data"])

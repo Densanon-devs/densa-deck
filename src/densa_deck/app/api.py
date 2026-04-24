@@ -941,6 +941,152 @@ class AppApi:
         self._last_ingest_diff = None
         return diff
 
+    # ------------------------------------------------------------------ deckbuilder (Build tab)
+
+    @_safe
+    def search_cards(self, query: dict | None = None) -> dict:
+        """Structured card search powering the Build tab's left column.
+
+        `query` is a dict with any of: name, colors, color_match, cmc_min,
+        cmc_max, types, format_legal, rarity, max_price, set_code, limit,
+        offset. See `CardDatabase.search_structured` for semantics. Returns
+        `{cards: [...], total: N, offset: N, limit: N}` — the frontend uses
+        offset + total to decide whether to show "Load more".
+
+        Hard-capped at 120 results per call to keep payload size sane; the
+        frontend can paginate with offset for more.
+        """
+        query = query or {}
+        db = self._get_db()
+        if db.card_count() == 0:
+            return {
+                "ok": False,
+                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error_type": "IngestRequired",
+            }
+
+        limit = min(int(query.get("limit") or 60), 120)
+        offset = max(int(query.get("offset") or 0), 0)
+        cards, total = db.search_structured(
+            name=query.get("name"),
+            colors=query.get("colors"),
+            color_match=query.get("color_match") or "identity",
+            cmc_min=query.get("cmc_min"),
+            cmc_max=query.get("cmc_max"),
+            types=query.get("types"),
+            format_legal=query.get("format_legal"),
+            rarity=query.get("rarity"),
+            max_price=query.get("max_price"),
+            set_code=query.get("set_code"),
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "cards": [_card_to_builder_dict(c) for c in cards],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    @_safe
+    def get_card(self, name: str) -> dict:
+        """Single-card lookup used for hover popups + details panels.
+
+        Returns the same shape as `search_cards` rows, plus the full
+        oracle text + face list so the popup can render the card
+        faithfully. Uses `lookup_by_name` (canonical + split/DFC fallback)
+        so flavor-name imports and alt-name lookups resolve the same
+        way the deck resolver handles them.
+        """
+        if not name or not name.strip():
+            return {"ok": False, "error": "Name is required."}
+        db = self._get_db()
+        card = db.lookup_by_name(name)
+        if card is None:
+            return {"ok": False, "error": f"No card named '{name}'."}
+        return _card_to_builder_dict(card, include_full=True)
+
+    @_safe
+    def save_builder_draft(self, draft: dict) -> dict:
+        """Autosave the current builder draft to ~/.densa-deck/drafts.json.
+
+        `draft` is the frontend's `builderState.deck` + metadata (name,
+        format, zone counts). Written atomically so a crash mid-write
+        can't leave the next launch with a corrupt draft. Overwrites
+        silently — builder drafts are single-slot in v1 (one draft at a
+        time), not a multi-draft history.
+        """
+        if not isinstance(draft, dict):
+            return {"ok": False, "error": "Draft payload must be a dict."}
+        path = _builder_draft_path()
+        try:
+            _atomic_write_json(path, draft)
+        except OSError as e:
+            return {"ok": False, "error": f"Failed to save draft: {e}"}
+        return {"saved_at": _now_iso(), "path": str(path)}
+
+    @_safe
+    def load_builder_draft(self) -> dict:
+        """Restore the builder draft from disk, or None if no draft exists.
+
+        Missing file returns None (via the {ok:true, data:null} envelope);
+        corrupt file returns None too — the frontend treats both the same
+        ("start fresh"). A corrupt draft is quarantined beside the real
+        file for support forensics, matching the coach-sessions recovery
+        pattern.
+        """
+        path = _builder_draft_path()
+        if not path.exists():
+            return None
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except (OSError, json.JSONDecodeError) as exc:
+            self._quarantine_bad_file(path, reason=str(exc))
+            return None
+        return data if isinstance(data, dict) else None
+
+    @_safe
+    def clear_builder_draft(self) -> dict:
+        """Delete the builder draft file. Called when the user saves the
+        draft as a real deck or clicks Clear in the builder."""
+        path = _builder_draft_path()
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"Failed to clear draft: {e}"}
+        return {"cleared": True}
+
+    @_safe
+    def save_builder_as_deck(
+        self,
+        deck_id: str,
+        name: str,
+        format_: str,
+        decklist_text: str,
+        notes: str = "",
+    ) -> dict:
+        """Pro-gated save — wraps `save_deck_version` with an explicit tier
+        check so free-tier users get a clear "upgrade to save" envelope
+        rather than the underlying analyze-flow error.
+
+        The frontend catches `error_type == "ProRequired"` to surface the
+        upgrade modal; pro users land directly in `save_deck_version`,
+        which parses + resolves + snapshots the deck into the same
+        VersionStore as the Analyze tab's Save button.
+        """
+        if get_user_tier() != Tier.PRO:
+            return {
+                "ok": False,
+                "error": "Saving decks requires Densa Deck Pro. "
+                         "Your draft is preserved — activate Pro on the Settings tab to save it as a tracked deck.",
+                "error_type": "ProRequired",
+            }
+        return self.save_deck_version(
+            deck_id=deck_id, name=name,
+            decklist_text=decklist_text, format_=format_, notes=notes,
+        )
+
     # ------------------------------------------------------------------ coach (Pro chat)
 
     @_safe
@@ -1774,6 +1920,71 @@ def _save_user_prefs(prefs: dict) -> None:
     """Write preferences atomically so a crash mid-write can't leave the
     next launch with a half-parsed config."""
     _atomic_write_json(_user_prefs_path(), prefs)
+
+
+def _builder_draft_path() -> Path:
+    """Single-slot draft file for the Build tab. Lives alongside the card
+    database so all user data is in one ~/.densa-deck/ directory."""
+    from densa_deck.data.database import DEFAULT_DB_PATH
+    return DEFAULT_DB_PATH.parent / "drafts.json"
+
+
+def _card_to_builder_dict(card, include_full: bool = False) -> dict:
+    """Flatten a Card for the builder's JSON wire format.
+
+    Trims aggressively by default — search results return dozens of
+    cards at once and every kilobyte over the pywebview bridge slows
+    the UI. `include_full=True` is used by `get_card` (single-card
+    lookup) to surface full oracle text + faces.
+    """
+    def _image_url(scryfall_id: str) -> str:
+        # Scryfall hotlink pattern — identical to the one CardDatabase
+        # serializes into card.image_url / legal.scryfall_image_url.
+        try:
+            from densa_deck.legal import scryfall_image_url
+            return scryfall_image_url(scryfall_id)
+        except Exception:
+            return ""
+
+    out = {
+        "name": card.name,
+        "scryfall_id": card.scryfall_id,
+        "oracle_id": card.oracle_id,
+        "cmc": card.cmc,
+        "mana_cost": card.mana_cost,
+        "type_line": card.type_line,
+        "colors": [c.value for c in card.colors],
+        "color_identity": [c.value for c in card.color_identity],
+        "rarity": card.rarity,
+        "set_code": card.set_code,
+        "price_usd": card.price_usd,
+        "image_url": _image_url(card.scryfall_id),
+        "is_land": card.is_land,
+        "is_creature": card.is_creature,
+        "is_instant": card.is_instant,
+        "is_sorcery": card.is_sorcery,
+        "is_artifact": card.is_artifact,
+        "is_enchantment": card.is_enchantment,
+        "is_planeswalker": card.is_planeswalker,
+        "is_battle": card.is_battle,
+    }
+    if include_full:
+        out.update({
+            "oracle_text": card.oracle_text,
+            "power": card.power,
+            "toughness": card.toughness,
+            "loyalty": card.loyalty,
+            "keywords": list(card.keywords),
+            "faces": [
+                {
+                    "name": f.name, "mana_cost": f.mana_cost, "cmc": f.cmc,
+                    "type_line": f.type_line, "oracle_text": f.oracle_text,
+                    "power": f.power, "toughness": f.toughness, "loyalty": f.loyalty,
+                }
+                for f in card.faces
+            ],
+        })
+    return out
 
 
 def _atomic_write_json(path: Path, data) -> None:
