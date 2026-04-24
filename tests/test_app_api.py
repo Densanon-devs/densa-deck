@@ -983,3 +983,157 @@ class TestConcurrencyLocks:
         r = api.save_deck_version("d1", "D1", "1 Sol Ring", "commander")
         assert r["ok"] is False
         assert r.get("error_type") == "IngestRequired"
+
+
+# ---------------------------------------------------------------- v0.1.7 DB update + prefs
+
+
+class TestCardDbUpdate:
+    """Coverage for the opt-in Scryfall bulk update check and the
+    user-preferences endpoints that gate it. Tests stub the network call
+    so they run offline and deterministically."""
+
+    def _prefs_path(self, tmp_dir: Path) -> Path:
+        return tmp_dir / "config.json"
+
+    def _isolate_prefs(self, monkeypatch, tmp_dir: Path) -> Path:
+        # Redirect the tier/prefs config file to tmp so the test doesn't
+        # mutate the user's real ~/.densa-deck/config.json.
+        path = self._prefs_path(tmp_dir)
+        monkeypatch.setattr("densa_deck.tiers._CONFIG_PATH", path)
+        return path
+
+    def test_check_returns_no_local_db_when_unpopulated(self, api):
+        r = api.check_card_db_update()
+        assert r["ok"] is True
+        assert r["data"]["available"] is False
+        assert r["data"].get("reason") == "no_local_db"
+
+    def test_check_returns_available_when_remote_newer(self, api_with_cards, monkeypatch):
+        # Record a local timestamp older than the stubbed remote.
+        db = api_with_cards._get_db()
+        db.set_metadata("scryfall_bulk_updated_at", "2025-01-01T00:00:00+00:00")
+
+        async def fake_manifest():
+            return {
+                "download_uri": "https://example.com/oracle_cards.json",
+                "updated_at": "2026-04-01T00:00:00+00:00",
+                "size": 350 * 1024 * 1024,
+            }
+        monkeypatch.setattr(
+            "densa_deck.data.scryfall.fetch_bulk_data_manifest", fake_manifest,
+        )
+
+        r = api_with_cards.check_card_db_update()
+        assert r["ok"] is True
+        d = r["data"]
+        assert d["available"] is True
+        assert d["remote_updated_at"].startswith("2026-04-01")
+        assert d["local_updated_at"].startswith("2025-01-01")
+        # 350 MB size round-trips through the MB conversion
+        assert d["size_mb"] == 350.0
+
+    def test_check_returns_not_available_when_same_timestamp(self, api_with_cards, monkeypatch):
+        db = api_with_cards._get_db()
+        db.set_metadata("scryfall_bulk_updated_at", "2026-04-01T00:00:00+00:00")
+
+        async def fake_manifest():
+            return {
+                "download_uri": "https://example.com/oracle_cards.json",
+                "updated_at": "2026-04-01T00:00:00+00:00",
+                "size": 0,
+            }
+        monkeypatch.setattr(
+            "densa_deck.data.scryfall.fetch_bulk_data_manifest", fake_manifest,
+        )
+        r = api_with_cards.check_card_db_update()
+        assert r["data"]["available"] is False
+
+    def test_check_fails_open_on_network_error(self, api_with_cards, monkeypatch):
+        async def bad_manifest():
+            raise RuntimeError("network unreachable")
+        monkeypatch.setattr(
+            "densa_deck.data.scryfall.fetch_bulk_data_manifest", bad_manifest,
+        )
+        r = api_with_cards.check_card_db_update()
+        # Fail-open: ok envelope is True, available is False, error is surfaced.
+        assert r["ok"] is True
+        assert r["data"]["available"] is False
+        assert "network unreachable" in r["data"].get("error", "")
+
+    def test_user_preferences_default_shape(self, api, monkeypatch, tmp_path):
+        self._isolate_prefs(monkeypatch, tmp_path)
+        r = api.get_user_preferences()
+        assert r["ok"] is True
+        d = r["data"]
+        assert d["auto_check_card_db"] is False
+        assert d["auto_download_card_db"] is False
+
+    def test_user_preferences_roundtrip(self, api, monkeypatch, tmp_path):
+        path = self._isolate_prefs(monkeypatch, tmp_path)
+        r = api.set_user_preferences({"auto_check_card_db": True})
+        assert r["ok"] is True
+        # Persisted on disk
+        import json as _json
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        assert data["auto_check_card_db"] is True
+        # Fresh read returns the new value
+        r2 = api.get_user_preferences()
+        assert r2["data"]["auto_check_card_db"] is True
+
+    def test_user_preferences_enforce_auto_download_requires_auto_check(self, api, monkeypatch, tmp_path):
+        self._isolate_prefs(monkeypatch, tmp_path)
+        # Starting from both off — setting auto_download alone must fail.
+        r = api.set_user_preferences({"auto_download_card_db": True})
+        assert r["ok"] is False
+        assert r.get("error_type") == "InvalidPreference"
+
+        # Setting both together is fine.
+        r2 = api.set_user_preferences({
+            "auto_check_card_db": True,
+            "auto_download_card_db": True,
+        })
+        assert r2["ok"] is True
+        assert r2["data"]["auto_download_card_db"] is True
+
+        # Turning auto_check off while auto_download is still in the payload
+        # as True is rejected — server-side consistency guard.
+        r3 = api.set_user_preferences({
+            "auto_check_card_db": False,
+            "auto_download_card_db": True,
+        })
+        assert r3["ok"] is False
+
+    def test_get_last_ingest_diff_is_single_use(self, api):
+        # Seed a fake diff as if _do_ingest had just stashed one.
+        api._last_ingest_diff = {
+            "counts": {"added": 2, "removed": 0, "updated": 1},
+            "added": ["A", "B"], "removed": [], "updated": ["C"],
+            "truncated": False, "top_n": 500,
+        }
+        r = api.get_last_ingest_diff()
+        assert r["ok"] is True
+        assert r["data"]["counts"]["added"] == 2
+        # Second call must be None — single-use
+        r2 = api.get_last_ingest_diff()
+        assert r2["ok"] is True
+        assert r2["data"] is None
+
+    def test_compute_card_db_diff_detects_added_removed_updated(self):
+        from densa_deck.app.api import _compute_card_db_diff
+        pre = {
+            "oid-1": "Card A\n\nCreature\n\n",
+            "oid-2": "Card B\n\nInstant\n\n",  # will be updated
+            "oid-3": "Card C\n\nSorcery\n\n",  # will be removed
+        }
+        post = {
+            "oid-1": "Card A\n\nCreature\n\n",                     # unchanged
+            "oid-2": "Card B\ntext changed\nInstant\nnew\n",       # updated
+            "oid-4": "Card D\n\nEnchantment\n\n",                  # added
+        }
+        diff = _compute_card_db_diff(pre, post)
+        assert diff["counts"] == {"added": 1, "removed": 1, "updated": 1}
+        assert diff["added"] == ["Card D"]
+        assert diff["removed"] == ["Card C"]
+        assert diff["updated"] == ["Card B"]
+        assert diff["truncated"] is False

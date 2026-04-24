@@ -26,6 +26,13 @@
     <span id="update-banner-body"></span>
     <button class="banner-close" data-target="update-banner" title="Dismiss">×</button>
   </div>
+  <div id="card-db-update-banner" class="update-banner hidden">
+    <span id="card-db-update-banner-body"></span>
+    <span class="banner-actions">
+      <button id="card-db-update-now-btn" class="btn btn-outline btn-slim">Update now</button>
+      <button class="banner-close" data-target="card-db-update-banner" title="Later">Later</button>
+    </span>
+  </div>
   <div id="setup-banner" class="setup-banner hidden">
     <span id="setup-banner-body"></span>
     <button class="banner-close" data-target="setup-banner" title="Dismiss">×</button>
@@ -240,11 +247,23 @@ Mainboard:
           <p class="panel-hint">Downloads the full Scryfall oracle data (~250 MB compressed, ~1 GB parsed in SQLite). One-time setup.</p>
           <div class="setup-action-row">
             <button id="ingest-btn" class="btn btn-primary">Install card database</button>
+            <button id="check-db-update-btn" class="btn btn-outline">Check for updates now</button>
             <span id="ingest-status" class="status-text"></span>
           </div>
           <div id="ingest-progress-wrap" class="progress-wrap hidden">
             <div class="progress-bar"><div id="ingest-progress-fill" class="progress-fill"></div></div>
             <div id="ingest-progress-msg" class="progress-msg"></div>
+          </div>
+          <div class="settings-subrow">
+            <label class="checkbox-row">
+              <input type="checkbox" id="pref-auto-check">
+              <span>Check for card database updates on launch</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="pref-auto-download" disabled>
+              <span>Automatically download updates when available</span>
+            </label>
+            <p class="panel-hint subtle">Both off by default. Auto-download requires auto-check.</p>
           </div>
         </div>
 
@@ -284,6 +303,22 @@ Mainboard:
       </div>
     </section>
   </main>
+
+  <!-- What-changed modal — shown after an update-path ingest finishes.
+       Three collapsible sections (Added / Updated / Removed) listing card
+       names alphabetically. Populated from get_last_ingest_diff. -->
+  <div id="db-diff-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Card database updated</h2>
+        <button id="db-diff-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div id="db-diff-body" class="modal-body"></div>
+      <div class="modal-footer">
+        <button id="db-diff-dismiss-btn" class="btn btn-primary">Got it</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast hidden"></div>
 

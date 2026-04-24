@@ -1331,3 +1331,131 @@ code {
   text-transform: uppercase;
 }
 
+/* ============================================================
+   v0.1.7: card DB update preferences + what-changed modal
+   ============================================================ */
+
+.banner-actions {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn.btn-slim {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+
+.settings-subrow {
+  margin-top: 12px;
+  padding-left: 6px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"][disabled] + span {
+  opacity: 0.55;
+}
+
+.panel-hint.subtle {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+/* Modal overlay for what-changed diff */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-panel {
+  background: var(--color-surface, #1e2030);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-header h2 { margin: 0; font-size: 1.1rem; }
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 2px 6px;
+}
+.modal-close:hover { opacity: 1; }
+
+.modal-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-body p { margin: 8px 0; font-size: 0.92rem; }
+
+.modal-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.diff-section {
+  margin: 10px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  background: var(--color-bg);
+}
+
+.diff-section > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.diff-section.added { border-left: 3px solid var(--color-accent-green, #34d399); }
+.diff-section.updated { border-left: 3px solid #e8a33b; }
+.diff-section.removed { border-left: 3px solid var(--color-warning, #ff6b6b); }
+
+.diff-list {
+  margin: 8px 0 4px 20px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.85rem;
+}
+

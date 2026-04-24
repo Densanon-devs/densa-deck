@@ -29,6 +29,11 @@ function $(id) { return document.getElementById(id); }
 function cacheElements() {
   const ids = [
     "tier-badge", "setup-banner", "update-banner",
+    // Card DB update banner + what-changed modal
+    "card-db-update-banner", "card-db-update-banner-body", "card-db-update-now-btn",
+    "db-diff-modal", "db-diff-body", "db-diff-close-btn", "db-diff-dismiss-btn",
+    // Settings: DB preferences + check now
+    "pref-auto-check", "pref-auto-download", "check-db-update-btn",
     // URL import
     "url-import-input", "url-import-btn", "url-import-status",
     // Update + setup banner bodies
@@ -212,6 +217,47 @@ async function bootstrap() {
   // Auto-update check fires in the background on launch. Fail-silent if
   // the network is down so offline users aren't harassed by error toasts.
   checkForUpdates();
+  // Card DB update check also fires on launch — gated on the user's
+  // auto_check_card_db preference. Silent when the pref is off; surfaces
+  // a dismissible banner (or kicks off a silent re-ingest) when on.
+  checkCardDbUpdates();
+
+  // Wire the Card-DB update banner and Settings handlers for v0.1.7 prefs.
+  if (els.card_db_update_now_btn) {
+    els.card_db_update_now_btn.addEventListener("click", runCardDbUpdateNow);
+  }
+  if (els.check_db_update_btn) {
+    els.check_db_update_btn.addEventListener("click", async () => {
+      els.check_db_update_btn.disabled = true;
+      try {
+        const info = await callApi("check_card_db_update");
+        if (info && info.available) {
+          showCardDbUpdateBanner(info);
+          toast("Update available.", "success");
+        } else if (info && info.error) {
+          toast("Couldn't check for updates: " + info.error, "error");
+        } else {
+          toast("You're already up to date.", "info");
+        }
+      } catch (e) {
+        toast("Check failed: " + e.message, "error");
+      } finally {
+        els.check_db_update_btn.disabled = false;
+      }
+    });
+  }
+  if (els.pref_auto_check) {
+    els.pref_auto_check.addEventListener("change", onPrefChange);
+  }
+  if (els.pref_auto_download) {
+    els.pref_auto_download.addEventListener("change", onPrefChange);
+  }
+  if (els.db_diff_close_btn) {
+    els.db_diff_close_btn.addEventListener("click", () => hideDbDiffModal());
+  }
+  if (els.db_diff_dismiss_btn) {
+    els.db_diff_dismiss_btn.addEventListener("click", () => hideDbDiffModal());
+  }
   // Force a coach-backend re-probe on every launch so an in-place
   // installer update (which dumps us into a fresh process but points at
   // the existing ~/.densa-deck/models/analyst.gguf) picks up the model
@@ -255,6 +301,160 @@ async function checkForUpdates() {
     }
   } catch (e) {
     // Silent failure — no update check, no error. User may be offline.
+  }
+}
+
+// ------------------------------ Card DB update (v0.1.7) ------------------------------
+
+// On-launch check for a newer Scryfall bulk. Silent when the user's
+// auto-check preference is off, otherwise renders the update banner
+// (or kicks off a silent re-ingest when auto-download is on).
+async function checkCardDbUpdates() {
+  try {
+    const prefs = await callApi("get_user_preferences");
+    if (!prefs || !prefs.auto_check_card_db) return;
+    const info = await callApi("check_card_db_update");
+    if (!info || !info.available) return;
+    if (prefs.auto_download_card_db) {
+      // Background ingest. Poll progress, pop the what-changed modal on done.
+      showCardDbUpdateBanner(info, { autoMode: true });
+      startCardDbUpdateIngest();
+    } else {
+      showCardDbUpdateBanner(info);
+    }
+  } catch (e) {
+    // Network / bridge failure — no nag.
+  }
+}
+
+function showCardDbUpdateBanner(info, opts) {
+  const size = info.size_mb ? ` (~${info.size_mb} MB download)` : "";
+  const when = info.remote_updated_at
+    ? ` &middot; Scryfall build ${escape(info.remote_updated_at.slice(0, 10))}`
+    : "";
+  const body = (opts && opts.autoMode)
+    ? `<strong>Updating card database in background</strong>${size}${when}`
+    : `<strong>Card database update available</strong>${size}${when}`;
+  els.card_db_update_banner_body.innerHTML = body;
+  // Hide the "Update now" button when we're already updating automatically.
+  if (els.card_db_update_now_btn) {
+    els.card_db_update_now_btn.classList.toggle("hidden", !!(opts && opts.autoMode));
+  }
+  els.card_db_update_banner.classList.remove("hidden");
+}
+
+function hideCardDbUpdateBanner() {
+  els.card_db_update_banner.classList.add("hidden");
+}
+
+async function runCardDbUpdateNow() {
+  if (els.card_db_update_now_btn) els.card_db_update_now_btn.disabled = true;
+  hideCardDbUpdateBanner();
+  startCardDbUpdateIngest();
+}
+
+function startCardDbUpdateIngest() {
+  // Reuses the existing ingest flow with force=true. Routes completion
+  // through the same pollProgress helper but adds a "fetch diff + show
+  // modal" step once done.
+  els.ingest_progress_wrap.classList.remove("hidden");
+  els.ingest_status.textContent = "Updating card database...";
+  els.ingest_btn.disabled = true;
+  callApi("ingest_start", true)
+    .then(() => {
+      pollProgress("ingest", async () => {
+        els.ingest_btn.disabled = false;
+        els.ingest_status.textContent = "";
+        if (els.card_db_update_now_btn) els.card_db_update_now_btn.disabled = false;
+        checkSetupBanner();
+        refreshSettings();
+        // Fetch the diff and pop the "what changed" modal. null means
+        // the ingest was a first-run (no pre-snapshot) or was already
+        // consumed — skip the modal in both cases.
+        try {
+          const diff = await callApi("get_last_ingest_diff");
+          if (diff && (diff.counts && (diff.counts.added || diff.counts.updated || diff.counts.removed))) {
+            showDbDiffModal(diff);
+          }
+        } catch (e) { /* non-fatal */ }
+      });
+    })
+    .catch((e) => {
+      els.ingest_btn.disabled = false;
+      els.ingest_status.textContent = "";
+      if (els.card_db_update_now_btn) els.card_db_update_now_btn.disabled = false;
+      toast("Card DB update failed to start: " + e.message, "error");
+    });
+}
+
+function showDbDiffModal(diff) {
+  const section = (label, names, cssClass) => {
+    const count = (diff.counts && diff.counts[label]) || names.length;
+    if (count === 0) return "";
+    const listItems = (names || []).map(n => `<li>${escape(n)}</li>`).join("");
+    const truncatedNote = (count > names.length)
+      ? `<p class="panel-hint subtle">Showing ${names.length} of ${count} — more truncated for render speed.</p>`
+      : "";
+    const title = label.charAt(0).toUpperCase() + label.slice(1);
+    return `
+      <details class="diff-section ${cssClass}" ${count > 0 ? "open" : ""}>
+        <summary>${escape(title)} (${count})</summary>
+        ${truncatedNote}
+        <ul class="diff-list">${listItems}</ul>
+      </details>
+    `;
+  };
+  const totalChanged = (diff.counts && (
+    (diff.counts.added || 0) + (diff.counts.updated || 0) + (diff.counts.removed || 0)
+  )) || 0;
+  const header = totalChanged === 0
+    ? "<p>No oracle changes were detected in this update.</p>"
+    : `<p>Scryfall's oracle set changed in this update. Summary below.</p>`;
+  els.db_diff_body.innerHTML = `
+    ${header}
+    ${section("added", diff.added || [], "added")}
+    ${section("updated", diff.updated || [], "updated")}
+    ${section("removed", diff.removed || [], "removed")}
+  `;
+  els.db_diff_modal.classList.remove("hidden");
+  els.db_diff_modal.setAttribute("aria-hidden", "false");
+}
+
+function hideDbDiffModal() {
+  els.db_diff_modal.classList.add("hidden");
+  els.db_diff_modal.setAttribute("aria-hidden", "true");
+}
+
+async function onPrefChange() {
+  // Enforce the UI-side constraint: auto_download is disabled unless
+  // auto_check is on. The server also enforces this — we mirror it here
+  // so the checkbox feels right to the user before the POST round-trips.
+  const autoCheck = !!els.pref_auto_check.checked;
+  if (!autoCheck && els.pref_auto_download.checked) {
+    els.pref_auto_download.checked = false;
+  }
+  els.pref_auto_download.disabled = !autoCheck;
+  try {
+    await callApi("set_user_preferences", {
+      auto_check_card_db: autoCheck,
+      auto_download_card_db: !!els.pref_auto_download.checked,
+    });
+  } catch (e) {
+    toast("Saving preference failed: " + e.message, "error");
+  }
+}
+
+async function loadUserPrefsIntoSettings() {
+  // Used by refreshSettings so the checkboxes reflect the persisted
+  // state every time the Settings tab opens.
+  if (!els.pref_auto_check) return;
+  try {
+    const prefs = await callApi("get_user_preferences");
+    els.pref_auto_check.checked = !!prefs.auto_check_card_db;
+    els.pref_auto_download.checked = !!prefs.auto_download_card_db;
+    els.pref_auto_download.disabled = !prefs.auto_check_card_db;
+  } catch (e) {
+    // Non-fatal — leave the checkboxes in whatever state they happened to be.
   }
 }
 
@@ -835,6 +1035,7 @@ async function refreshSettings() {
           : `<span>${status.analyst_model.reason || "Not installed. Click <strong>Download analyst model</strong> below."}</span>`}
       </div>
     `;
+    await loadUserPrefsIntoSettings();
   } catch (e) {
     toast("Settings refresh failed: " + e.message, "error");
   }

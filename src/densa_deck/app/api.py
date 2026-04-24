@@ -808,6 +808,139 @@ class AppApi:
             "download_url": data.get("downloadUrl") or data.get("download_url"),
         }
 
+    # ------------------------------------------------------------------ card DB update + preferences
+
+    @_safe
+    def check_card_db_update(self) -> dict:
+        """Ask Scryfall whether its bulk oracle_cards file is newer than what
+        we last ingested. Cheap (tiny manifest call — no full bulk download).
+
+        Returns `{available, remote_updated_at, local_updated_at, size_mb}`.
+        Fails open on any network or parse error with `{available: False,
+        error: "..."}` so an offline launch doesn't nag the user.
+
+        Note: `available=True` only when the remote timestamp is strictly
+        newer than our recorded `scryfall_bulk_updated_at`. If the local
+        metadata is missing (e.g. user ingested on an older build that didn't
+        record it), we fall back to `available=True` so they get a chance to
+        refresh. First-run ingests (no card DB at all) are handled upstream
+        — the Settings panel shows Setup instead of Update.
+        """
+        import asyncio
+        from densa_deck.data.scryfall import fetch_bulk_data_manifest
+
+        db = self._get_db()
+        # If there are no cards at all, the frontend should route the user
+        # through the first-run setup, not an "update available" banner.
+        if db.card_count() == 0:
+            return {"available": False, "reason": "no_local_db"}
+
+        local_ts = db.get_metadata("scryfall_bulk_updated_at") or ""
+
+        loop = asyncio.new_event_loop()
+        try:
+            try:
+                manifest = loop.run_until_complete(fetch_bulk_data_manifest())
+            except Exception as e:
+                return {"available": False, "error": str(e)}
+        finally:
+            loop.close()
+
+        remote_ts = str(manifest.get("updated_at", ""))
+        size_bytes = manifest.get("size") or 0
+        try:
+            size_mb = round(int(size_bytes) / (1024 * 1024), 1)
+        except (TypeError, ValueError):
+            size_mb = 0.0
+
+        # String comparison works for Scryfall's ISO-8601 timestamps (they
+        # all use the same offset), but guard against a blank remote to
+        # avoid flagging every launch when Scryfall gives us nothing useful.
+        if not remote_ts:
+            return {
+                "available": False,
+                "remote_updated_at": "",
+                "local_updated_at": local_ts,
+                "size_mb": size_mb,
+                "reason": "no_remote_timestamp",
+            }
+        available = (remote_ts > local_ts) if local_ts else True
+        return {
+            "available": available,
+            "remote_updated_at": remote_ts,
+            "local_updated_at": local_ts,
+            "size_mb": size_mb,
+        }
+
+    @_safe
+    def get_user_preferences(self) -> dict:
+        """Read user preferences from ~/.densa-deck/config.json.
+
+        Returns the full preferences dict with defaults filled in for any
+        missing keys so the frontend can trust the shape. New keys default to
+        the safe/off state — both auto_check_card_db and auto_download_card_db
+        are off unless the user opts in from Settings.
+        """
+        prefs = _load_user_prefs()
+        return {
+            "tier": prefs.get("tier", "free"),
+            "auto_check_card_db": bool(prefs.get("auto_check_card_db", False)),
+            "auto_download_card_db": bool(prefs.get("auto_download_card_db", False)),
+        }
+
+    @_safe
+    def set_user_preferences(self, prefs: dict) -> dict:
+        """Patch the preferences file. Accepts a partial dict — only keys
+        present in the payload are updated, the rest stay untouched.
+
+        Enforces the auto_download-implies-auto_check invariant server-side
+        so a buggy or malicious frontend can't POST an inconsistent state
+        that would silently re-enable auto-download after the user turned
+        auto-check off. Unknown keys are ignored (forward-compatibility for
+        a newer frontend rolled back to an older backend).
+        """
+        if not isinstance(prefs, dict):
+            return {"ok": False, "error": "Preferences payload must be a dict."}
+
+        current = _load_user_prefs()
+        # Merge the effective new state so the constraint check sees the
+        # final values, not just the delta.
+        merged = dict(current)
+        allowed_keys = {"auto_check_card_db", "auto_download_card_db"}
+        for key in allowed_keys:
+            if key in prefs:
+                merged[key] = bool(prefs[key])
+
+        if merged.get("auto_download_card_db") and not merged.get("auto_check_card_db"):
+            return {
+                "ok": False,
+                "error": "auto_download requires auto_check",
+                "error_type": "InvalidPreference",
+            }
+
+        _save_user_prefs(merged)
+        return {
+            "tier": merged.get("tier", "free"),
+            "auto_check_card_db": bool(merged.get("auto_check_card_db", False)),
+            "auto_download_card_db": bool(merged.get("auto_download_card_db", False)),
+        }
+
+    @_safe
+    def get_last_ingest_diff(self) -> dict:
+        """Return the pending "what changed" diff from the most recent update
+        ingest, then clear it (single-use).
+
+        The frontend calls this once, right after ingest_progress reports
+        done=True on an update-path ingest. Returning None (via the error
+        envelope's `data: null`) means either (a) the last ingest was a
+        first-run, not an update, or (b) the diff was already consumed.
+        Keeping it single-use avoids re-showing the modal every time the
+        user switches to Settings after the initial dismissal.
+        """
+        diff = self._last_ingest_diff
+        self._last_ingest_diff = None
+        return diff
+
     # ------------------------------------------------------------------ coach (Pro chat)
 
     @_safe
@@ -1608,6 +1741,39 @@ def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
 def _now_iso() -> str:
     from datetime import datetime
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _user_prefs_path() -> Path:
+    """Resolve the preferences file path.
+
+    Shared with `densa_deck.tiers._CONFIG_PATH` — both read/write the same
+    file. Kept as a separate helper so test monkey-patches can redirect
+    just the preference-write path without stomping on the tier-saving
+    import in tiers.py.
+    """
+    from densa_deck.tiers import _CONFIG_PATH
+    return _CONFIG_PATH
+
+
+def _load_user_prefs() -> dict:
+    """Read the preferences JSON. Missing / malformed file returns {} so a
+    corrupt config doesn't block app launch — callers re-apply defaults
+    on top of whatever comes back.
+    """
+    path = _user_prefs_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_user_prefs(prefs: dict) -> None:
+    """Write preferences atomically so a crash mid-write can't leave the
+    next launch with a half-parsed config."""
+    _atomic_write_json(_user_prefs_path(), prefs)
 
 
 def _atomic_write_json(path: Path, data) -> None:
