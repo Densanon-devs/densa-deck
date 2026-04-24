@@ -48,6 +48,8 @@ function cacheElements() {
     "editor-deck-name", "editor-version-number", "editor-saved-at", "editor-card-count",
     "editor-textarea", "editor-notes-input",
     "editor-save-version-btn", "editor-analyze-btn", "editor-history-btn", "editor-delete-btn",
+    "editor-duel-btn", "editor-duel", "duel-opponent-select", "duel-sims-select",
+    "duel-run-btn", "duel-result",
     "editor-history", "history-body", "diff-panel",
     "tier-status", "license-key-input", "license-activate-btn", "license-status",
     "system-status", "toast",
@@ -173,13 +175,11 @@ async function bootstrap() {
   // My Decks tab
   els.refresh_decks_btn.addEventListener("click", refreshDeckList);
   els.editor_save_version_btn.addEventListener("click", saveEditorAsNewVersion);
-  els.editor_analyze_btn.addEventListener("click", () => {
-    switchView("analyze");
-    els.decklist_input.value = els.editor_textarea.value;
-    els.deck_name_input.value = state.currentSnapshot ? state.currentSnapshot.deck_id : "";
-  });
+  els.editor_analyze_btn.addEventListener("click", () => loadIntoAnalyzeTab());
   els.editor_history_btn.addEventListener("click", toggleHistory);
   els.editor_delete_btn.addEventListener("click", deleteCurrentDeck);
+  els.editor_duel_btn.addEventListener("click", toggleDuelPanel);
+  els.duel_run_btn.addEventListener("click", runDuel);
 
   // Settings tab
   els.license_activate_btn.addEventListener("click", activateLicense);
@@ -212,6 +212,13 @@ async function bootstrap() {
   // Auto-update check fires in the background on launch. Fail-silent if
   // the network is down so offline users aren't harassed by error toasts.
   checkForUpdates();
+  // Force a coach-backend re-probe on every launch so an in-place
+  // installer update (which dumps us into a fresh process but points at
+  // the existing ~/.densa-deck/models/analyst.gguf) picks up the model
+  // instead of keeping a stale Mock selection that won't go away until
+  // the user clicks Download again. Silent on error — worst case the
+  // Coach tab continues with whatever backend was selected on-demand.
+  try { await callApi("refresh_coach_backend"); } catch (e) { /* non-fatal */ }
 
   // First-run tour: wire DOM handlers, then conditionally start the tour
   // if the user hasn't seen it yet. Restart is hooked from the About panel
@@ -330,25 +337,25 @@ function renderAnalysis(r, target) {
       <div class="stat-card"><div class="label">Total cards</div><div class="value">${r.total_cards}</div></div>
       <div class="stat-card"><div class="label">Lands</div><div class="value">${r.land_count}</div></div>
       <div class="stat-card"><div class="label">Avg mana value</div><div class="value">${r.average_cmc.toFixed(2)}</div></div>
-      <div class="stat-card"><div class="label">Power level</div><div class="value">${r.power.overall.toFixed(1)}/10</div><div class="sub">${escape(r.power.tier)}</div></div>
-      <div class="stat-card"><div class="label">Archetype</div><div class="value" style="font-size:1.1rem">${escape(r.archetype)}</div></div>
-      <div class="stat-card"><div class="label">Mana base</div><div class="value">${escape(r.advanced.mana_base_grade || "-")}</div></div>
+      <div class="stat-card"><div class="label">Power level ${helpIcon("power_level", {title: "Power level (1-10)"})}</div><div class="value">${r.power.overall.toFixed(1)}/10</div><div class="sub">${escape(r.power.tier)}</div></div>
+      <div class="stat-card"><div class="label">Archetype ${helpIcon("archetype", {title: "Archetype detection"})}</div><div class="value" style="font-size:1.1rem">${escape(r.archetype)}</div></div>
+      <div class="stat-card"><div class="label">Mana base ${helpIcon("mana_base", {title: "Mana base grade"})}</div><div class="value">${escape(r.advanced.mana_base_grade || "-")}</div></div>
     </div>
 
     <div class="panel-row">
       <div class="panel result-section">
-        <h3>Mana curve</h3>
+        <h3>Mana curve ${helpIcon("mana_curve", {title: "Mana curve"})}</h3>
         ${curveBars}
       </div>
       <div class="panel result-section">
-        <h3>Category scores</h3>
+        <h3>Category scores ${helpIcon("category_scores", {title: "Category scores"})}</h3>
         ${scoreBars(r.scores) || '<span class="status-text">(no scores)</span>'}
       </div>
     </div>
 
     ${r.power.reasons_up.length || r.power.reasons_down.length ? `
       <div class="panel result-section">
-        <h3>Power-level signals</h3>
+        <h3>Power-level signals ${helpIcon("power_signals", {title: "Power-level signals"})}</h3>
         <ul class="issue-list">
           ${r.power.reasons_up.map(x => `<li class="severity-info">+ ${escape(x)}</li>`).join("")}
           ${r.power.reasons_down.map(x => `<li class="severity-warning">- ${escape(x)}</li>`).join("")}
@@ -506,16 +513,70 @@ async function refreshDeckList() {
       const li = document.createElement("li");
       const active = state.currentDeckId === d.deck_id ? "active" : "";
       li.className = active;
+      // Each row carries a quick "Load in Analyze" action that skips the
+      // Open-Deck-Editor step for users who just want to re-analyze a
+      // saved list. Clicking anywhere ELSE on the row still opens the
+      // editor like before.
       li.innerHTML = `
-        <span class="deck-name">${escape(d.name)}</span>
-        <span class="deck-meta">${d.versions} version${d.versions === 1 ? "" : "s"} • ${escape((d.updated_at || "").slice(0, 10))}</span>
+        <div class="deck-row-main">
+          <span class="deck-name">${escape(d.name)}</span>
+          <span class="deck-meta">${d.versions} version${d.versions === 1 ? "" : "s"} &middot; ${escape((d.updated_at || "").slice(0, 10))}</span>
+        </div>
+        <button class="deck-row-action" title="Load this deck into the Analyze tab" data-deck-id="${escape(d.deck_id)}">Load &rarr;</button>
       `;
-      li.addEventListener("click", () => openDeck(d.deck_id));
+      // Open in editor (existing behavior) when the main body is clicked.
+      li.querySelector(".deck-row-main").addEventListener("click", () => openDeck(d.deck_id));
+      // Sidebar shortcut: one-click load into Analyze tab without opening
+      // the editor. Stops propagation so the row-click handler doesn't
+      // also fire.
+      li.querySelector(".deck-row-action").addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        await loadIntoAnalyzeTab(d.deck_id);
+      });
       els.deck_list.appendChild(li);
     });
   } catch (e) {
     toast("Failed to load decks: " + e.message, "error");
   }
+}
+
+async function loadIntoAnalyzeTab(deckId) {
+  // If no deckId, fall back to whatever is open in the editor — this
+  // branch is what the "Load in Analyze tab" button inside the editor
+  // uses. When called from the sidebar shortcut, deckId is provided
+  // and we fetch fresh so the Analyze tab gets the latest saved version
+  // even if the user has unsaved edits in the editor textarea.
+  let snap;
+  let text;
+  if (deckId) {
+    try {
+      snap = await callApi("get_deck_latest", deckId);
+      text = snap.decklist_text || "";
+    } catch (e) {
+      toast("Failed to load deck: " + e.message, "error");
+      return;
+    }
+  } else {
+    snap = state.currentSnapshot;
+    text = els.editor_textarea.value;
+    if (!snap || !text) {
+      toast("Open a saved deck first.", "error");
+      return;
+    }
+  }
+  switchView("analyze");
+  els.decklist_input.value = text;
+  els.deck_name_input.value = (snap && (snap.name || snap.deck_id)) || "";
+  // Set the format dropdown when the snapshot recorded one — otherwise
+  // leave the user's current selection so we don't clobber their intent.
+  if (snap && snap.format) {
+    const fmt = String(snap.format).toLowerCase();
+    const opt = Array.from(els.format_select.options).find(o => o.value.toLowerCase() === fmt);
+    if (opt) els.format_select.value = opt.value;
+  }
+  // Visible confirmation that the load worked — otherwise the tab-switch
+  // is the only feedback and users can wonder if anything happened.
+  toast(`Loaded "${(snap && (snap.name || snap.deck_id)) || "deck"}" into Analyze tab.`, "success");
 }
 
 async function openDeck(deckId) {
@@ -629,6 +690,117 @@ async function deleteCurrentDeck() {
   } catch (e) {
     toast("Delete failed: " + e.message, "error");
   }
+}
+
+function toggleDuelPanel() {
+  if (!state.currentDeckId) return;
+  if (!els.editor_duel.classList.contains("hidden")) {
+    els.editor_duel.classList.add("hidden");
+    return;
+  }
+  // Populate the opponent picker with every OTHER saved deck. Hide the
+  // panel if there aren't any, and tell the user why.
+  const sel = els.duel_opponent_select;
+  sel.innerHTML = "";
+  const opponents = (state.decks || []).filter(d => d.deck_id !== state.currentDeckId);
+  if (!opponents.length) {
+    sel.innerHTML = '<option value="">(save at least one more deck to duel)</option>';
+    els.duel_run_btn.disabled = true;
+  } else {
+    opponents.forEach(d => {
+      const opt = document.createElement("option");
+      opt.value = d.deck_id;
+      opt.textContent = `${d.name} (${d.versions} v${d.versions === 1 ? "" : "s"})`;
+      sel.appendChild(opt);
+    });
+    els.duel_run_btn.disabled = false;
+  }
+  els.duel_result.classList.add("hidden");
+  els.editor_duel.classList.remove("hidden");
+  // Close the history panel if it's open — only one sub-tab at a time to
+  // keep the editor column readable.
+  els.editor_history.classList.add("hidden");
+}
+
+async function runDuel() {
+  if (!state.currentDeckId) return;
+  const oppId = els.duel_opponent_select.value;
+  if (!oppId) return;
+  const sims = parseInt(els.duel_sims_select.value, 10) || 100;
+  els.duel_run_btn.disabled = true;
+  els.duel_run_btn.textContent = "Running…";
+  try {
+    const r = await callApi("duel_decks", state.currentDeckId, oppId, sims);
+    renderDuelResult(r);
+  } catch (e) {
+    toast("Duel failed: " + e.message, "error");
+  } finally {
+    els.duel_run_btn.disabled = false;
+    els.duel_run_btn.textContent = "Run duel";
+  }
+}
+
+function renderDuelResult(r) {
+  const a = r.a_vs_b, b = r.b_vs_a, v = r.verdict;
+  const axisRow = (label, key) => {
+    const d = v.axis_deltas[key];
+    const sign = d > 0 ? "+" : "";
+    const color = Math.abs(d) < 0.3 ? "var(--color-text-muted)"
+      : d > 0 ? "var(--color-accent-green, #34d399)" : "var(--color-primary)";
+    return `<tr><td>${label}</td><td style="text-align:right">${a.power[key].toFixed(1)}</td><td style="text-align:center;color:${color};font-weight:700">${sign}${d.toFixed(1)}</td><td style="text-align:right">${b.power[key].toFixed(1)}</td></tr>`;
+  };
+  const verdictClass = v.winner === "a" ? "duel-winner-a"
+    : v.winner === "b" ? "duel-winner-b" : "duel-winner-even";
+  els.duel_result.innerHTML = `
+    <div class="duel-verdict ${verdictClass}">
+      <div class="duel-verdict-headline">${escape(v.headline)}</div>
+      <div class="duel-verdict-sub">${r.simulations} games per perspective &middot; two-sided run (each deck as hero once)</div>
+    </div>
+    <div class="duel-sides">
+      <div class="duel-side">
+        <h4>${escape(a.name)}</h4>
+        <div class="duel-archetype">${escape(a.archetype)} &middot; power ${a.power.overall.toFixed(1)} (${escape(a.power.tier || "")})</div>
+        <div class="duel-wr">${a.win_rate.toFixed(1)}% wins</div>
+        <div class="duel-stat-grid">
+          <div><span class="label">Wins / losses</span><span>${a.wins} / ${a.losses}</span></div>
+          <div><span class="label">Avg turns to kill</span><span>${a.avg_turns.toFixed(2)}</span></div>
+          <div><span class="label">Avg dmg dealt</span><span>${a.avg_damage_dealt.toFixed(1)}</span></div>
+          <div><span class="label">Avg dmg taken</span><span>${a.avg_damage_taken.toFixed(1)}</span></div>
+          <div><span class="label">Wins by damage</span><span>${a.wins_by_damage}</span></div>
+          <div><span class="label">Losses by clock</span><span>${a.losses_by_clock}</span></div>
+        </div>
+      </div>
+      <div class="duel-vs">VS</div>
+      <div class="duel-side">
+        <h4>${escape(b.name)}</h4>
+        <div class="duel-archetype">${escape(b.archetype)} &middot; power ${b.power.overall.toFixed(1)} (${escape(b.power.tier || "")})</div>
+        <div class="duel-wr">${b.win_rate.toFixed(1)}% wins</div>
+        <div class="duel-stat-grid">
+          <div><span class="label">Wins / losses</span><span>${b.wins} / ${b.losses}</span></div>
+          <div><span class="label">Avg turns to kill</span><span>${b.avg_turns.toFixed(2)}</span></div>
+          <div><span class="label">Avg dmg dealt</span><span>${b.avg_damage_dealt.toFixed(1)}</span></div>
+          <div><span class="label">Avg dmg taken</span><span>${b.avg_damage_taken.toFixed(1)}</span></div>
+          <div><span class="label">Wins by damage</span><span>${b.wins_by_damage}</span></div>
+          <div><span class="label">Losses by clock</span><span>${b.losses_by_clock}</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="duel-axis-table">
+      <h4>Power sub-score deltas (positive = A is stronger) ${helpIcon("duel", {title: "Duel methodology"})}</h4>
+      <table>
+        <thead><tr><th>Axis</th><th style="text-align:right">${escape(a.name)}</th><th>Δ</th><th style="text-align:right">${escape(b.name)}</th></tr></thead>
+        <tbody>
+          ${axisRow("Speed", "speed")}
+          ${axisRow("Interaction", "interaction")}
+          ${axisRow("Combo potential", "combo_potential")}
+          ${axisRow("Mana efficiency", "mana_efficiency")}
+          ${axisRow("Win-condition quality", "win_condition_quality")}
+          ${axisRow("Card quality", "card_quality")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  els.duel_result.classList.remove("hidden");
 }
 
 // ------------------------------ Settings view ------------------------------
@@ -863,9 +1035,14 @@ async function startAnalystPull() {
   els.analyst_pull_progress_wrap.classList.remove("hidden");
   try {
     await callApi("analyst_pull_start", model);
-    pollProgress("analyst_pull", () => {
+    pollProgress("analyst_pull", async () => {
       els.analyst_pull_btn.disabled = false;
       els.analyst_pull_status.textContent = "";
+      // Invalidate the cached coach backend so the next coach_start
+      // picks up the newly-downloaded model instead of keeping the
+      // Mock placeholder the app selected at launch when there was
+      // no model on disk yet.
+      try { await callApi("refresh_coach_backend"); } catch (e) { /* non-fatal */ }
       refreshSettings();
     });
   } catch (e) {
@@ -1127,6 +1304,87 @@ async function closeCoachSession() {
   }
 }
 
+// ------------------------------ Help / methodology tooltips ------------------------------
+
+// Short plain-English explanations that appear in a popover when the
+// user clicks a (?) icon next to a section heading or stat. The longer
+// writeups with formulas live in static/methodology.html — the "Open
+// methodology page" link below every tooltip goes there.
+const HELP = {
+  power_level: "1-10 rating averaging six weighted sub-scores (speed, interaction, combo potential, mana efficiency, win-condition quality, card quality). Tiers: jank < 3, casual 3-5, focused 5-7, optimized 7-8.5, competitive 8.5-9.5, cEDH 9.5+. Computed by densa_deck.analysis.power_level.estimate_power_level.",
+  speed: "How quickly the deck can threaten lethal / combo. Derived from mana curve, ramp density, and low-CMC threat count. Higher = kills faster.",
+  interaction: "How much the deck disrupts opponents. Counts targeted removal, counterspells, and board wipes against format-specific targets (Commander wants 8-12 interaction pieces).",
+  combo_potential: "Tutor density + reliable wincon engines + low-CMC win conditions. High when the deck has multiple ways to assemble a win that bypasses combat.",
+  mana_efficiency: "Curve vs land count + ramp, color fixing, and the amount of mana the deck produces by turn 5. Higher = more consistent at casting what you draw.",
+  win_condition_quality: "Finisher density and diversity. Penalizes single-threat decks (easy to remove) and rewards redundancy across different win paths.",
+  card_quality: "Proxy for how premium the card pool is. Uses average CMC and density of \"dead\" cards (high-cost creatures with no enter effects) as a coarse signal.",
+  mana_curve: "Distribution of cards by mana value. Commander targets a curve peaking at 2-4; lower is faster, higher is top-heavy. Excludes lands.",
+  archetype: "Detected by densa_deck.formats.profiles.detect_archetype using role counts + threat density + wincon signals. One of: aggro, midrange, control, combo, stax, aristocrats, spellslinger, tokens, voltron, group_hug, turbo.",
+  mana_base: "Grade (A-F) reflecting color-source adequacy for each pip demand, untapped-land ratio, and fetch/fixing density. A means every colored card you draw is castable on-curve; F means frequent color screw.",
+  castability: "For each card, probability it can be cast on its natural curve turn given this deck's land distribution. Low values flag cards whose color demands outstrip your mana base (e.g. triple-green on a two-color deck).",
+  category_scores: "Per-category 0-100 scores (ramp, draw, removal, curve, etc.) showing how well this deck fits format-appropriate targets. Anchored to format presets — Commander wants 10-15 ramp, Modern wants 0-4.",
+  power_signals: "Specific cards/patterns that pushed the power score up (ramp package, tutors, combos) or down (weak interaction, high curve, no wincon). Same text the AI coach uses to summarize the deck.",
+  goldfish: "Solo simulation: the deck plays against no opponent for N games with a mulligan AI that keeps 7-card hands meeting format thresholds. Tracks avg kill turn, win rate vs the objective (deal 40 Commander / 20 Standard), mulligan rate, and key-card draw timing. Implemented in densa_deck.goldfish.runner.",
+  gauntlet: "Matchup simulator: the deck plays 200 games (default) against each of 11 canonical archetype profiles (Aggro, Midrange, Control, Combo, Stax, etc.). Each archetype is a behavioral model — clock, interaction density, wipe chance — not a decklist. Result is a per-archetype win-rate table plus a weighted meta score. Implemented in densa_deck.matchup.gauntlet.",
+  duel: "Head-to-head matchup between two of your saved decks. Runs the gauntlet engine twice (each deck as hero once) so win rates are reported from both perspectives. The opponent's behavioral profile is derived from their static analysis — archetype, power sub-scores, role counts — via densa_deck.matchup.deck_as_opponent.deck_to_profile. Same fidelity as the archetype gauntlet, not a card-by-card sim.",
+  probability: "Hypergeometric distribution: P(drawing >= k copies of a card in N cards from a deck of D with K copies of that card). Used for \"chance I see my commander / ramp / combo by turn X\". Implemented in densa_deck.probability.hypergeometric.",
+  recommendations: "Plain-language suggestions based on the numbers — \"you're 3 ramp pieces short of the 10-15 Commander target\", etc. Deterministic rules in densa_deck.analysis.static + .advanced. The AI coach (Pro) expands on these conversationally.",
+};
+
+function helpIcon(key, opts) {
+  // Small inline (?) button that opens a popover with the HELP[key]
+  // explanation. Clicking the button toggles the popover; clicking
+  // elsewhere closes it. Multiple popovers can be open at once.
+  const text = HELP[key];
+  if (!text) return "";
+  const title = (opts && opts.title) || "How this is calculated";
+  return `<button class="help-icon" type="button" data-help-key="${escape(key)}" data-help-title="${escape(title)}" aria-label="${escape(title)}">?</button>`;
+}
+
+function installHelpPopoverHandlers() {
+  // Delegated click handler — any .help-icon anywhere in the doc toggles
+  // a popover next to it. Since we re-render chunks of DOM frequently
+  // (analysis, gauntlet, duel), delegation beats per-render attach.
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".help-icon");
+    if (btn) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const existing = btn.nextElementSibling;
+      if (existing && existing.classList.contains("help-popover")) {
+        existing.remove();
+        return;
+      }
+      // Close any other open popovers before opening this one.
+      document.querySelectorAll(".help-popover").forEach(p => p.remove());
+      const key = btn.dataset.helpKey;
+      const title = btn.dataset.helpTitle || "How this is calculated";
+      const text = HELP[key] || "(no explanation available)";
+      const pop = document.createElement("div");
+      pop.className = "help-popover";
+      pop.innerHTML = `
+        <div class="help-popover-title">${escape(title)}</div>
+        <div class="help-popover-body">${escape(text)}</div>
+        <div class="help-popover-footer">
+          <a href="#" class="help-open-methodology">Full methodology &rarr;</a>
+        </div>
+      `;
+      btn.insertAdjacentElement("afterend", pop);
+      pop.querySelector(".help-open-methodology").addEventListener("click", (e) => {
+        e.preventDefault();
+        // Open methodology page in-app. pywebview allows loading
+        // static assets relative to the window URL.
+        window.location.href = `methodology.html#${encodeURIComponent(key)}`;
+      });
+      return;
+    }
+    // Click outside: close any open popovers.
+    if (!ev.target.closest(".help-popover")) {
+      document.querySelectorAll(".help-popover").forEach(p => p.remove());
+    }
+  });
+}
+
 // ------------------------------ Utilities ------------------------------
 
 function escape(s) {
@@ -1141,4 +1399,7 @@ function escape(s) {
 // Fire when the DOM's parsed + the pywebview bridge has had a chance to init.
 // pywebview injects `window.pywebview.api` after page load, so we give it
 // a tick via DOMContentLoaded + the `pywebviewready` event if available.
-window.addEventListener("DOMContentLoaded", bootstrap);
+window.addEventListener("DOMContentLoaded", () => {
+  bootstrap();
+  installHelpPopoverHandlers();
+});

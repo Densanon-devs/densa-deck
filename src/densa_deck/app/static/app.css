@@ -427,9 +427,42 @@ body {
 .deck-list li {
   padding: 10px 12px;
   border-radius: var(--radius);
-  cursor: pointer;
+  cursor: default;
   margin-bottom: 4px;
   transition: background 0.12s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deck-list .deck-row-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.deck-list .deck-row-action {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+  flex-shrink: 0;
+}
+
+.deck-list .deck-row-action:hover {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+.deck-list li.active .deck-row-action {
+  border-color: rgba(255, 255, 255, 0.3);
+  color: #fff;
 }
 
 .deck-list li:hover {
@@ -578,6 +611,184 @@ body {
 
 .diff-add { color: #8fe388; }
 .diff-remove { color: #ff9999; }
+
+/* -------- Duel panel (My Decks > internal tab) -------- */
+.editor-duel {
+  margin-top: 24px;
+  padding: 18px 20px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+.editor-duel h3 { margin-top: 0; }
+.duel-hint {
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+.duel-controls {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.duel-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+.duel-controls select {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  min-width: 220px;
+}
+.duel-result { margin-top: 10px; }
+.duel-verdict {
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 18px;
+  border-left: 4px solid var(--color-text-muted);
+  background: var(--color-surface);
+}
+.duel-verdict-headline {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+.duel-verdict-sub {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+.duel-winner-a { border-left-color: var(--color-accent-green, #34d399); }
+.duel-winner-b { border-left-color: var(--color-primary); }
+.duel-winner-even { border-left-color: #f0c040; }
+
+.duel-sides {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 18px;
+}
+.duel-side {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.duel-side h4 { margin: 0 0 4px; }
+.duel-archetype {
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+  margin-bottom: 8px;
+}
+.duel-wr {
+  font-size: 1.4rem;
+  font-weight: 800;
+  color: var(--color-text);
+  margin-bottom: 10px;
+}
+.duel-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+.duel-stat-grid > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+.duel-stat-grid .label { color: var(--color-text-muted); }
+.duel-vs {
+  align-self: center;
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--color-text-muted);
+  padding: 0 6px;
+}
+.duel-axis-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.duel-axis-table th,
+.duel-axis-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+.duel-axis-table th {
+  text-align: left;
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+/* -------- Help (?) icons + popover -------- */
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-left: 6px;
+  transition: all 0.12s;
+  vertical-align: middle;
+  padding: 0;
+  line-height: 1;
+}
+.help-icon:hover {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.help-popover {
+  position: absolute;
+  z-index: 40;
+  max-width: 380px;
+  margin-top: 6px;
+  padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  color: var(--color-text);
+}
+.help-popover-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--color-text);
+}
+.help-popover-body {
+  color: var(--color-text-muted);
+}
+.help-popover-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8rem;
+}
+.help-popover-footer a {
+  color: var(--color-accent-green, #34d399);
+  text-decoration: none;
+}
+.help-popover-footer a:hover { text-decoration: underline; }
 
 /* -------- Settings -------- */
 .settings-panel {

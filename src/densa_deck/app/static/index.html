@@ -120,8 +120,9 @@ Mainboard:
 
             <div class="editor-actions">
               <button id="editor-save-version-btn" class="btn btn-primary">Save as new version</button>
-              <button id="editor-analyze-btn" class="btn btn-outline">Analyze current text</button>
+              <button id="editor-analyze-btn" class="btn btn-outline" title="Copy this deck into the Analyze tab, set its name + format, and switch tabs">Load in Analyze tab &rarr;</button>
               <button id="editor-history-btn" class="btn btn-outline">Version history</button>
+              <button id="editor-duel-btn" class="btn btn-outline" title="Pit this deck against another saved deck">Duel &rarr;</button>
               <button id="editor-delete-btn" class="btn btn-danger" title="Delete the entire deck + all versions">Delete deck</button>
             </div>
 
@@ -140,6 +141,31 @@ Mainboard:
                 <tbody id="history-body"></tbody>
               </table>
               <div id="diff-panel" class="diff-panel hidden"></div>
+            </div>
+
+            <!-- Duel panel: pick a second saved deck and run a matchup
+                 simulation using the same engine as the archetype gauntlet,
+                 but with the opponent's ArchetypeProfile synthesized from
+                 their static analysis instead of a canonical archetype. -->
+            <div id="editor-duel" class="editor-duel hidden">
+              <h3>Duel &mdash; head-to-head matchup <button class="help-icon" type="button" data-help-key="duel" data-help-title="Duel methodology" aria-label="How the duel is calculated">?</button></h3>
+              <p class="duel-hint">Simulates this deck against another of your saved decks using the same engine as the archetype gauntlet. The opponent deck's behavior is derived from its analysis (archetype, power sub-scores, role counts).</p>
+              <div class="duel-controls">
+                <label>
+                  Opponent deck
+                  <select id="duel-opponent-select"></select>
+                </label>
+                <label>
+                  Games
+                  <select id="duel-sims-select">
+                    <option value="100" selected>100 (default, ~3-5s)</option>
+                    <option value="500">500 (tighter stats, ~15s)</option>
+                    <option value="1000">1000 (benchmark mode, ~30s)</option>
+                  </select>
+                </label>
+                <button id="duel-run-btn" class="btn btn-primary">Run duel</button>
+              </div>
+              <div id="duel-result" class="duel-result hidden"></div>
             </div>
           </div>
         </div>
@@ -228,6 +254,8 @@ Mainboard:
             <p><strong>Densa Deck</strong> <span id="about-version">v-</span></p>
             <p class="panel-hint">Local deck analysis, simulation, and AI coaching. All analysis runs on your machine; card data and the optional analyst model are downloaded once and never leave your computer.</p>
             <p class="panel-hint">
+              <a href="methodology.html">How calculations work</a>
+              &nbsp;&middot;&nbsp;
               <a href="#" class="external-link" data-url="https://toolkit.densanon.com/densa-deck.html">Product page</a>
               &nbsp;&middot;&nbsp;
               <a href="#" class="external-link" data-url="https://github.com/densanon-devs/densa-deck">Source</a>

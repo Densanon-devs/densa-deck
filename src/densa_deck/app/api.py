@@ -1010,14 +1010,19 @@ class AppApi:
         return items
 
     def _get_coach_backend(self):
-        """Pick the LLM backend once, cache it. Falls back to the mock
-        analyst backend when the GGUF model isn't available so the UI stays
-        functional for users who haven't downloaded a model yet.
+        """Pick the LLM backend lazily. Prefers the real LlamaCppBackend
+        when llama-cpp-python is importable AND the GGUF file is on disk;
+        falls back to the MockBackend otherwise so the Coach tab still
+        renders for users who haven't downloaded a model yet.
 
-        Double-checked locking: the first check avoids the lock overhead in
-        the hot path (after first initialization), the second check inside
-        the lock prevents a race where two threads both pass the first check
-        and both initialize the backend.
+        Important: the cached backend can be INVALIDATED by
+        refresh_coach_backend() so a mid-session model download (or an
+        installer that arrived with the model already on disk) is picked
+        up on the next coach call without requiring an app restart.
+
+        The `MTG_ANALYST_BACKEND` env var is still honored for explicit
+        "force mock" (useful in CI / tests) — set it to "mock" to bypass
+        the real backend selection entirely.
         """
         if self._coach_backend is not None:
             return self._coach_backend
@@ -1025,8 +1030,13 @@ class AppApi:
             if self._coach_backend is not None:
                 return self._coach_backend
             import os
-            backend_name = os.environ.get("MTG_ANALYST_BACKEND", "mock").lower().strip()
-            if backend_name in ("llama", "llama_cpp", "llamacpp"):
+            forced = os.environ.get("MTG_ANALYST_BACKEND", "").lower().strip()
+            # Anything other than "mock" / "" falls through to the real
+            # backend. Historically this env var defaulted to "mock" which
+            # meant the real model was never used unless the user
+            # explicitly opted in — that was the v0.1.5 "no model
+            # attached" bug. New default is: real-if-available, else mock.
+            if forced != "mock":
                 try:
                     from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend
                     backend = LlamaCppBackend()
@@ -1040,6 +1050,31 @@ class AppApi:
                 default="(Coach placeholder — install an analyst model from Settings for real responses.)",
             )
             return self._coach_backend
+
+    @_safe
+    def refresh_coach_backend(self) -> dict:
+        """Invalidate the cached coach backend so the next coach call
+        re-probes the model file + llama_cpp availability.
+
+        Called by the frontend after `analyst_pull_start` completes AND
+        on app launch after an in-place installer update, so the backend
+        picks up a newly-downloaded or newly-bundled model without
+        requiring a full app restart.
+
+        Returns the status of whatever backend gets selected on the
+        next _get_coach_backend call.
+        """
+        with self._backend_lock:
+            self._coach_backend = None
+        # Re-select immediately and report which backend won so the UI
+        # can show "Real analyst active" vs "Mock placeholder active".
+        backend = self._get_coach_backend()
+        from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend
+        is_real = isinstance(backend, LlamaCppBackend)
+        return {
+            "backend": type(backend).__name__,
+            "is_real": is_real,
+        }
 
     @_safe
     def activate_license(self, key: str) -> dict:
@@ -1305,6 +1340,114 @@ class AppApi:
         report = _run(deck, simulations=sims, seed=seed)
         return _gauntlet_to_dict(report)
 
+    @_safe
+    def duel_decks(
+        self, deck_a_id: str, deck_b_id: str,
+        sims: int = 100, seed: int | None = None,
+    ) -> dict:
+        """Deck-vs-deck duel: pit two saved decks against each other.
+
+        Reuses the archetype matchup engine by deriving a virtual
+        ArchetypeProfile for each deck from its static analysis (role
+        counts + power sub-scores), then runs the sim twice — once with
+        each deck as the "hero" side — and reports both perspectives.
+
+        Returns an error dict if either deck can't be resolved; otherwise
+        a structured report the frontend renders with win rate, avg kill
+        turn, and per-axis deltas so the user can see "deck A wins on
+        speed, deck B wins on interaction" at a glance.
+        """
+        from densa_deck.analysis.static import analyze_deck as static_analyze
+        from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.formats.profiles import detect_archetype
+        from densa_deck.matchup.deck_as_opponent import deck_to_profile
+        from densa_deck.matchup.simulator import simulate_matchup
+
+        def _prepare(deck_id: str):
+            snap = self._get_vstore().get_latest(deck_id)
+            if snap is None:
+                return {"ok": False, "error": f"No saved versions for deck '{deck_id}'."}
+            deck = self._build_deck(
+                _snapshot_to_text(snap),
+                snap.format,
+                snap.name or deck_id,
+            )
+            if isinstance(deck, dict):
+                return deck
+            result = static_analyze(deck)
+            power = estimate_power_level(deck)
+            label = detect_archetype(deck)
+            archetype_str = label.value if hasattr(label, "value") else str(label)
+            profile = deck_to_profile(
+                deck=deck,
+                analysis=result,
+                power=power,
+                archetype_label=archetype_str,
+                display_name=snap.name or deck_id,
+            )
+            return {
+                "deck": deck, "analysis": result, "power": power,
+                "archetype": archetype_str, "profile": profile,
+                "snapshot": snap,
+            }
+
+        a_ctx = _prepare(deck_a_id)
+        if isinstance(a_ctx, dict) and "ok" in a_ctx and a_ctx["ok"] is False:
+            return a_ctx
+        b_ctx = _prepare(deck_b_id)
+        if isinstance(b_ctx, dict) and "ok" in b_ctx and b_ctx["ok"] is False:
+            return b_ctx
+
+        # Clamp sims to a reasonable band — 20 min, 1000 max — so a
+        # malformed frontend call can't burn CPU time for 10 minutes.
+        sims = max(20, min(1000, int(sims or 100)))
+
+        # Run both perspectives so the result is symmetric: A-sees-B and
+        # B-sees-A using the same sim engine. Win-rate + kill-turn come
+        # from each perspective directly.
+        a_vs_b = simulate_matchup(a_ctx["deck"], b_ctx["profile"], simulations=sims, seed=seed)
+        b_vs_a = simulate_matchup(
+            b_ctx["deck"], a_ctx["profile"], simulations=sims,
+            seed=(seed + 1) if seed is not None else None,
+        )
+
+        def _side_summary(ctx, result):
+            return {
+                "deck_id": ctx["snapshot"].deck_id,
+                "name": ctx["snapshot"].name or ctx["snapshot"].deck_id,
+                "archetype": ctx["archetype"],
+                "power": {
+                    "overall": round(float(ctx["power"].overall), 2),
+                    "tier": ctx["power"].tier,
+                    "speed": round(float(ctx["power"].speed), 1),
+                    "interaction": round(float(ctx["power"].interaction), 1),
+                    "combo_potential": round(float(ctx["power"].combo_potential), 1),
+                    "mana_efficiency": round(float(ctx["power"].mana_efficiency), 1),
+                    "win_condition_quality": round(float(ctx["power"].win_condition_quality), 1),
+                    "card_quality": round(float(ctx["power"].card_quality), 1),
+                },
+                "wins": int(result.wins),
+                "losses": int(result.losses),
+                "win_rate": round(float(result.win_rate) * 100.0, 1),
+                "avg_turns": round(float(result.avg_turns), 2),
+                "avg_damage_dealt": round(float(result.avg_our_damage), 2),
+                "avg_damage_taken": round(float(result.avg_opponent_damage), 2),
+                "avg_permanents_removed": round(float(result.avg_permanents_removed), 2),
+                "wins_by_damage": int(result.wins_by_damage),
+                "losses_by_clock": int(result.losses_by_clock),
+                "losses_by_timeout": int(result.losses_by_timeout),
+            }
+
+        return {
+            "simulations": sims,
+            "a_vs_b": _side_summary(a_ctx, a_vs_b),
+            "b_vs_a": _side_summary(b_ctx, b_vs_a),
+            # Head-to-head winner: favour whichever side took a higher
+            # win-rate across their perspective. Ties (within 2 pp) are
+            # explicitly marked so the UI can show "roughly even".
+            "verdict": _duel_verdict(a_vs_b, b_vs_a, a_ctx, b_ctx),
+        }
+
     def _build_deck(self, decklist_text: str, format_: str | None, name: str):
         """Shared deck-prep path used by both simulation endpoints.
 
@@ -1330,6 +1473,48 @@ class AppApi:
 # =============================================================================
 # Serialization helpers
 # =============================================================================
+
+
+def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
+    """Pick a winner from the two-perspective duel sim.
+
+    A "true" duel would play both decks against each other in a single
+    game, but the matchup engine is deck-vs-profile; we instead run two
+    independent sims (A as hero vs B as profile, then B as hero vs A as
+    profile) and use both win rates as corroborating evidence. Ties
+    within 2 percentage points are marked "roughly even" so users don't
+    over-interpret statistical noise.
+    """
+    a_wr = float(a_vs_b.win_rate) * 100.0
+    b_wr = float(b_vs_a.win_rate) * 100.0
+    delta = a_wr - b_wr
+    if abs(delta) < 2.0:
+        winner = "even"
+        headline = "Roughly even — within 2pp margin of error"
+    elif delta > 0:
+        winner = "a"
+        headline = f"{a_ctx['snapshot'].name or a_ctx['snapshot'].deck_id} wins by {abs(delta):.1f}pp"
+    else:
+        winner = "b"
+        headline = f"{b_ctx['snapshot'].name or b_ctx['snapshot'].deck_id} wins by {abs(delta):.1f}pp"
+    # Per-axis deltas (power sub-scores) give users an at-a-glance sense
+    # of where the gap lives: "B is faster, A has more interaction", etc.
+    def _delta(axis: str):
+        return round(float(getattr(a_ctx["power"], axis) - getattr(b_ctx["power"], axis)), 1)
+    return {
+        "winner": winner,
+        "headline": headline,
+        "a_win_rate": round(a_wr, 1),
+        "b_win_rate": round(b_wr, 1),
+        "axis_deltas": {
+            "speed": _delta("speed"),
+            "interaction": _delta("interaction"),
+            "combo_potential": _delta("combo_potential"),
+            "mana_efficiency": _delta("mana_efficiency"),
+            "win_condition_quality": _delta("win_condition_quality"),
+            "card_quality": _delta("card_quality"),
+        },
+    }
 
 
 def _now_iso() -> str:
