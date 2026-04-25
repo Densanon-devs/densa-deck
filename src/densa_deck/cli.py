@@ -293,6 +293,16 @@ def main():
     combos_near.add_argument("--db", type=Path)
     combos_near.add_argument("--limit", type=int, default=25)
 
+    combos_density = combos_subs.add_parser(
+        "density",
+        help="One-shot summary of a deck's combo density "
+             "(detected + near-miss + bracket implications)")
+    combos_density.add_argument(
+        "deck", nargs="?", help="Deck file (or '-' / omitted for stdin)")
+    combos_density.add_argument(
+        "--format", default="commander", help="Format profile (default: commander)")
+    combos_density.add_argument("--db", type=Path)
+
     # bracket command — Commander bracket-fit assessment (free tier)
     bracket_parser = subparsers.add_parser(
         "bracket", help="Assess how a deck fits a Commander bracket (1-precon ... 5-cedh)")
@@ -2702,6 +2712,77 @@ def cmd_combos(args):
                 status.update(f"[bold green]page {pages} — {seen} combos")
             written = refresh_combo_snapshot(store=store, progress_cb=_on_page)
         console.print(f"[green]Done — {written} combos cached.[/green]")
+        return
+
+    if action == "density":
+        if store.combo_count() == 0:
+            console.print(
+                "[yellow]Combo cache empty. Run `densa-deck combos refresh` first.[/yellow]"
+            )
+            return
+        text = _read_deck_text(args.deck)
+        if not text.strip():
+            console.print("[red]No deck text provided.[/red]")
+            return
+        from densa_deck.analysis.brackets import _bracket_for_power
+        from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.combos import detect_combos, detect_near_miss_combos
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.deck.resolver import resolve_deck
+        from densa_deck.models import Format
+
+        db = _get_db(args)
+        if db.card_count() == 0:
+            console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+            return
+        try:
+            fmt = Format(args.format)
+        except ValueError:
+            fmt = Format.COMMANDER
+        entries = parse_decklist(text)
+        deck = resolve_deck(entries, db, format=fmt)
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+
+        matches = detect_combos(
+            store=store, deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity, limit=50,
+        )
+        near = detect_near_miss_combos(
+            store=store, deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity, max_missing=1, limit=25,
+        )
+        # Power + bracket implication — same baseline detect_deck_brackets
+        # uses, but with the combo count fed in.
+        power = estimate_power_level(deck, detected_combo_count=len(matches))
+        bracket_label, _ = _bracket_for_power(power.overall), None
+        # _bracket_for_power returns (label, name). Above tuple unpacks
+        # to "label" only; tweak to actually capture both.
+        bracket_label, bracket_name = _bracket_for_power(power.overall)
+
+        console.print(f"[bold]Combo density summary — {deck.name or '(unnamed)'}[/bold]")
+        console.print(f"  Detected combo lines: [bold]{len(matches)}[/bold]")
+        console.print(f"  1-card-away near-misses: [bold]{len(near)}[/bold]")
+        console.print(
+            f"  Power w/ combos: [bold]{power.overall:.1f}/10[/bold] ({power.tier})")
+        console.print(
+            f"  Reads as bracket: [bold]{bracket_label}[/bold] ({bracket_name})")
+        if matches:
+            console.print()
+            console.print("[bold]Top detected combos:[/bold]")
+            for m in matches[:5]:
+                console.print(f"  - {m.combo.short_label()}")
+        if near:
+            console.print()
+            console.print("[bold]1-card-away combos (high-leverage adds):[/bold]")
+            for n in near[:5]:
+                missing = ", ".join(n.missing_cards)
+                console.print(f"  - {n.combo.short_label()}  [dim](add: {missing})[/dim]")
+        if not matches and not near:
+            console.print()
+            console.print("[dim]No combos detected and nothing within 1 card. The deck doesn't appear combo-shaped.[/dim]")
         return
 
     if action == "near-miss":

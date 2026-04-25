@@ -615,6 +615,30 @@ class AppApi:
             zone_name = entry.zone.value if hasattr(entry.zone, "value") else str(entry.zone)
             zones.setdefault(zone_name, []).append(entry.card_name)
 
+        # Combo-break detection: if a prior version of THIS deck had any
+        # complete combo lines that the new save would break, surface them
+        # so the UI can warn the user before the version commit. Looks at
+        # the latest existing version (if any) and diffs against the new
+        # card-name set.
+        combos_broken: list[dict] = []
+        try:
+            cstore = self._get_combo_store()
+            if cstore.combo_count() > 0:
+                vstore = self._get_vstore()
+                prior = vstore.get_latest(deck_id)
+                if prior is not None:
+                    from densa_deck.combos import diff_combos
+                    cdiff = diff_combos(
+                        store=cstore,
+                        before_card_names=list(prior.decklist.keys()),
+                        after_card_names=list(decklist.keys()),
+                        color_identity=None,
+                    )
+                    combos_broken = [_combo_to_dict(m) for m in cdiff["lost"][:10]]
+        except Exception:
+            # Non-fatal — break detection is informational, never blocks save.
+            pass
+
         metrics = {
             "land_count": float(result.land_count),
             "ramp_count": float(result.ramp_count),
@@ -630,7 +654,12 @@ class AppApi:
             decklist=decklist, zones=zones,
             scores=dict(result.scores or {}), metrics=metrics, notes=notes,
         )
-        return _snapshot_to_dict(snap)
+        out = _snapshot_to_dict(snap)
+        # Attach combos_broken so the frontend can show a warning toast
+        # right after save. Empty list when nothing broke (or when the
+        # combo cache is empty / no prior version exists).
+        out["combos_broken"] = combos_broken
+        return out
 
     @_safe
     def delete_deck(self, deck_id: str) -> dict:
@@ -1299,6 +1328,30 @@ class AppApi:
         suggestions: list[dict] = []
         seen_names: set[str] = set()
 
+        # Build the combo-completer set up front: any card whose addition
+        # would complete a near-miss combo line for this deck. This set is
+        # passed to both role-gap and combo-completion passes — the role
+        # path uses it to BIAS its candidate ordering (so a card that's
+        # simultaneously a role-fit AND a combo-completer floats to the
+        # top), and the combo-completion pass uses it as the source of
+        # truth for the dedicated combo-suggest column.
+        combo_completers: set[str] = set()
+        store = self._get_combo_store()
+        if store.combo_count() > 0:
+            try:
+                from densa_deck.combos import detect_near_miss_combos
+                near = detect_near_miss_combos(
+                    store=store,
+                    deck_card_names=list(deck_names),
+                    deck_color_identity=sorted(deck_color_identity),
+                    max_missing=1, limit=20,
+                )
+                for nm in near:
+                    for n in nm.missing_cards:
+                        combo_completers.add(n.lower())
+            except Exception:
+                pass
+
         # Pass 1: role-gap candidates — three per detected gap so the user
         # sees a spread, not 8 ramp pieces stacked on top of each other.
         gaps = _detect_role_gaps(analysis)
@@ -1309,27 +1362,33 @@ class AppApi:
                 db=db, role=role, deck_color_identity=deck_color_identity,
                 format_=fmt, exclude_names=deck_names | seen_names,
                 limit=per_role, budget_usd=budget_usd,
+                combo_completers=combo_completers,
             )
             for cand in cands:
                 if cand.card.name in seen_names:
                     continue
                 seen_names.add(cand.card.name)
+                completes = bool(getattr(cand, "completes_combo", False))
+                reason = f"Closes {role.value.replace('_', ' ')} gap"
+                if completes:
+                    reason += " AND completes a combo"
                 suggestions.append({
                     "name": cand.card.name,
                     "mana_cost": cand.card.mana_cost or "",
                     "cmc": float(cand.card.cmc or 0),
                     "type_line": cand.card.type_line or "",
                     "role": role.value,
-                    "source": "role-gap",
-                    "reason": f"Closes {role.value.replace('_', ' ')} gap",
+                    "source": "role-gap-combo" if completes else "role-gap",
+                    "reason": reason,
+                    "completes_combo": completes,
                     "image_url": _image_url_safe(cand.card.scryfall_id),
                     "price_usd": cand.card.price_usd,
                 })
 
         # Pass 2: combo-completion picks — only when the cache is populated.
         # We score "combo completion" highly because it's a unique add path
-        # that role-gap detection can't surface.
-        store = self._get_combo_store()
+        # that role-gap detection can't surface. The combo store + near-miss
+        # list were already loaded above for the bias pass; reuse them.
         if store.combo_count() > 0:
             from densa_deck.combos import detect_near_miss_combos
             near = detect_near_miss_combos(
@@ -1461,6 +1520,7 @@ class AppApi:
         # populated. Empty cache means "we don't know about combos yet";
         # we treat unknown as zero rather than blocking the bracket call.
         combo_count = 0
+        combo_lines_for_recs: list[str] = []
         store = self._get_combo_store()
         if store.combo_count() > 0:
             from densa_deck.combos import detect_combos
@@ -1468,12 +1528,18 @@ class AppApi:
             deck_color_identity = sorted({
                 c.value for e in deck.entries if e.card for c in e.card.color_identity
             })
-            combo_count = len(detect_combos(
+            matches = detect_combos(
                 store=store,
                 deck_card_names=deck_card_names,
                 deck_color_identity=deck_color_identity,
                 limit=50,
-            ))
+            )
+            combo_count = len(matches)
+            # Names of the actual combo lines so the bracket fit can
+            # name specific lines to drop instead of just "you have too
+            # many combos." Keep top 5 — that's enough for the worst
+            # over-pitch case.
+            combo_lines_for_recs = [m.combo.short_label() for m in matches[:5]]
 
         fit = bracket_fit(
             deck=deck, target_label=target_bracket,
@@ -1481,6 +1547,7 @@ class AppApi:
             interaction_count=int(analysis.interaction_count),
             ramp_count=int(analysis.ramp_count),
             detected_combo_count=combo_count,
+            combo_lines=combo_lines_for_recs,
         )
         return {
             "detected_label": fit.detected_label,
@@ -1691,6 +1758,31 @@ class AppApi:
             "threats":     int(br.threat_count - ar.threat_count),
         }
 
+        # Combo diff between A and B (only if cache is populated). Mirrors
+        # the diff_deck_versions surface so the UI can render "B gained
+        # the Thoracle line, A had Niv-Mizzet that B is missing" alongside
+        # the analyst prose.
+        combo_gained: list[dict] = []
+        combo_lost: list[dict] = []
+        try:
+            cstore = self._get_combo_store()
+            if cstore.combo_count() > 0:
+                from densa_deck.combos import diff_combos
+                a_card_names = [e.card.name for e in deck_a.entries if e.card]
+                b_card_names = [e.card.name for e in deck_b.entries if e.card]
+                # Pass each deck's color identity so combos that don't fit
+                # either side are skipped — same semantics as detect_combos.
+                cdiff = diff_combos(
+                    store=cstore,
+                    before_card_names=a_card_names,
+                    after_card_names=b_card_names,
+                    color_identity=None,
+                )
+                combo_gained = [_combo_to_dict(m) for m in cdiff["gained"][:10]]
+                combo_lost = [_combo_to_dict(m) for m in cdiff["lost"][:10]]
+        except Exception:
+            pass
+
         backend = self._get_coach_backend()
         result = compare_decks(
             backend=backend,
@@ -1714,6 +1806,8 @@ class AppApi:
             "score_deltas": dict(result.score_deltas),
             "role_deltas": dict(result.role_deltas),
             "power_gap": result.power_gap,
+            "combo_gained": combo_gained,
+            "combo_lost": combo_lost,
         }
 
     @_safe
@@ -1756,13 +1850,49 @@ class AppApi:
                 )
                 break
 
+        # Combo-piece detection: if this card participates in any complete
+        # combo line for the deck, surface that as the FIRST flag (so the
+        # analyst prose leads with "this is a combo piece — don't cut").
+        # Combo pieces are also added to protected_card_names so the
+        # cut-candidate signals below don't surface "high_cmc_non_finisher"
+        # for what is in fact the deck's win condition.
+        is_combo_piece = False
+        try:
+            cstore = self._get_combo_store()
+            if cstore.combo_count() > 0:
+                ids = cstore.lookup_combos_for_card(entry.card.name)
+                # Only flag if the deck actually has a COMPLETE combo
+                # involving this card (not just any combo it appears in).
+                if ids:
+                    from densa_deck.combos import detect_combos
+                    deck_card_names = [e.card.name for e in deck.entries if e.card]
+                    deck_color_identity = sorted({
+                        cc.value for e in deck.entries if e.card for cc in e.card.color_identity
+                    })
+                    matches = detect_combos(
+                        store=cstore,
+                        deck_card_names=deck_card_names,
+                        deck_color_identity=deck_color_identity,
+                        limit=50,
+                    )
+                    for m in matches:
+                        if entry.card.name in m.combo.cards:
+                            is_combo_piece = True
+                            flags.insert(0, f"COMBO PIECE — part of '{m.combo.short_label()}'")
+                            break
+        except Exception:
+            pass
+
         # Cut-candidate ranker — pull the same signals here that the
-        # cuts pass would produce.
-        from densa_deck.analyst.candidates import rank_cut_candidates
-        for cand in rank_cut_candidates(deck, limit=20):
-            if cand.entry.card and cand.entry.card.name.lower() == card_name.lower():
-                flags.extend(cand.reasons)
-                break
+        # cuts pass would produce. Skip if this is a combo piece (it
+        # would never appear as a cut candidate anyway after the protection
+        # pass, but the lookup is wasteful).
+        if not is_combo_piece:
+            from densa_deck.analyst.candidates import rank_cut_candidates
+            for cand in rank_cut_candidates(deck, limit=20):
+                if cand.entry.card and cand.entry.card.name.lower() == card_name.lower():
+                    flags.extend(cand.reasons)
+                    break
 
         deck_colors = sorted({
             c.value for e in deck.entries if e.card for c in e.card.color_identity
@@ -1790,6 +1920,7 @@ class AppApi:
             "flags": result_obj.flags,
             "on_curve_prob": result_obj.on_curve_prob,
             "bottleneck_color": result_obj.bottleneck_color,
+            "is_combo_piece": is_combo_piece,
         }
 
     @_safe

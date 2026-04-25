@@ -1861,6 +1861,29 @@ code {
   line-height: 1.4;
 }
 
+/* Build-tab card tile — combo completer highlight. The card-tile-combo-
+   completer class is added to any search result whose name matches a
+   missing-card from a near-miss combo. Subtle purple ring + corner
+   badge so the user can spot combo finishers at a glance. */
+.card-tile-combo-completer {
+  border: 2px solid #c084fc !important;
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.45);
+}
+.card-tile-completer-badge {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  background: linear-gradient(90deg, #c084fc, #818cf8);
+  color: #1a1d29;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 6px;
+  pointer-events: none;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
 /* Combo badge — small pill that appears on the Build tab deck title
    when the current draft has detected combo lines. Click to scroll
    to the combos panel. */

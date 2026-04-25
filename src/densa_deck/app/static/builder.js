@@ -262,7 +262,17 @@
   function renderCardTile(card) {
     const tile = document.createElement("div");
     tile.className = "card-tile";
-    tile.title = `${card.name} ${card.mana_cost || ""} — ${card.type_line || ""}`;
+    // Highlight cards that would complete a near-miss combo for the
+    // current draft. The set is refreshed on every detection cycle —
+    // see _builderComboCompleterSet maintained by detectBuilderCombos.
+    const isCompleter = window.__builderComboCompleters
+      && window.__builderComboCompleters.has((card.name || "").toLowerCase());
+    if (isCompleter) {
+      tile.classList.add("card-tile-combo-completer");
+      tile.title = `${card.name} ${card.mana_cost || ""} — completes a combo line in this deck!`;
+    } else {
+      tile.title = `${card.name} ${card.mana_cost || ""} — ${card.type_line || ""}`;
+    }
 
     const img = document.createElement("img");
     img.loading = "lazy";
@@ -295,6 +305,13 @@
       addToDeck(card);
     });
     tile.appendChild(add);
+
+    if (isCompleter) {
+      const badge = document.createElement("span");
+      badge.className = "card-tile-completer-badge";
+      badge.textContent = "★ combo";
+      tile.appendChild(badge);
+    }
 
     tile.addEventListener("click", () => addToDeck(card));
     return tile;
@@ -649,7 +666,32 @@
     if (totalCardCount() === 0) {
       body.innerHTML = `<span class="panel-hint">Add cards to scan for combos.</span>`;
       updateBuilderComboBadge(0);
+      window.__builderComboCompleters = new Set();
       return;
+    }
+    // In parallel with the matched-combo detection, refresh the set of
+    // cards that would COMPLETE a near-miss combo if added. Search-result
+    // tiles consume this set to render a "★ combo" badge — turning the
+    // search panel into a combo-finishing deckbuilding tool.
+    try {
+      const nm = await callApi(
+        "detect_near_miss_combos_for_deck",
+        text, builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+        1, 25,
+      );
+      const completers = new Set();
+      for (const c of (nm && nm.near_combos) || []) {
+        for (const m of (c.missing_cards || [])) {
+          completers.add(m.toLowerCase());
+        }
+      }
+      window.__builderComboCompleters = completers;
+      // Re-render any currently-displayed search results so badges
+      // refresh as the deck grows. No-op if results are empty.
+      if (builderState.results.length) renderSearchResults();
+    } catch (err) {
+      window.__builderComboCompleters = new Set();
     }
     try {
       const r = await callApi(

@@ -61,6 +61,7 @@ def find_add_candidates(
     exclude_names: set[str],
     limit: int = 20,
     budget_usd: float | None = None,
+    combo_completers: set[str] | None = None,
 ) -> list[AddCandidate]:
     """Return up to `limit` cards validated to match role + color + legality.
 
@@ -72,6 +73,13 @@ def find_add_candidates(
         (NULL in the db) are included by default — "unknown" shouldn't block
         the suggestion. Only cards with a known price ABOVE the budget are
         filtered out.
+      combo_completers: optional lower-cased set of card names that, if
+        added, complete a known near-miss combo line. Cards in this set
+        are pinned to the top of the candidate list and tagged with a
+        "combo completion" reason — turning role-gap fillers into combo-
+        finishers when both signals align. Color-identity / legality /
+        role checks still apply (we don't suggest off-color cards just
+        because they'd complete a combo).
     """
     conn = db.connect()
     # Pre-filter by price in SQL when possible — saves rebuilding Card
@@ -121,13 +129,29 @@ def find_add_candidates(
     # Rank heuristic without edhrec data: prefer lower-CMC + higher-playability
     # proxies (has oracle text, is uncommon/rare rather than mythic-only chase).
     # This keeps the top-20 readable and actionable for the LLM picker.
-    matches.sort(key=lambda c: (c.display_cmc(), c.name))
+    completers = {n.lower() for n in (combo_completers or set())}
+    # Sort key: combo completers first (rank 0), then by CMC, then name.
+    # Keeps the deterministic ordering for the no-combos path identical
+    # to the prior behavior.
+    def _rank(c):
+        is_completer = 0 if c.name.lower() in completers else 1
+        return (is_completer, c.display_cmc(), c.name)
+    matches.sort(key=_rank)
     matches = matches[:limit]
 
-    return [
-        AddCandidate(tag=f"a{i:02d}", card=c, role=role)
-        for i, c in enumerate(matches, start=1)
-    ]
+    out: list[AddCandidate] = []
+    for i, c in enumerate(matches, start=1):
+        cand = AddCandidate(tag=f"a{i:02d}", card=c, role=role)
+        # Stash a "completes_combo" attribute on the card for the runner /
+        # frontend to surface as a reason. We attach to the card rather
+        # than to AddCandidate so the existing dataclass shape stays
+        # backward-compatible with any pickled state.
+        if c.name.lower() in completers:
+            setattr(cand, "completes_combo", True)
+        else:
+            setattr(cand, "completes_combo", False)
+        out.append(cand)
+    return out
 
 
 def render_add_table(candidates: list[AddCandidate]) -> str:

@@ -203,6 +203,7 @@ def bracket_fit(
     interaction_count: int,
     ramp_count: int,
     detected_combo_count: int = 0,
+    combo_lines: list[str] | None = None,
 ) -> BracketFit:
     """Assess how a deck fits a target bracket and recommend deltas.
 
@@ -210,6 +211,10 @@ def bracket_fit(
     `detected_combo_count` is the count of full combo lines surfaced
     by `densa_deck.combos.detect_combos` — passed in rather than
     detected here so this module stays independent of the combo store.
+    `combo_lines` (optional): list of human-readable combo line labels
+    so over-pitched bracket recommendations can name SPECIFIC lines
+    to drop (e.g. "drop the Thoracle + Consultation line"), not just
+    "you have too many combos."
     """
     detected_label, detected_name, signals = detect_deck_brackets(deck, power_overall)
     target_name = next((b[1] for b in BRACKETS if b[0] == target_label), target_label)
@@ -248,9 +253,23 @@ def bracket_fit(
         over_signals.append(
             f"{detected_combo_count} combo line(s) detected — bracket {target_label} caps at {combo_max}",
         )
-        recommendations.append(
-            f"Disclose or cut combo lines — bracket {target_label} expects ≤ {combo_max}.",
-        )
+        # Name specific combo lines to drop when we have them, otherwise
+        # fall back to the generic recommendation.
+        if combo_lines:
+            excess = detected_combo_count - combo_max
+            named = combo_lines[:excess + 1] if excess >= 0 else combo_lines[:2]
+            for line in named[:3]:
+                recommendations.append(
+                    f"Drop the combo line '{line}' to fit bracket {target_label}."
+                )
+            if not named:
+                recommendations.append(
+                    f"Disclose or cut combo lines — bracket {target_label} expects ≤ {combo_max}.",
+                )
+        else:
+            recommendations.append(
+                f"Disclose or cut combo lines — bracket {target_label} expects ≤ {combo_max}.",
+            )
 
     # UNDER signals — we're missing the floor.
     if interaction_count < interaction_min:
