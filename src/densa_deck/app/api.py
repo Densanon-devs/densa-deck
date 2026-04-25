@@ -1012,6 +1012,15 @@ class AppApi:
             return {"ok": False, "error": f"No card named '{name}'."}
         return _card_to_builder_dict(card, include_full=True)
 
+    def _builder_draft_path(self) -> Path:
+        """Resolve the draft file path against THIS AppApi's db_path so
+        tests and custom-DB-path installs don't leak drafts into the
+        default `~/.densa-deck/drafts.json`. Falls back to the global
+        helper when no override was supplied at construction time."""
+        if self._db_path:
+            return Path(self._db_path).parent / "drafts.json"
+        return _builder_draft_path()
+
     @_safe
     def save_builder_draft(self, draft: dict) -> dict:
         """Autosave the current builder draft to ~/.densa-deck/drafts.json.
@@ -1024,7 +1033,7 @@ class AppApi:
         """
         if not isinstance(draft, dict):
             return {"ok": False, "error": "Draft payload must be a dict."}
-        path = _builder_draft_path()
+        path = self._builder_draft_path()
         try:
             _atomic_write_json(path, draft)
         except OSError as e:
@@ -1040,15 +1049,22 @@ class AppApi:
         ("start fresh"). A corrupt draft is quarantined beside the real
         file for support forensics, matching the coach-sessions recovery
         pattern.
+
+        Wrapped in a broad OSError catch so the FIRST call ever — before
+        anything has touched ~/.densa-deck/ to create the dir — doesn't
+        crash the bridge if Path.exists() / read_text() can't even reach
+        the directory (permission denied, network share unavailable, etc).
         """
-        path = _builder_draft_path()
-        if not path.exists():
-            return None
+        path = self._builder_draft_path()
         try:
+            if not path.exists():
+                return None
             raw = path.read_text(encoding="utf-8")
             data = json.loads(raw)
-        except (OSError, json.JSONDecodeError) as exc:
+        except json.JSONDecodeError as exc:
             self._quarantine_bad_file(path, reason=str(exc))
+            return None
+        except OSError:
             return None
         return data if isinstance(data, dict) else None
 
@@ -1056,7 +1072,7 @@ class AppApi:
     def clear_builder_draft(self) -> dict:
         """Delete the builder draft file. Called when the user saves the
         draft as a real deck or clicks Clear in the builder."""
-        path = _builder_draft_path()
+        path = self._builder_draft_path()
         try:
             path.unlink(missing_ok=True)
         except OSError as e:

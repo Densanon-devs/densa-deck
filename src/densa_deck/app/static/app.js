@@ -165,10 +165,13 @@ async function bootstrap() {
     });
   });
 
-  // Global keyboard shortcuts: Ctrl+1..4 switches tabs
+  // Global keyboard shortcuts: Ctrl+1..5 switches tabs.
+  // MUST stay in sync with the .app-tabs nav order in index.html — adding
+  // a tab in HTML without bumping this list silently shifts every later
+  // shortcut to the wrong view.
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-      const views = ["analyze", "decks", "coach", "settings"];
+      const views = ["analyze", "build", "decks", "coach", "settings"];
       const idx = parseInt(e.key, 10);
       if (idx >= 1 && idx <= views.length) {
         e.preventDefault();

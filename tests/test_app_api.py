@@ -1183,12 +1183,21 @@ class TestBuilder:
         assert r["ok"] is False
         assert "no card" in r["error"].lower()
 
-    def test_builder_draft_roundtrip(self, api, monkeypatch, tmp_path):
-        # Redirect the draft path to tmp so the test doesn't touch the
-        # user's ~/.densa-deck/drafts.json.
-        from densa_deck.app import api as api_mod
-        draft_path = tmp_path / "drafts.json"
-        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
+    def test_builder_draft_isolated_per_db_path(self, api, temp_dbs):
+        """Regression: drafts.json must live next to the AppApi's
+        configured card DB, not the global ~/.densa-deck/. A test (or a
+        custom-install user) using db_path=/tmp/x must not pollute the
+        real user's drafts.json."""
+        card_db, _ = temp_dbs
+        expected = Path(card_db).parent / "drafts.json"
+        assert api._builder_draft_path() == expected
+
+    def test_builder_draft_roundtrip(self, api, temp_dbs):
+        # api fixture already overrides db_path to a temp dir; per-instance
+        # _builder_draft_path() lands in that same dir, so no monkey-patch
+        # is needed and the test doesn't touch the user's real drafts.json.
+        card_db, _ = temp_dbs
+        draft_path = Path(card_db).parent / "drafts.json"
 
         # First load: no draft yet
         r = api.load_builder_draft()
@@ -1212,29 +1221,43 @@ class TestBuilder:
         assert r2["data"]["name"] == "My Brew"
         assert "Sol Ring" in r2["data"]["mainboard"]
 
-    def test_builder_draft_corrupt_file_quarantines(self, api, monkeypatch, tmp_path):
-        from densa_deck.app import api as api_mod
-        draft_path = tmp_path / "drafts.json"
+    def test_builder_draft_corrupt_file_quarantines(self, api, temp_dbs):
+        card_db, _ = temp_dbs
+        draft_path = Path(card_db).parent / "drafts.json"
+        draft_path.parent.mkdir(parents=True, exist_ok=True)
         draft_path.write_text("{not valid json", encoding="utf-8")
-        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
 
         r = api.load_builder_draft()
         assert r["ok"] is True
         assert r["data"] is None
         # Corrupt file was moved aside; a .corrupt-*.bak sibling exists.
-        siblings = list(tmp_path.glob("drafts.json.corrupt-*.bak"))
+        siblings = list(draft_path.parent.glob("drafts.json.corrupt-*.bak"))
         assert len(siblings) == 1
 
-    def test_clear_builder_draft_removes_file(self, api, monkeypatch, tmp_path):
-        from densa_deck.app import api as api_mod
-        draft_path = tmp_path / "drafts.json"
-        monkeypatch.setattr(api_mod, "_builder_draft_path", lambda: draft_path)
+    def test_clear_builder_draft_removes_file(self, api, temp_dbs):
+        card_db, _ = temp_dbs
+        draft_path = Path(card_db).parent / "drafts.json"
 
         api.save_builder_draft({"name": "x", "format": "commander",
                                 "mainboard": {}, "sideboard": {}, "commander": {}})
         assert draft_path.exists()
         api.clear_builder_draft()
         assert not draft_path.exists()
+
+    def test_load_builder_draft_no_dir_returns_none(self, tmp_path):
+        """Regression: first-ever Build-tab open before Settings → Setup
+        runs (so no ~/.densa-deck/ has been created yet). load must
+        return None instead of crashing the bridge with FileNotFoundError
+        on a missing parent directory."""
+        from densa_deck.app.api import AppApi
+        nonexistent = tmp_path / "never-created" / "cards.db"
+        api = AppApi(db_path=nonexistent, version_db_path=tmp_path / "v.db")
+        try:
+            r = api.load_builder_draft()
+            assert r["ok"] is True
+            assert r["data"] is None
+        finally:
+            api.close()
 
     def test_save_builder_as_deck_free_tier_returns_pro_required(self, api_with_cards, monkeypatch):
         # Force the free tier regardless of the test runner's env.

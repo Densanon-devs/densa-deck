@@ -1463,7 +1463,10 @@ code {
    v0.2.0: Build view (MTGA-style deckbuilder)
    ============================================================ */
 
-.build-grid {
+/* Scoped to .view.active so the height calc only applies to the
+   visible Build view — when the user is on Analyze/Decks/Coach the
+   hidden Build grid doesn't reserve viewport space. */
+.view.active .build-grid {
   display: grid;
   grid-template-columns: 30% 50% 20%;
   gap: 12px;

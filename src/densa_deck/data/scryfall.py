@@ -232,8 +232,16 @@ async def ingest(db: CardDatabase | None = None, force: bool = False):
     dest = cache_dir / "oracle_cards.json"
 
     try:
-        # Get download URL
-        url = await fetch_bulk_data_url()
+        # Get the full manifest (not just the URL) so we can record the
+        # Scryfall-side `updated_at` timestamp alongside the ingest. The
+        # desktop app's on-launch update check (api.check_card_db_update)
+        # compares this stored timestamp against the live remote one to
+        # decide whether to show the "update available" banner — without
+        # writing it here, every CLI-ingested user would see a phantom
+        # update banner the next time they opened the app.
+        manifest = await fetch_bulk_data_manifest()
+        url = manifest["download_uri"]
+        remote_updated_at = manifest.get("updated_at", "")
         console.print(f"[dim]Bulk data URL: {url}[/dim]")
 
         # Download
@@ -246,6 +254,15 @@ async def ingest(db: CardDatabase | None = None, force: bool = False):
         console.print("[cyan]Storing cards in database...[/cyan]")
         db.upsert_cards(cards)
         db.set_metadata("last_ingest", str(len(cards)))
+        # Match the desktop-app ingest path so on-launch update checks
+        # behave the same regardless of which flow populated the DB.
+        if remote_updated_at:
+            db.set_metadata("scryfall_bulk_updated_at", remote_updated_at)
+        from datetime import datetime as _dt
+        db.set_metadata(
+            "last_ingest_completed_at",
+            _dt.now().isoformat(timespec="seconds"),
+        )
         console.print(f"[bold green]Done! {len(cards)} cards stored.[/bold green]")
     except httpx.HTTPError as e:
         console.print(f"[bold red]Network error during ingestion: {e}[/bold red]")
