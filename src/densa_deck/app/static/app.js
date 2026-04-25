@@ -51,6 +51,7 @@ function cacheElements() {
     "decklist-input", "deck-name-input", "format-select",
     "analyze-btn", "save-btn", "goldfish-btn", "gauntlet-btn", "rule0-btn",
     "rule0-modal", "rule0-text", "rule0-copy-btn", "rule0-close-btn", "rule0-dismiss-btn",
+    "bracket-target-select",
     "analyze-status", "analysis-result", "goldfish-result", "gauntlet-result",
     "refresh-decks-btn", "deck-list",
     "deck-editor-empty", "deck-editor-open",
@@ -139,6 +140,14 @@ async function bootstrap() {
   els.goldfish_btn.addEventListener("click", runGoldfish);
   els.gauntlet_btn.addEventListener("click", runGauntlet);
   if (els.rule0_btn) els.rule0_btn.addEventListener("click", openRule0Worksheet);
+  if (els.bracket_target_select) {
+    els.bracket_target_select.addEventListener("change", () => {
+      // Re-run only the bracket-fit panel — leave the rest of the
+      // analysis output untouched so picking a target doesn't reset
+      // the user's combo modal / explain panel state.
+      fillBracketFitForCurrentDeck();
+    });
+  }
   if (els.rule0_close_btn) els.rule0_close_btn.addEventListener("click", hideRule0);
   if (els.rule0_dismiss_btn) els.rule0_dismiss_btn.addEventListener("click", hideRule0);
   if (els.rule0_copy_btn) {
@@ -806,6 +815,17 @@ function renderAnalysis(r, target) {
       <h3>Detected combos <span id="combos-count" class="status-text"></span></h3>
       <div id="combos-list"></div>
     </div>
+
+    <div id="near-combos-section" class="panel result-section hidden">
+      <h3>Combos you're 1 card away from <span id="near-combos-count" class="status-text"></span></h3>
+      <p class="panel-hint">High-leverage adds: each missing card here completes a real combo line.</p>
+      <div id="near-combos-list"></div>
+    </div>
+
+    <div id="bracket-fit-section" class="panel result-section hidden">
+      <h3>Bracket fit <span id="bracket-fit-headline" class="status-text"></span></h3>
+      <div id="bracket-fit-body"></div>
+    </div>
   `;
 
   // Fire the fuzzy-match lookup async so it doesn't block the main render.
@@ -820,6 +840,92 @@ function renderAnalysis(r, target) {
   // combo lines match the deck. Stays hidden when the cache is empty so
   // the user isn't nagged before they've refreshed combo data.
   fillCombosForCurrentDeck();
+  // Same for the "1 card away" surface — silent when nothing applies.
+  fillNearMissCombosForCurrentDeck();
+  // Bracket fit only fires when the user has picked a target; otherwise
+  // hidden so the analysis result stays compact.
+  fillBracketFitForCurrentDeck();
+}
+
+async function fillNearMissCombosForCurrentDeck() {
+  const text = els.decklist_input.value.trim();
+  if (!text) return;
+  const section = $("near-combos-section");
+  const list = $("near-combos-list");
+  const count = $("near-combos-count");
+  if (!section || !list || !count) return;
+  try {
+    const r = await callApi(
+      "detect_near_miss_combos_for_deck",
+      text, els.format_select.value,
+      els.deck_name_input.value || "Unnamed Deck",
+      1, 25,
+    );
+    if (!r || !r.match_count) return;
+    count.textContent = `(${r.match_count})`;
+    list.innerHTML = (r.near_combos || []).map(c => `
+      <div class="combo-row">
+        <div class="combo-label">${escape(c.short_label)}</div>
+        <div class="combo-meta">
+          <span class="status-text">missing: <strong>${escape(c.missing_cards.join(" + "))}</strong></span>
+          ${c.popularity ? `<span class="status-text">${c.popularity.toLocaleString()} decks on Spellbook</span>` : ""}
+          <a href="#" class="external-link combo-link" data-url="${escape(c.spellbook_url)}">Open on Spellbook &rarr;</a>
+        </div>
+      </div>
+    `).join("");
+    list.querySelectorAll(".combo-link").forEach(a => {
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const url = a.dataset.url;
+        try {
+          if (window.pywebview?.api?.open_external) window.pywebview.api.open_external(url);
+          else window.open(url, "_blank");
+        } catch (e) { /* non-fatal */ }
+      });
+    });
+    section.classList.remove("hidden");
+  } catch (e) {
+    // Silent on cache-empty / ingest-required — same as detect_combos path.
+  }
+}
+
+async function fillBracketFitForCurrentDeck() {
+  const target = els.bracket_target_select?.value || "";
+  const section = $("bracket-fit-section");
+  const headline = $("bracket-fit-headline");
+  const body = $("bracket-fit-body");
+  if (!section || !target) {
+    if (section) section.classList.add("hidden");
+    return;
+  }
+  const text = els.decklist_input.value.trim();
+  if (!text) return;
+  try {
+    const r = await callApi(
+      "assess_bracket_fit",
+      text, target,
+      els.format_select.value,
+      els.deck_name_input.value || "Unnamed Deck",
+    );
+    const verdictColor = {
+      "fits": "var(--color-accent-green, #34d399)",
+      "over-pitches": "var(--color-warning, #ff6b6b)",
+      "under-delivers": "#e8a33b",
+    }[r.verdict] || "var(--color-text)";
+    headline.innerHTML = `<span style="color:${verdictColor};font-weight:600">${escape(r.verdict)}</span> &middot; detected ${escape(r.detected_label)}, target ${escape(r.target_label)}`;
+    const overList = (r.over_signals || []).map(s => `<li class="severity-warning">${escape(s)}</li>`).join("");
+    const underList = (r.under_signals || []).map(s => `<li class="severity-warning">${escape(s)}</li>`).join("");
+    const recList = (r.recommendations || []).map(s => `<li class="severity-info">${escape(s)}</li>`).join("");
+    body.innerHTML = `
+      <p>${escape(r.headline)}</p>
+      ${overList ? `<h4>Where you're over the cap</h4><ul class="rec-list">${overList}</ul>` : ""}
+      ${underList ? `<h4>Where you're under the floor</h4><ul class="rec-list">${underList}</ul>` : ""}
+      ${recList ? `<h4>Punch list</h4><ul class="rec-list">${recList}</ul>` : ""}
+    `;
+    section.classList.remove("hidden");
+  } catch (e) {
+    section.classList.add("hidden");
+  }
 }
 
 async function fillCombosForCurrentDeck() {

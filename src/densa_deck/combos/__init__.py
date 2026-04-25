@@ -19,7 +19,12 @@ Densa Deck's existing WotC disclaimer covers this; the About panel surfaces
 attribution to Commander Spellbook on top of that.
 """
 
-from densa_deck.combos.matcher import detect_combos, MatchedCombo
+from densa_deck.combos.matcher import (
+    detect_combos,
+    detect_near_miss_combos,
+    MatchedCombo,
+    NearMissCombo,
+)
 from densa_deck.combos.models import Combo
 from densa_deck.combos.data import (
     ComboStore,
@@ -32,6 +37,8 @@ __all__ = [
     "ComboStore",
     "DEFAULT_COMBO_DB_PATH",
     "MatchedCombo",
+    "NearMissCombo",
     "detect_combos",
+    "detect_near_miss_combos",
     "refresh_combo_snapshot",
 ]

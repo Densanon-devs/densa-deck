@@ -1861,6 +1861,80 @@ code {
   line-height: 1.4;
 }
 
+/* AI deckbuild suggestions modal — rows in the picker */
+.suggest-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+.suggest-row .suggest-rank {
+  width: 38px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+.suggest-row .suggest-card {
+  flex: 1;
+  min-width: 0;
+}
+.suggest-row .suggest-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.suggest-row .suggest-add-btn {
+  flex-shrink: 0;
+}
+
+/* Export modal — target tabs */
+.export-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+.export-tab {
+  background: transparent;
+  border: none;
+  color: var(--color-text);
+  padding: 6px 14px;
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 0.88rem;
+  border-bottom: 2px solid transparent;
+}
+.export-tab.active {
+  opacity: 1;
+  border-bottom-color: var(--color-accent-green, #34d399);
+}
+
+/* Bracket target select on Analyze view — small inline control */
+.bracket-fit-control {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+.bracket-fit-control label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+.bracket-fit-control select {
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+  font-size: 0.85rem;
+}
+
 /* Combo detection rows on Analyze view */
 .combo-row {
   padding: 8px 10px;

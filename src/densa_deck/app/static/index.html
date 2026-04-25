@@ -84,6 +84,19 @@ Mainboard:
             <button id="goldfish-btn" class="btn btn-outline" title="Pro: thousands of solo games, kill turn distribution">Goldfish (Pro)</button>
             <button id="gauntlet-btn" class="btn btn-outline" title="Pro: test vs 11 archetype profiles">Gauntlet (Pro)</button>
             <button id="rule0-btn" class="btn btn-outline" title="Generate a pre-game discussion sheet (Rule 0 worksheet)">Rule 0 worksheet</button>
+            <div class="bracket-fit-control">
+              <label>
+                Target bracket
+                <select id="bracket-target-select" title="Run a structural fit check against a Commander bracket">
+                  <option value="">(off)</option>
+                  <option value="1-precon">1 — Precon</option>
+                  <option value="2-upgraded">2 — Upgraded</option>
+                  <option value="3-optimized">3 — Optimized</option>
+                  <option value="4-high-power">4 — High-power</option>
+                  <option value="5-cedh">5 — cEDH</option>
+                </select>
+              </label>
+            </div>
             <span id="analyze-status" class="status-text"></span>
           </div>
         </div>
@@ -220,6 +233,8 @@ Mainboard:
             </label>
             <div class="build-deck-actions">
               <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a new deck (Pro)">Save deck (Pro)</button>
+              <button id="build-suggest-btn" class="btn btn-outline" title="Pro: suggest 8 high-leverage adds based on role gaps + combo near-misses">Suggest adds (Pro)</button>
+              <button id="build-export-btn" class="btn btn-outline" title="Export this draft as MTGO .dek / MTGA paste / Moxfield text">Export &rarr;</button>
               <button id="build-clear-btn" class="btn btn-outline btn-slim" title="Clear all cards from the current draft">Clear</button>
               <span id="build-save-status" class="status-text"></span>
             </div>
@@ -496,6 +511,48 @@ Mainboard:
       </div>
       <div class="modal-footer">
         <button id="moxfield-help-dismiss-btn" class="btn btn-primary">Got it — I'll paste it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI deckbuild suggestion modal — Pro feature. Shows the ranked
+       list returned by suggest_deckbuild_additions; clicking any row
+       calls the builder's addToDeck on that card so the user can add
+       picks one at a time. -->
+  <div id="suggest-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Suggested adds</h2>
+        <button id="suggest-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="panel-hint" id="suggest-meta">(loading…)</p>
+        <div id="suggest-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="suggest-dismiss-btn" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export modal — MTGO .dek / MTGA paste / Moxfield text. Shows the
+       generated content with copy + save-to-file actions. -->
+  <div id="export-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Export deck</h2>
+        <button id="export-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-tabs">
+          <button class="export-tab active" data-target="mtga">MTGA / Moxfield</button>
+          <button class="export-tab" data-target="mtgo">MTGO (.dek)</button>
+        </div>
+        <pre id="export-text" class="rule0-text">(loading…)</pre>
+      </div>
+      <div class="modal-footer">
+        <button id="export-copy-btn" class="btn btn-outline">Copy</button>
+        <button id="export-dismiss-btn" class="btn btn-primary">Done</button>
       </div>
     </div>
   </div>

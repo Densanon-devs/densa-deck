@@ -154,11 +154,32 @@
       btn.addEventListener("click", () => setActiveZone(btn.dataset.zone));
     });
 
-    // Save / clear
+    // Save / suggest / export / clear
     const saveBtn = e("build-save-btn");
     if (saveBtn) saveBtn.addEventListener("click", saveDraftAsDeck);
+    const suggestBtn = e("build-suggest-btn");
+    if (suggestBtn) suggestBtn.addEventListener("click", openSuggestModal);
+    const exportBtn = e("build-export-btn");
+    if (exportBtn) exportBtn.addEventListener("click", openExportModal);
     const clearDeckBtn = e("build-clear-btn");
     if (clearDeckBtn) clearDeckBtn.addEventListener("click", clearDraft);
+
+    // Suggest modal handlers
+    const suggestClose = e("suggest-close-btn");
+    const suggestDismiss = e("suggest-dismiss-btn");
+    if (suggestClose) suggestClose.addEventListener("click", hideSuggestModal);
+    if (suggestDismiss) suggestDismiss.addEventListener("click", hideSuggestModal);
+
+    // Export modal handlers
+    const exportClose = e("export-close-btn");
+    const exportDismiss = e("export-dismiss-btn");
+    const exportCopy = e("export-copy-btn");
+    if (exportClose) exportClose.addEventListener("click", hideExportModal);
+    if (exportDismiss) exportDismiss.addEventListener("click", hideExportModal);
+    if (exportCopy) exportCopy.addEventListener("click", copyExportToClipboard);
+    document.querySelectorAll(".export-tab").forEach(btn => {
+      btn.addEventListener("click", () => switchExportTarget(btn.dataset.target));
+    });
 
     // Pro gate modal
     const proCloseBtn = e("pro-gate-close-btn");
@@ -777,6 +798,167 @@
       lines.push("");
     }
     return lines.join("\n").trim() + "\n";
+  }
+
+  // ---------------- Suggest adds (Pro AI deckbuild) ----------------
+
+  async function openSuggestModal() {
+    const m = e("suggest-modal");
+    const list = e("suggest-list");
+    const meta = e("suggest-meta");
+    if (!m) return;
+    m.classList.remove("hidden");
+    m.setAttribute("aria-hidden", "false");
+    list.innerHTML = "";
+    meta.textContent = "Loading suggestions...";
+    if (totalCardCount() === 0) {
+      meta.textContent = "Add at least one card to the deck so we have something to ground suggestions in.";
+      return;
+    }
+    try {
+      const r = await window.pywebview.api.suggest_deckbuild_additions(
+        draftToDecklistText(),
+        builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+        8, null,
+      );
+      if (r && r.ok === false) {
+        if (r.error_type === "ProRequired") {
+          hideSuggestModal();
+          showProGate();
+          return;
+        }
+        meta.textContent = "Error: " + (r.error || "(unknown)");
+        return;
+      }
+      const data = r && r.data ? r.data : r;
+      const gaps = (data.gaps || []).join(", ") || "no gaps detected";
+      meta.textContent = `${data.count} suggestions • role gaps: ${gaps}`;
+      list.innerHTML = (data.suggestions || []).map((s, i) => `
+        <div class="suggest-row" data-name="${escape(s.name)}" data-cmc="${s.cmc}" data-mc="${escape(s.mana_cost)}" data-tl="${escape(s.type_line)}">
+          <div class="suggest-rank">#${i + 1}</div>
+          <div class="suggest-card">
+            <div class="suggest-name">${escape(s.name)} <span class="status-text">${escape(s.mana_cost || "")}</span></div>
+            <div class="status-text">${escape(s.type_line || "")} &middot; ${escape(s.role || "")}</div>
+            <div class="status-text" style="margin-top:2px">${escape(s.reason || "")}</div>
+          </div>
+          <button class="btn btn-primary btn-slim suggest-add-btn">+ Add</button>
+        </div>
+      `).join("") || `<p class="panel-hint">No suggestions surfaced. Try refreshing combo data on Settings or save the draft and run Analyze for richer signals.</p>`;
+      // Wire each row's add button.
+      list.querySelectorAll(".suggest-add-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const row = btn.closest(".suggest-row");
+          if (!row) return;
+          const name = row.dataset.name;
+          if (!name) return;
+          // Build a card-shaped object minimal enough for addToDeck —
+          // type-line shapes the bucket assignment in renderDeck.
+          const tl = row.dataset.tl || "";
+          const card = {
+            name,
+            mana_cost: row.dataset.mc || "",
+            cmc: parseFloat(row.dataset.cmc) || 0,
+            type_line: tl,
+            colors: [], color_identity: [],
+            is_creature: /Creature/i.test(tl),
+            is_instant: /Instant/i.test(tl),
+            is_sorcery: /Sorcery/i.test(tl),
+            is_artifact: /Artifact/i.test(tl),
+            is_enchantment: /Enchantment/i.test(tl),
+            is_planeswalker: /Planeswalker/i.test(tl),
+            is_battle: /Battle/i.test(tl),
+            is_land: /Land/i.test(tl),
+          };
+          addToDeck(card);
+          btn.textContent = "Added";
+          btn.disabled = true;
+        });
+      });
+    } catch (err) {
+      meta.textContent = "Failed: " + err.message;
+    }
+  }
+
+  function hideSuggestModal() {
+    const m = e("suggest-modal");
+    if (!m) return;
+    m.classList.add("hidden");
+    m.setAttribute("aria-hidden", "true");
+  }
+
+  // ---------------- Export modal (MTGO / MTGA / Moxfield) ----------------
+
+  let _exportTarget = "mtga";
+
+  async function openExportModal() {
+    if (totalCardCount() === 0) {
+      if (typeof toast === "function") toast("Add at least one card before exporting.", "error");
+      return;
+    }
+    const m = e("export-modal");
+    if (!m) return;
+    m.classList.remove("hidden");
+    m.setAttribute("aria-hidden", "false");
+    _exportTarget = "mtga";
+    document.querySelectorAll(".export-tab").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.target === _exportTarget);
+    });
+    await loadExportContent();
+  }
+
+  function hideExportModal() {
+    const m = e("export-modal");
+    if (!m) return;
+    m.classList.add("hidden");
+    m.setAttribute("aria-hidden", "true");
+  }
+
+  async function switchExportTarget(target) {
+    _exportTarget = target;
+    document.querySelectorAll(".export-tab").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.target === _exportTarget);
+    });
+    await loadExportContent();
+  }
+
+  async function loadExportContent() {
+    const ta = e("export-text");
+    if (!ta) return;
+    ta.textContent = "(loading…)";
+    try {
+      const r = await callApi(
+        "export_deck_format",
+        draftToDecklistText(), _exportTarget,
+        builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+      );
+      ta.textContent = r.content || "(empty)";
+    } catch (err) {
+      ta.textContent = "Error: " + err.message;
+    }
+  }
+
+  function copyExportToClipboard() {
+    const ta = e("export-text");
+    const btn = e("export-copy-btn");
+    if (!ta || !btn) return;
+    const orig = btn.textContent;
+    try {
+      navigator.clipboard.writeText(ta.textContent).then(() => {
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      }).catch(() => {
+        // Fallback — select the pre's contents so the user can Ctrl+C.
+        const r = document.createRange();
+        r.selectNode(ta);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+        btn.textContent = "Selected — Ctrl+C";
+        setTimeout(() => { btn.textContent = orig; }, 2000);
+      });
+    } catch (err) { /* non-fatal */ }
   }
 
   function showProGate() {

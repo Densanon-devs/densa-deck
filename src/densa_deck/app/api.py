@@ -1100,6 +1100,307 @@ class AppApi:
         }
 
     @_safe
+    def detect_near_miss_combos_for_deck(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        max_missing: int = 1,
+        limit: int = 25,
+    ) -> dict:
+        """Find combos the deck is missing only N cards from completing.
+
+        Powers the "you're 1 card away" surface in the Build tab and the
+        Analyze view. Same gates as detect_combos_for_deck — empty cache
+        returns ComboCacheEmpty so the frontend prompts the user to
+        refresh combo data first.
+        """
+        store = self._get_combo_store()
+        if store.combo_count() == 0:
+            return {
+                "ok": False,
+                "error": "Combo data not loaded yet. Refresh from Settings → Combo data first.",
+                "error_type": "ComboCacheEmpty",
+            }
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+        from densa_deck.combos import detect_near_miss_combos
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        near = detect_near_miss_combos(
+            store=store,
+            deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity,
+            max_missing=int(max_missing or 1),
+            limit=int(limit or 25),
+        )
+        return {
+            "deck_name": deck.name,
+            "match_count": len(near),
+            "max_missing": max_missing,
+            "color_identity": deck_color_identity,
+            "near_combos": [_near_miss_to_dict(n) for n in near],
+        }
+
+    @_safe
+    def suggest_deckbuild_additions(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        count: int = 8,
+        budget_usd: float | None = None,
+    ) -> dict:
+        """Suggest cards to add to the in-progress deck. Pro-gated.
+
+        Combines three signals into a single ranked list:
+          1. Role-gap fillers — pulled from the existing
+             `find_add_candidates` for each gap detected by
+             `_detect_role_gaps`.
+          2. Combo-completion adds — cards that, if added, complete a
+             near-miss combo. Surfaced from the combo store when
+             populated; skipped quietly when it isn't.
+          3. Top-pick land/ramp/draw fillers when the deck lacks the
+             format-target floor.
+
+        Returns a single sorted list of `{name, mana_cost, cmc,
+        type_line, role, reason, source}` rows the Build tab can render
+        as clickable +1 buttons. No LLM call — deterministic so it's
+        fast enough to refresh as the user edits the draft.
+
+        Pro-gated because it concentrates a lot of value into one
+        call — the Free-tier user can still see static analysis +
+        combo detection.
+        """
+        if get_user_tier() != Tier.PRO:
+            return {
+                "ok": False,
+                "error": "AI deckbuild suggestions require Densa Deck Pro.",
+                "error_type": "ProRequired",
+            }
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        from densa_deck.analyst.add_candidates import find_add_candidates
+        from densa_deck.analyst.runner import _detect_role_gaps
+        from densa_deck.models import Format
+
+        analysis = run_static_analysis(deck)
+        deck_color_identity = {
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        }
+        deck_names = {e.card.name for e in deck.entries if e.card}
+        try:
+            fmt = Format(format_) if format_ else (deck.format or Format.COMMANDER)
+        except ValueError:
+            fmt = Format.COMMANDER
+
+        suggestions: list[dict] = []
+        seen_names: set[str] = set()
+
+        # Pass 1: role-gap candidates — three per detected gap so the user
+        # sees a spread, not 8 ramp pieces stacked on top of each other.
+        gaps = _detect_role_gaps(analysis)
+        per_role = max(1, count // max(1, len(gaps) or 1))
+        db = self._get_db()
+        for role in gaps:
+            cands = find_add_candidates(
+                db=db, role=role, deck_color_identity=deck_color_identity,
+                format_=fmt, exclude_names=deck_names | seen_names,
+                limit=per_role, budget_usd=budget_usd,
+            )
+            for cand in cands:
+                if cand.card.name in seen_names:
+                    continue
+                seen_names.add(cand.card.name)
+                suggestions.append({
+                    "name": cand.card.name,
+                    "mana_cost": cand.card.mana_cost or "",
+                    "cmc": float(cand.card.cmc or 0),
+                    "type_line": cand.card.type_line or "",
+                    "role": role.value,
+                    "source": "role-gap",
+                    "reason": f"Closes {role.value.replace('_', ' ')} gap",
+                    "image_url": _image_url_safe(cand.card.scryfall_id),
+                    "price_usd": cand.card.price_usd,
+                })
+
+        # Pass 2: combo-completion picks — only when the cache is populated.
+        # We score "combo completion" highly because it's a unique add path
+        # that role-gap detection can't surface.
+        store = self._get_combo_store()
+        if store.combo_count() > 0:
+            from densa_deck.combos import detect_near_miss_combos
+            near = detect_near_miss_combos(
+                store=store,
+                deck_card_names=list(deck_names),
+                deck_color_identity=sorted(deck_color_identity),
+                max_missing=1,
+                limit=20,
+            )
+            for nm in near:
+                # Single-card-away combos are the highest-value adds; we
+                # surface up to 3 of them at the top of the suggestion list.
+                if len(suggestions) >= count + 3:
+                    break
+                if not nm.missing_cards:
+                    continue
+                missing_card = nm.missing_cards[0]
+                if missing_card in seen_names or missing_card in deck_names:
+                    continue
+                # Look up the card in the DB so we can show mana cost / image.
+                card = db.lookup_by_name(missing_card)
+                if card is None:
+                    continue
+                # Color-identity guard — find_add_candidates does this for
+                # role-gap picks; do it again here so combo completions
+                # don't slip in cards outside the deck's CI.
+                card_ci = {c.value for c in card.color_identity}
+                if not card_ci.issubset(deck_color_identity):
+                    continue
+                seen_names.add(card.name)
+                suggestions.append({
+                    "name": card.name,
+                    "mana_cost": card.mana_cost or "",
+                    "cmc": float(card.cmc or 0),
+                    "type_line": card.type_line or "",
+                    "role": "combo",
+                    "source": "combo-completion",
+                    "reason": f"Completes combo: {nm.combo.short_label()}",
+                    "image_url": _image_url_safe(card.scryfall_id),
+                    "price_usd": card.price_usd,
+                    "combo_url": nm.combo.spellbook_url,
+                })
+
+        # Sort: combo-completions first (highest impact), then role-gaps by
+        # role priority. Within each group, sort by CMC ascending (cheaper
+        # = easier to slot).
+        source_order = {"combo-completion": 0, "role-gap": 1}
+        suggestions.sort(key=lambda s: (
+            source_order.get(s["source"], 9),
+            s.get("cmc", 99),
+            s.get("name", ""),
+        ))
+        # Cap to the requested count so the UI list isn't overwhelmed.
+        suggestions = suggestions[: int(count or 8)]
+
+        return {
+            "deck_name": deck.name,
+            "count": len(suggestions),
+            "gaps": [g.value for g in gaps],
+            "color_identity": sorted(deck_color_identity),
+            "suggestions": suggestions,
+        }
+
+    @_safe
+    def export_deck_format(
+        self,
+        decklist_text: str,
+        target: str,
+        format_: str | None = None,
+        name: str = "Deck",
+    ) -> dict:
+        """Export the resolved deck into one of: 'mtgo', 'mtga', 'moxfield'.
+
+        Free tier — these are commodity formats every deckbuilder needs.
+        Returns `{format, content, filename_hint}`. Frontend can offer
+        a download / copy-to-clipboard.
+        """
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        target = (target or "").lower().strip()
+        if target == "mtgo":
+            content, fname = _export_mtgo(deck)
+        elif target == "mtga":
+            content, fname = _export_mtga(deck)
+        elif target == "moxfield":
+            content, fname = _export_moxfield_text(deck)
+        else:
+            return {"ok": False, "error": f"Unknown export target '{target}'. Valid: mtgo / mtga / moxfield."}
+        return {
+            "format": target,
+            "content": content,
+            "filename_hint": fname,
+        }
+
+    @_safe
+    def assess_bracket_fit(
+        self,
+        decklist_text: str,
+        target_bracket: str,
+        format_: str | None = None,
+        name: str = "Deck",
+    ) -> dict:
+        """Assess how a deck fits a target Commander bracket (1-precon ... 5-cedh).
+
+        Returns the verdict + headline + over/under signals + a punch-list
+        of concrete recommendations. Pure rule-engine output (no LLM call)
+        so it's fast enough to run inline in the Analyze view.
+        """
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        from densa_deck.analysis.brackets import bracket_fit, BRACKETS
+        from densa_deck.analysis.power_level import estimate_power_level
+
+        analysis = run_static_analysis(deck)
+        power = estimate_power_level(deck)
+
+        valid_labels = {b[0] for b in BRACKETS}
+        if target_bracket not in valid_labels:
+            return {
+                "ok": False,
+                "error": f"Unknown bracket '{target_bracket}'. Valid: {sorted(valid_labels)}",
+            }
+
+        # Combo count for the constraint check — only when the cache is
+        # populated. Empty cache means "we don't know about combos yet";
+        # we treat unknown as zero rather than blocking the bracket call.
+        combo_count = 0
+        store = self._get_combo_store()
+        if store.combo_count() > 0:
+            from densa_deck.combos import detect_combos
+            deck_card_names = [e.card.name for e in deck.entries if e.card]
+            deck_color_identity = sorted({
+                c.value for e in deck.entries if e.card for c in e.card.color_identity
+            })
+            combo_count = len(detect_combos(
+                store=store,
+                deck_card_names=deck_card_names,
+                deck_color_identity=deck_color_identity,
+                limit=50,
+            ))
+
+        fit = bracket_fit(
+            deck=deck, target_label=target_bracket,
+            power_overall=float(power.overall),
+            interaction_count=int(analysis.interaction_count),
+            ramp_count=int(analysis.ramp_count),
+            detected_combo_count=combo_count,
+        )
+        return {
+            "detected_label": fit.detected_label,
+            "detected_name": fit.detected_name,
+            "target_label": fit.target_label,
+            "target_name": fit.target_name,
+            "verdict": fit.verdict,
+            "headline": fit.headline,
+            "delta": fit.delta,
+            "over_signals": list(fit.over_signals),
+            "under_signals": list(fit.under_signals),
+            "recommendations": list(fit.recommendations),
+            "power_overall": round(float(power.overall), 2),
+            "combo_count": combo_count,
+        }
+
+    @_safe
     def detect_combos_for_deck(
         self,
         decklist_text: str,
@@ -2299,6 +2600,122 @@ def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
             "win_condition_quality": _delta("win_condition_quality"),
             "card_quality": _delta("card_quality"),
         },
+    }
+
+
+def _image_url_safe(scryfall_id: str) -> str:
+    try:
+        from densa_deck.legal import scryfall_image_url
+        return scryfall_image_url(scryfall_id)
+    except Exception:
+        return ""
+
+
+# =============================================================================
+# Multi-format deck export — MTGO / MTGA / Moxfield-paste
+# =============================================================================
+
+
+def _export_mtga(deck) -> tuple[str, str]:
+    """MTGA paste format: lines like `4 Lightning Bolt`. Commander zone
+    is emitted as a leading "Commander" section if present, mirroring
+    MTGA's import expectations.
+    """
+    from densa_deck.models import Zone
+    lines: list[str] = []
+    zones_in_order = [
+        ("Commander", Zone.COMMANDER),
+        ("Deck", Zone.MAINBOARD),
+        ("Sideboard", Zone.SIDEBOARD),
+    ]
+    for label, zone in zones_in_order:
+        entries = [e for e in deck.entries if e.zone == zone and e.card]
+        if not entries:
+            continue
+        lines.append(label)
+        # Aggregate quantities by name in case the parser emitted multiple rows.
+        agg: dict[str, int] = {}
+        for e in entries:
+            agg[e.card.name] = agg.get(e.card.name, 0) + e.quantity
+        for name, qty in sorted(agg.items()):
+            lines.append(f"{qty} {name}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n", f"{_safe_filename(deck.name)}.txt"
+
+
+def _export_moxfield_text(deck) -> tuple[str, str]:
+    """Moxfield's import-by-paste format. Same as MTGA in shape but
+    section headers use Moxfield's vocabulary (`Commander`, `Deck`,
+    `Sideboard`). Moxfield is permissive about format so this is
+    effectively the same body.
+    """
+    return _export_mtga(deck)
+
+
+def _export_mtgo(deck) -> tuple[str, str]:
+    """MTGO `.dek` file format. Documented at https://mtgo.com — the
+    XML schema accepts `<Cards>` entries with `Number` (qty), `Sideboard`
+    (bool), and `Name` attributes. Keeps it minimal — no card IDs, just
+    names.
+    """
+    import xml.sax.saxutils as _sax
+    from densa_deck.models import Zone
+    lines: list[str] = ['<?xml version="1.0" encoding="UTF-8"?>', "<Deck>"]
+    lines.append(f"  <NetDeckID>0</NetDeckID>")
+    lines.append(f"  <PreconstructedDeckID>0</PreconstructedDeckID>")
+
+    def _emit(zone, sideboard_flag: str):
+        agg: dict[str, int] = {}
+        for e in deck.entries:
+            if e.zone != zone or e.card is None:
+                continue
+            agg[e.card.name] = agg.get(e.card.name, 0) + e.quantity
+        for name, qty in sorted(agg.items()):
+            esc = _sax.escape(name)
+            lines.append(
+                f'  <Cards CatID="0" Quantity="{qty}" Sideboard="{sideboard_flag}" '
+                f'Name="{esc}" Annotation="0" />'
+            )
+
+    _emit(Zone.COMMANDER, "true")  # MTGO treats Commander as a separate zone but the .dek format doesn't have a column for it; flag as sideboard so the user knows it's special
+    _emit(Zone.MAINBOARD, "false")
+    _emit(Zone.SIDEBOARD, "true")
+    lines.append("</Deck>")
+    return "\n".join(lines) + "\n", f"{_safe_filename(deck.name)}.dek"
+
+
+def _safe_filename(name: str) -> str:
+    """Slugify a deck name for export filenames — drops everything that
+    isn't alnum / dash / underscore so we don't hand the user a file
+    name Windows refuses to save."""
+    import re
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", (name or "deck").strip()).strip("-")
+    return cleaned or "deck"
+
+
+def _near_miss_to_dict(near) -> dict:
+    """Flatten a NearMissCombo for the desktop bridge.
+
+    Keeps the same wire shape as a regular MatchedCombo plus a
+    `missing_cards` list so the UI can render "you need: <card list>"
+    next to each near-miss row.
+    """
+    c = near.combo
+    return {
+        "combo_id": c.combo_id,
+        "cards": list(c.cards),
+        "templates": list(c.templates),
+        "produces": list(c.produces),
+        "color_identity": c.color_identity,
+        "bracket_tag": c.bracket_tag,
+        "description": c.description,
+        "popularity": c.popularity,
+        "spellbook_url": c.spellbook_url,
+        "short_label": c.short_label(),
+        "in_deck_cards": list(near.in_deck_cards),
+        "missing_cards": list(near.missing_cards),
+        "missing_count": near.missing_count,
+        "unsatisfied_templates": near.unsatisfied_templates,
     }
 
 
