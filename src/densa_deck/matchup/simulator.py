@@ -165,7 +165,14 @@ def _run_matchup_game(
     state.opponent_life = starting_life
     state.setup_library(deck.entries)
 
-    mulligan_phase(state, deck)
+    # Combo-aware mulligan so combo decks preserve their pieces through
+    # bottoming even on a 5-card hand.
+    combo_card_names: set[str] = set()
+    if combos:
+        for c in combos:
+            for name in c.cards:
+                combo_card_names.add(name.lower())
+    mulligan_phase(state, deck, combo_card_names=combo_card_names or None)
 
     result = MatchupGameResult()
     permanents_removed = 0

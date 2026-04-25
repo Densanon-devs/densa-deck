@@ -83,11 +83,25 @@ def build_deck_sheet(
     deck_cards: list[str],
     reasons_up: list[str] | None = None,
     reasons_down: list[str] | None = None,
+    combo_lines: list[str] | None = None,
 ) -> str:
-    """Assemble a PIE-style knowledge sheet for the coach."""
+    """Assemble a PIE-style knowledge sheet for the coach.
+
+    `combo_lines` (optional): list of human-readable combo line labels
+    (from the Commander Spellbook detector). When supplied, the sheet
+    surfaces them in a [COMBOS] block so the coach can answer "how does
+    this deck win?" with the actual combo plan instead of guessing.
+    """
     colors = "".join(color_identity) or "colorless"
     up = "; ".join((reasons_up or [])[:4]) or "none surfaced"
     down = "; ".join((reasons_down or [])[:4]) or "none surfaced"
+    # Combos block — only emit when the detector found anything. Cap at
+    # 8 lines so the sheet stays small enough to fit in the model's
+    # context budget alongside the full card allowlist.
+    combos_block = ""
+    if combo_lines:
+        rendered = "\n".join(f"  - {c}" for c in combo_lines[:8])
+        combos_block = f"\n[COMBOS]\n{rendered}\n"
     # Deck card list is truncated in the sheet if huge, but kept authoritative
     # by placing it at the end so the model always sees the full allowlist.
     cards_block = "\n".join(f"  - {n}" for n in deck_cards)
@@ -103,7 +117,7 @@ def build_deck_sheet(
 [AVG_CMC: {avg_mana_value:.2f}]
 [REASONS_UP: {up}]
 [REASONS_DOWN: {down}]
-
+{combos_block}
 [CARDS]
 {cards_block}"""
 

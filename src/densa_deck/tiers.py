@@ -78,6 +78,8 @@ COMMAND_FEATURES: dict[str, str] = {
     "rule0": "rule0",
     "explain": "explain_card",
     "compare-decks": "compare_decks",
+    "bracket": "rule0",          # bracket fit is a free deterministic feature
+    "export": "card_search",     # export is free (commodity feature)
 }
 
 _CONFIG_PATH = Path.home() / ".densa-deck" / "config.json"

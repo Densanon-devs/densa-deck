@@ -203,15 +203,20 @@ def _run_single_game(
     # Setup library
     state.setup_library(deck.entries)
 
-    # Mulligan phase
-    mulls = mulligan_phase(state, deck)
-
     # Pre-build a map from combo to the lower-cased card-name set so the
     # per-turn check is a single subset comparison instead of iterating
     # combo.cards each call. Skipped when combos is empty.
     combo_index: list[tuple[Combo, frozenset[str]]] = []
+    combo_card_names: set[str] = set()
     if combos:
         combo_index = [(c, frozenset(name.lower() for name in c.cards)) for c in combos]
+        for c in combos:
+            for name in c.cards:
+                combo_card_names.add(name.lower())
+
+    # Mulligan phase — combo-aware so a deck with infinite combos prefers
+    # to keep hands containing combo pieces (and never bottoms them).
+    mulls = mulligan_phase(state, deck, combo_card_names=combo_card_names or None)
 
     combo_win_turn: int | None = None
     combo_id_fired: str | None = None

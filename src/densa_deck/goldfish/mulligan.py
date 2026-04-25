@@ -18,10 +18,26 @@ from densa_deck.models import Deck
 from densa_deck.probability.opening_hand import evaluate_hand
 
 
-def mulligan_phase(state: GameState, deck: Deck, min_keep_score: float = 40.0) -> int:
-    """Execute the mulligan phase. Returns number of mulligans taken."""
+def mulligan_phase(
+    state: GameState,
+    deck: Deck,
+    min_keep_score: float = 40.0,
+    *,
+    combo_card_names: set[str] | None = None,
+) -> int:
+    """Execute the mulligan phase. Returns number of mulligans taken.
+
+    Optional `combo_card_names`: lower-cased card names that participate
+    in any of the deck's known combo lines. When provided, the bottom-
+    cards step preferentially KEEPS those cards (they become combo-piece
+    targets) and the keep decision tolerates a slightly lower base score
+    when 2+ combo pieces are already in hand. Combo decks frequently
+    keep 5-land hands with 2 combo pieces — opening_hand.evaluate_hand
+    doesn't know about combos so the floor was too high before.
+    """
     mulligans = 0
     max_mulligans = 3
+    combo_set = combo_card_names or set()
 
     for attempt in range(max_mulligans + 1):
         # Draw 7
@@ -30,10 +46,25 @@ def mulligan_phase(state: GameState, deck: Deck, min_keep_score: float = 40.0) -
         # Evaluate
         ev = evaluate_hand(hand, deck)
 
-        if ev.keepable or attempt == max_mulligans:
+        # Combo-aware keep override: if the hand already contains 2+
+        # combo pieces, the player would generally keep even on a
+        # slightly weaker non-combo metric. We require still passing a
+        # softened floor (30) so we don't keep a 1-land hand just for
+        # combo pieces.
+        combo_pieces_in_hand = sum(
+            1 for e in hand
+            if e.card and e.card.name.lower() in combo_set
+        )
+        combo_keep = (
+            len(combo_set) > 0
+            and combo_pieces_in_hand >= 2
+            and ev.score >= 30.0
+        )
+
+        if ev.keepable or combo_keep or attempt == max_mulligans:
             # Keep — but bottom N cards for mulligans taken
             if mulligans > 0:
-                _bottom_cards(state, mulligans)
+                _bottom_cards(state, mulligans, combo_card_names=combo_set)
             state.mulligans_taken = mulligans
             return mulligans
 
@@ -46,17 +77,21 @@ def mulligan_phase(state: GameState, deck: Deck, min_keep_score: float = 40.0) -
     return mulligans
 
 
-def _bottom_cards(state: GameState, count: int):
+def _bottom_cards(state: GameState, count: int, *, combo_card_names: set[str] | None = None):
     """Put the N worst cards from hand on the bottom of the library.
 
     Bottoming strategy:
     - Bottom highest-CMC spells first (can't cast them early anyway)
     - Never bottom the last land
     - Never bottom ramp if we have few lands
+    - When combo_card_names is set, NEVER bottom a combo piece (these
+      are the deck's win condition; mulled-down hands still want to
+      keep their combo cards)
     """
     if count <= 0 or not state.hand:
         return
 
+    combo_set = combo_card_names or set()
     hand = list(state.hand)
     lands_in_hand = sum(1 for e in hand if e.card and e.card.is_land)
 
@@ -88,6 +123,12 @@ def _bottom_cards(state: GameState, count: int):
         # Card draw is keepable
         if card.tags and CardTag.CARD_DRAW in card.tags:
             keep_score += 15.0
+
+        # Combo pieces — pinned. Use a score above the "never bottom"
+        # threshold for lands so combo pieces always rank ahead of
+        # everything else when we sort.
+        if combo_set and card.name.lower() in combo_set:
+            keep_score += 200.0
 
         scored.append((entry, keep_score))
 

@@ -127,6 +127,7 @@ class AnalystRunner:
         adds_per_role: int = 3,
         playgroup_power: float | None = None,
         version_diff: dict | None = None,
+        combo_lines: list[str] | None = None,
     ) -> AnalystResult:
         """Run executive summary + cut suggestions + optional add suggestions.
 
@@ -137,6 +138,12 @@ class AnalystRunner:
         previous saved snapshot — dict with keys "added" (name→qty),
         "removed" (name→qty), and "score_deltas" (score_name→delta). When
         provided, the summary prompt narrates what changed since last save.
+
+        combo_lines (optional): list of human-readable combo line labels
+        (e.g. "Thassa's Oracle + Demonic Consultation → Win the game")
+        from `densa_deck.combos.detect_combos`. When provided, the
+        summary prompt frames the deck as combo-shaped and mentions
+        the win plan explicitly.
         """
         result = AnalystResult()
 
@@ -145,6 +152,7 @@ class AnalystRunner:
                 deck, analysis, power, archetype, format_name, result,
                 playgroup_power=playgroup_power,
                 version_diff=version_diff,
+                combo_lines=combo_lines,
             )
 
         if want_cuts:
@@ -174,6 +182,7 @@ class AnalystRunner:
         result: AnalystResult,
         playgroup_power: float | None = None,
         version_diff: dict | None = None,
+        combo_lines: list[str] | None = None,
     ) -> AnalystResult:
         color_identity = sorted({
             c.value
@@ -199,6 +208,7 @@ class AnalystRunner:
             recommendations=list(analysis.recommendations),
             playgroup_power=playgroup_power,
             version_diff=version_diff,
+            combo_lines=combo_lines,
         )
         gen = generate_with_verify(
             self.backend,

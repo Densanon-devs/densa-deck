@@ -22,6 +22,7 @@ attribution to Commander Spellbook on top of that.
 from densa_deck.combos.matcher import (
     detect_combos,
     detect_near_miss_combos,
+    diff_combos,
     MatchedCombo,
     NearMissCombo,
 )
@@ -40,5 +41,6 @@ __all__ = [
     "NearMissCombo",
     "detect_combos",
     "detect_near_miss_combos",
+    "diff_combos",
     "refresh_combo_snapshot",
 ]

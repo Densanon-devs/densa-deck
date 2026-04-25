@@ -74,6 +74,7 @@ def executive_summary_prompt(
     recommendations: list[str],
     playgroup_power: float | None = None,
     version_diff: dict | None = None,  # {"added": {...}, "removed": {...}, "score_deltas": {...}}
+    combo_lines: list[str] | None = None,
 ) -> str:
     """Executive summary prompt — prose only, no card references required.
 
@@ -111,6 +112,23 @@ def executive_summary_prompt(
             f"-{len(removed)} cuts ({removed_sample}){top_delta}"
         )
 
+    # Combo lines block — when the Commander Spellbook detector found
+    # any concrete combos in the deck, surface them so the LLM can frame
+    # the deck's win plan accurately. Without this hint, a Thoracle deck's
+    # exec summary will narrate it as "midrange / control" because the
+    # tag-based archetype detection misses combo orientation.
+    combo_lines_block = ""
+    combo_instruction = ""
+    if combo_lines:
+        rendered = "\n  - " + "\n  - ".join(combo_lines[:5])
+        combo_lines_block = f"\nDetected combo lines:{rendered}"
+        combo_instruction = (
+            " The first paragraph must explicitly mention that the deck "
+            "wins via combo and reference the rough shape of the combo "
+            "plan (do NOT introduce specific card names beyond what the "
+            "input lists). The second paragraph can still address tuning."
+        )
+
     playgroup_line = ""
     playgroup_instruction = ""
     if playgroup_power is not None:
@@ -130,14 +148,14 @@ def executive_summary_prompt(
     return f"""You are a Magic: The Gathering deck analyst. Write a 2-paragraph
 executive summary of the deck described below. Narrate the structured data
 below in natural prose — do NOT introduce specific card names the data does
-not reference. Keep paragraphs tight. Tone: direct, helpful, no hype.{playgroup_instruction}
+not reference. Keep paragraphs tight. Tone: direct, helpful, no hype.{combo_instruction}{playgroup_instruction}
 
 {_SUMMARY_FEWSHOT}
 
 [INPUT]
 Deck: {deck_name} ({colors}, {format_name})
 Archetype: {archetype}
-Power: {power_overall:.1f}/10 ({power_tier}){playgroup_line}{version_diff_line}
+Power: {power_overall:.1f}/10 ({power_tier}){playgroup_line}{version_diff_line}{combo_lines_block}
 Land count: {land_count}
 Ramp: {ramp_count}
 Draw: {draw_count}

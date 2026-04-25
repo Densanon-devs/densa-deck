@@ -45,8 +45,31 @@ _WEIGHTS = {
 }
 
 
-def estimate_power_level(deck: Deck) -> PowerBreakdown:
-    """Estimate the power level of a deck on a 1-10 scale."""
+def estimate_power_level(
+    deck: Deck,
+    *,
+    detected_combo_count: int = 0,
+    near_miss_combo_count: int = 0,
+) -> PowerBreakdown:
+    """Estimate the power level of a deck on a 1-10 scale.
+
+    Optional combo-density signals lift two axes that purely tag-based
+    scoring would underrate for combo decks:
+
+    - `detected_combo_count`: how many full combo lines are present in
+      the deck (from `densa_deck.combos.detect_combos`). A deck with
+      4+ unique combo lines closes via combo regardless of how many
+      "finisher"-tagged cards it runs, so we boost combo_potential
+      AND win_condition_quality (combo IS the win con).
+
+    - `near_miss_combo_count`: how many combos the deck is 1 card from.
+      A weaker signal than detected combos — surfaces a meaningful
+      combo orientation even before the deck has been fully tuned.
+
+    When both are 0 (caller didn't pass combo data), the function
+    behaves identically to the pre-combo-aware version. No backward
+    compatibility break.
+    """
     pb = PowerBreakdown()
     active = [e for e in deck.entries if e.zone not in (Zone.MAYBEBOARD, Zone.SIDEBOARD) and e.card]
     total = sum(e.quantity for e in active)
@@ -149,6 +172,25 @@ def estimate_power_level(deck: Deck) -> PowerBreakdown:
     elif low_cmc_finishers >= 1:
         combo_score += 1.0
 
+    # Concrete combo lines from the Commander Spellbook detector — a
+    # deck running 4 verified infinite combos is unambiguously combo-
+    # shaped regardless of how many "engine" / "tutor" tagged cards it
+    # has. Each detected combo line adds 1.5 to combo_score (capped),
+    # so 3+ lines saturates the axis. Near-misses contribute half as
+    # much because they require an additional tutor / draw to come
+    # together.
+    if detected_combo_count >= 3:
+        combo_score += 4.0
+        pb.reasons_up.append(f"{detected_combo_count} combo lines detected")
+    elif detected_combo_count >= 1:
+        combo_score += 1.5 * detected_combo_count
+        pb.reasons_up.append(f"{detected_combo_count} combo line(s) detected")
+    if near_miss_combo_count >= 4:
+        combo_score += 1.0
+        pb.reasons_up.append(f"{near_miss_combo_count} 1-away combo lines available")
+    elif near_miss_combo_count >= 1:
+        combo_score += 0.5
+
     pb.combo_potential = min(10, combo_score)
 
     # --- Mana efficiency (0-10) ---
@@ -197,6 +239,20 @@ def estimate_power_level(deck: Deck) -> PowerBreakdown:
     ))
     if unique_finishers >= 4:
         pb.win_condition_quality = min(10, pb.win_condition_quality + 2.0)
+
+    # Combo lines ARE win conditions — a deck with 2+ verified combos
+    # has a real path to victory even if its "finisher"-tagged count
+    # is low. Override the floor so a Thoracle/consultation deck doesn't
+    # read as 1.5/10 win-condition just because Thoracle isn't tagged
+    # FINISHER. Each detected combo line contributes 1.5 to the floor;
+    # 3 combos saturates around 6.0 / 10.
+    if detected_combo_count >= 1:
+        combo_floor = min(8.5, 3.0 + 1.5 * detected_combo_count)
+        if pb.win_condition_quality < combo_floor:
+            pb.win_condition_quality = combo_floor
+            pb.reasons_up.append(
+                f"Win condition includes {detected_combo_count} combo line(s)"
+            )
 
     # --- Card quality proxy (0-10) ---
     # Lower avg CMC, fewer dead cards, more cantrips/draw = higher quality

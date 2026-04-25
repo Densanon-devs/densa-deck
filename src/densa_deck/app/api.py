@@ -590,13 +590,47 @@ class AppApi:
 
     @_safe
     def diff_deck_versions(self, deck_id: str, version_a: int, version_b: int) -> dict:
-        """Diff two versions of a deck. Returns added/removed/score-delta."""
+        """Diff two versions of a deck. Returns added/removed/score-delta
+        plus combo gains/losses if the combo cache is populated."""
         store = self._get_vstore()
         a = store.get_version(deck_id, version_a)
         b = store.get_version(deck_id, version_b)
         if a is None or b is None:
             return {"ok": False, "error": "One or both versions not found."}
         d = diff_versions(a, b)
+
+        # Combo diff — surface which combo lines became complete or broken
+        # between the two versions. Skipped when the cache is empty.
+        combo_gained: list[dict] = []
+        combo_lost: list[dict] = []
+        try:
+            cstore = self._get_combo_store()
+            if cstore.combo_count() > 0:
+                from densa_deck.combos import diff_combos
+                # Reconstruct card-name list per version from the snapshot's
+                # decklist dict (key = card name, value = qty). Color identity
+                # comes from the latest version's metadata-free path: we
+                # collect any color we can see in either snapshot's zones.
+                a_names = list(a.decklist.keys())
+                b_names = list(b.decklist.keys())
+                # We don't have color identity directly on snapshots; pass
+                # None so diff_combos uses any-color semantics. The combo
+                # MUST be fully present in either version anyway, so a
+                # color-mismatch combo just won't have appeared in the
+                # MatchedCombo result for the prior version.
+                cdiff = diff_combos(
+                    store=cstore,
+                    before_card_names=a_names,
+                    after_card_names=b_names,
+                    color_identity=None,
+                )
+                combo_gained = [_combo_to_dict(m) for m in cdiff["gained"][:10]]
+                combo_lost = [_combo_to_dict(m) for m in cdiff["lost"][:10]]
+        except Exception:
+            # Non-fatal — if anything blows up in the combo path, the
+            # version diff still returns its core fields.
+            pass
+
         return {
             "version_a": a.version_number,
             "version_b": b.version_number,
@@ -606,6 +640,8 @@ class AppApi:
             "total_added": d.total_added,
             "total_removed": d.total_removed,
             "score_deltas": dict(d.score_deltas),
+            "combo_gained": combo_gained,
+            "combo_lost": combo_lost,
         }
 
     # ------------------------------------------------------------------ license
@@ -1864,9 +1900,37 @@ class AppApi:
         fmt = Format(format_) if format_ else Format.COMMANDER
         deck = resolve_deck(entries, db, name=name, format=fmt)
 
+        # Detect combos against the local cache (when populated). The
+        # coach session sheet surfaces combo lines so the coach can
+        # narrate the deck's win plan accurately, and we feed the same
+        # data into estimate_power_level + detect_archetype so the
+        # power/archetype shown in the sheet reflects combo reality.
+        combo_lines: list[str] = []
+        detected_combo_count = 0
+        try:
+            store = self._get_combo_store()
+            if store.combo_count() > 0:
+                from densa_deck.combos import detect_combos
+                deck_card_names_for_combo = [e.card.name for e in deck.entries if e.card]
+                deck_color_identity_for_combo = sorted({
+                    c.value for e in deck.entries if e.card for c in e.card.color_identity
+                })
+                matches = detect_combos(
+                    store=store,
+                    deck_card_names=deck_card_names_for_combo,
+                    deck_color_identity=deck_color_identity_for_combo,
+                    limit=8,
+                )
+                combo_lines = [m.combo.short_label() for m in matches]
+                detected_combo_count = len(matches)
+        except Exception:
+            # Non-fatal — coach starts without combo context if anything
+            # in the cache lookup blows up.
+            pass
+
         result = _analyze(deck)
-        power = estimate_power_level(deck)
-        archetype = detect_archetype(deck)
+        power = estimate_power_level(deck, detected_combo_count=detected_combo_count)
+        archetype = detect_archetype(deck, detected_combo_count=detected_combo_count)
 
         color_identity = sorted({
             c.value for e in deck.entries if e.card for c in e.card.color_identity
@@ -1885,6 +1949,7 @@ class AppApi:
             deck_cards=deck_cards,
             reasons_up=list(power.reasons_up),
             reasons_down=list(power.reasons_down),
+            combo_lines=combo_lines,
         )
         session = CoachSession(deck_sheet=sheet, allowed_cards=set(deck_cards))
 

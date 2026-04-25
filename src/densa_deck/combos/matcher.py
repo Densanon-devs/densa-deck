@@ -182,3 +182,54 @@ def detect_near_miss_combos(
     if limit is not None:
         near = near[:limit]
     return near
+
+
+def diff_combos(
+    *,
+    store: ComboStore,
+    before_card_names: list[str],
+    after_card_names: list[str],
+    color_identity: list[str] | None = None,
+) -> dict:
+    """Compute the set of combos that became COMPLETE / BROKEN between
+    two versions of a deck.
+
+    Used by deck-version diff UIs and by the analyst's compare-decks
+    narration: "this swap completes the Thoracle line and breaks the
+    Niv-Mizzet line." Returns:
+
+      {
+        "gained": [MatchedCombo, ...],   # complete in `after`, not in `before`
+        "lost":   [MatchedCombo, ...],   # complete in `before`, not in `after`
+        "still_present": [...],
+      }
+
+    Sorted by combo popularity (descending) within each bucket so the
+    most-impactful gains/losses surface first.
+    """
+    before_set = {n for n in before_card_names if n}
+    after_set = {n for n in after_card_names if n}
+
+    # Run the full-match detector on each side so we get MatchedCombo
+    # entries with the rich fields the UI wants.
+    before_matches = detect_combos(
+        store=store, deck_card_names=list(before_set),
+        deck_color_identity=color_identity,
+    )
+    after_matches = detect_combos(
+        store=store, deck_card_names=list(after_set),
+        deck_color_identity=color_identity,
+    )
+
+    before_ids = {m.combo.combo_id for m in before_matches}
+    after_ids = {m.combo.combo_id for m in after_matches}
+
+    gained = [m for m in after_matches if m.combo.combo_id not in before_ids]
+    lost = [m for m in before_matches if m.combo.combo_id not in after_ids]
+    still = [m for m in after_matches if m.combo.combo_id in before_ids]
+
+    return {
+        "gained": gained,
+        "lost": lost,
+        "still_present": still,
+    }

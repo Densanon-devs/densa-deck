@@ -280,6 +280,47 @@ def main():
         "--limit", type=int, default=25,
         help="Max combos to print (default: 25)")
 
+    combos_near = combos_subs.add_parser(
+        "near-miss", help="List combos this deck is N cards away from completing")
+    combos_near.add_argument(
+        "deck", nargs="?", help="Deck file (or '-' / omitted for stdin)")
+    combos_near.add_argument(
+        "--format", default="commander",
+        help="Format for color-identity (default: commander)")
+    combos_near.add_argument(
+        "--max-missing", type=int, default=1,
+        help="Max missing cards to count as 'near miss' (default: 1)")
+    combos_near.add_argument("--db", type=Path)
+    combos_near.add_argument("--limit", type=int, default=25)
+
+    # bracket command — Commander bracket-fit assessment (free tier)
+    bracket_parser = subparsers.add_parser(
+        "bracket", help="Assess how a deck fits a Commander bracket (1-precon ... 5-cedh)")
+    bracket_parser.add_argument(
+        "deck", nargs="?", help="Deck file (or '-' / omitted for stdin)")
+    bracket_parser.add_argument(
+        "--target", required=True,
+        choices=["1-precon", "2-upgraded", "3-optimized", "4-high-power", "5-cedh"],
+        help="Target bracket label")
+    bracket_parser.add_argument(
+        "--format", default="commander",
+        help="Format profile (default: commander)")
+
+    # export command — MTGO / MTGA / Moxfield export (free tier)
+    export_parser = subparsers.add_parser(
+        "export", help="Export a deck to MTGA / MTGO (.dek) / Moxfield format")
+    export_parser.add_argument("deck", help="Deck file to export")
+    export_parser.add_argument(
+        "--target", default="mtga",
+        choices=["mtga", "mtgo", "moxfield"],
+        help="Export format (default: mtga)")
+    export_parser.add_argument(
+        "--format", default="commander",
+        help="Source format profile (default: commander)")
+    export_parser.add_argument(
+        "--out", type=Path,
+        help="Write to file instead of stdout")
+
     # rule0 command — pre-game discussion worksheet (free tier)
     rule0_parser = subparsers.add_parser(
         "rule0",
@@ -368,6 +409,10 @@ def main():
         cmd_explain(args)
     elif command == "compare-decks":
         cmd_compare_decks(args)
+    elif command == "bracket":
+        cmd_bracket(args)
+    elif command == "export":
+        cmd_export(args)
 
 
 def _get_db(args) -> CardDatabase:
@@ -2659,6 +2704,54 @@ def cmd_combos(args):
         console.print(f"[green]Done — {written} combos cached.[/green]")
         return
 
+    if action == "near-miss":
+        if store.combo_count() == 0:
+            console.print(
+                "[yellow]Combo cache empty. Run `densa-deck combos refresh` first.[/yellow]"
+            )
+            return
+        text = _read_deck_text(args.deck)
+        if not text.strip():
+            console.print("[red]No deck text provided.[/red]")
+            return
+        from densa_deck.combos import detect_near_miss_combos
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.deck.resolver import resolve_deck
+        from densa_deck.models import Format
+        db = _get_db(args)
+        if db.card_count() == 0:
+            console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+            return
+        try:
+            fmt = Format(args.format)
+        except ValueError:
+            fmt = Format.COMMANDER
+        entries = parse_decklist(text)
+        deck = resolve_deck(entries, db, format=fmt)
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        near = detect_near_miss_combos(
+            store=store,
+            deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity,
+            max_missing=args.max_missing,
+            limit=args.limit,
+        )
+        if not near:
+            console.print(f"[green]No combos within {args.max_missing} card(s) of completion.[/green]")
+            return
+        console.print(
+            f"[bold green]{len(near)} combo line(s) within {args.max_missing} card(s):[/bold green]",
+        )
+        for i, n in enumerate(near, start=1):
+            missing_str = ", ".join(n.missing_cards)
+            console.print(f"  {i:>2}. {n.combo.short_label()}")
+            console.print(f"      [dim]missing: {missing_str}[/dim]")
+            console.print(f"      [dim]{n.combo.spellbook_url}[/dim]")
+        return
+
     if action == "detect":
         if store.combo_count() == 0:
             console.print(
@@ -2915,6 +3008,121 @@ def cmd_compare_decks(args):
     console.print(f"[dim]power gap (B - A): {r.power_gap:+.1f}[/dim]")
     if r.summary:
         console.print(r.summary)
+
+
+def cmd_bracket(args):
+    """Assess how a deck fits a Commander bracket."""
+    from densa_deck.analysis.brackets import bracket_fit
+    from densa_deck.analysis.power_level import estimate_power_level
+    from densa_deck.analysis.static import analyze_deck as run_static_analysis
+    from densa_deck.combos import ComboStore, detect_combos
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.models import Format
+
+    text = _read_deck_text(args.deck)
+    if not text.strip():
+        console.print("[red]No deck text provided.[/red]")
+        return
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+        return
+    try:
+        fmt = Format(args.format)
+    except ValueError:
+        fmt = Format.COMMANDER
+    entries = parse_decklist(text)
+    deck = resolve_deck(entries, db, format=fmt)
+    analysis = run_static_analysis(deck)
+    power = estimate_power_level(deck)
+
+    # Combo count from the local cache, if populated. Affects the "max
+    # combos" constraint per bracket.
+    combo_count = 0
+    cstore = ComboStore()
+    if cstore.combo_count() > 0:
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        combo_count = len(detect_combos(
+            store=cstore, deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity, limit=50,
+        ))
+
+    fit = bracket_fit(
+        deck=deck, target_label=args.target,
+        power_overall=float(power.overall),
+        interaction_count=int(analysis.interaction_count),
+        ramp_count=int(analysis.ramp_count),
+        detected_combo_count=combo_count,
+    )
+    color_for_verdict = {
+        "fits": "green",
+        "over-pitches": "red",
+        "under-delivers": "yellow",
+    }.get(fit.verdict, "white")
+    console.print(
+        f"[bold {color_for_verdict}]{fit.verdict.upper()}[/bold {color_for_verdict}] — "
+        f"detected [bold]{fit.detected_label}[/bold], target [bold]{fit.target_label}[/bold]"
+    )
+    console.print(fit.headline)
+    if fit.over_signals:
+        console.print()
+        console.print("[bold]Over the cap:[/bold]")
+        for s in fit.over_signals:
+            console.print(f"  - {s}")
+    if fit.under_signals:
+        console.print()
+        console.print("[bold]Under the floor:[/bold]")
+        for s in fit.under_signals:
+            console.print(f"  - {s}")
+    if fit.recommendations:
+        console.print()
+        console.print("[bold]Punch list:[/bold]")
+        for r in fit.recommendations:
+            console.print(f"  - {r}")
+
+
+def cmd_export(args):
+    """Export a deck to MTGA / MTGO / Moxfield format."""
+    from densa_deck.app.api import (
+        _export_mtga, _export_mtgo, _export_moxfield_text,
+    )
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.models import Format
+
+    text = Path(args.deck).read_text(encoding="utf-8")
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+        return
+    try:
+        fmt = Format(args.format)
+    except ValueError:
+        fmt = Format.COMMANDER
+    entries = parse_decklist(text)
+    deck = resolve_deck(entries, db, format=fmt)
+
+    target = args.target.lower()
+    if target == "mtga":
+        content, fname = _export_mtga(deck)
+    elif target == "mtgo":
+        content, fname = _export_mtgo(deck)
+    else:
+        content, fname = _export_moxfield_text(deck)
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.write_text(content, encoding="utf-8")
+        console.print(f"[green]Wrote {len(content)} chars to {out_path}[/green]")
+    else:
+        # Print plain (no Rich markup) so the output is paste-ready.
+        sys.stdout.write(content)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
 
 
 def _resolve_analyst_backend():

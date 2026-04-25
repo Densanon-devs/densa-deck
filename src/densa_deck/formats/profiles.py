@@ -189,11 +189,30 @@ def get_format_profile(fmt: Format | None) -> FormatProfile | None:
     return FORMAT_PROFILES.get(fmt)
 
 
-def detect_archetype(deck: Deck) -> DeckArchetype:
-    """Detect the deck's archetype based on tag density."""
+def detect_archetype(
+    deck: Deck,
+    *,
+    detected_combo_count: int = 0,
+) -> DeckArchetype:
+    """Detect the deck's archetype based on tag density.
+
+    Optional `detected_combo_count` (from `densa_deck.combos.detect_combos`)
+    overrides the tag-based classifier when 2+ verified combo lines are
+    present — combo decks running Thoracle/Consultation often look like
+    "midrange" or "control" by tag density because Thoracle isn't tagged
+    FINISHER. Two+ combos is a stronger signal than any tag heuristic.
+    """
     profile = get_format_profile(deck.format)
     if profile is None:
         return DeckArchetype.UNKNOWN
+
+    # Combo override: 2+ verified combo lines is a high-confidence signal
+    # that the deck IS combo, regardless of tag density or whether the
+    # format profile lists COMBO in archetype_hints. We don't override
+    # on a single combo because most casual decks include one "Sol Ring +
+    # X" infinite that isn't actually their game plan.
+    if detected_combo_count >= 2:
+        return DeckArchetype.COMBO
 
     active = [e for e in deck.entries if e.zone not in (Zone.MAYBEBOARD, Zone.SIDEBOARD) and e.card]
     total = sum(e.quantity for e in active)
