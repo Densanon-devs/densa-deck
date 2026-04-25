@@ -586,7 +586,64 @@
         <h3>Mana pips</h3>
         <div class="pip-row">${pipChips}</div>
       </div>
+      <div class="stat-block" id="builder-combos-block">
+        <h3>Combos</h3>
+        <div id="builder-combos-body" class="panel-hint">Detecting…</div>
+      </div>
     `;
+    // Combo detection runs against the current draft and the cached
+    // Commander Spellbook dataset. Debounced so rapid +/- clicks don't
+    // fire 30 detection calls.
+    scheduleComboDetect();
+  }
+
+  let comboTimer = null;
+  function scheduleComboDetect() {
+    if (comboTimer) clearTimeout(comboTimer);
+    comboTimer = setTimeout(detectBuilderCombos, 600);
+  }
+
+  async function detectBuilderCombos() {
+    const body = e("builder-combos-body");
+    if (!body) return;
+    const text = draftToDecklistText();
+    // Empty draft — show a hint and skip the call
+    if (totalCardCount() === 0) {
+      body.innerHTML = `<span class="panel-hint">Add cards to scan for combos.</span>`;
+      return;
+    }
+    try {
+      const r = await callApi(
+        "detect_combos_for_deck",
+        text, builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+        10,  // small limit — Build tab is a sidebar, not a full panel
+      );
+      if (!r || r.match_count === 0) {
+        body.innerHTML = `<span class="panel-hint">No combos detected.</span>`;
+        return;
+      }
+      const top = (r.combos || []).slice(0, 5).map(c => `
+        <li title="${escape(c.short_label)}">${escape(c.short_label)}</li>
+      `).join("");
+      const more = r.match_count > 5 ? `<div class="panel-hint">+${r.match_count - 5} more</div>` : "";
+      body.innerHTML = `
+        <div><strong>${r.match_count}</strong> combo${r.match_count === 1 ? "" : " lines"} detected</div>
+        <ul style="margin: 6px 0 0 20px; padding: 0; font-size: 0.78rem; line-height: 1.4;">${top}</ul>
+        ${more}
+      `;
+    } catch (err) {
+      // ComboCacheEmpty / IngestRequired surface as errors — show
+      // a helpful hint instead of an alarming red message.
+      const msg = (err && err.message) || "";
+      if (msg.toLowerCase().includes("combo data not loaded")) {
+        body.innerHTML = `<span class="panel-hint">Combo cache empty — refresh on Settings tab.</span>`;
+      } else if (msg.toLowerCase().includes("ingestrequired") || msg.toLowerCase().includes("not ingested")) {
+        body.innerHTML = `<span class="panel-hint">Card DB not ingested — see Settings.</span>`;
+      } else {
+        body.innerHTML = `<span class="panel-hint">Combo detection unavailable.</span>`;
+      }
+    }
   }
 
   // ---------------- persistence ----------------

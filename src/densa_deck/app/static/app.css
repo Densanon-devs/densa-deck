@@ -1861,6 +1861,68 @@ code {
   line-height: 1.4;
 }
 
+/* Combo detection rows on Analyze view */
+.combo-row {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+.combo-row .combo-label {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.combo-row .combo-meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+}
+.combo-row .combo-meta a {
+  color: var(--color-accent-green, #34d399);
+  text-decoration: none;
+}
+.combo-row .combo-desc {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  opacity: 0.85;
+  line-height: 1.4;
+}
+
+/* Rule 0 worksheet pre — monospaced sheet for paste-into-Discord */
+.rule0-text {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-height: 400px;
+  overflow-y: auto;
+  margin: 8px 0 0;
+}
+
+/* Explain-card result panel inside the castability section */
+.explain-card-result {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.explain-card-btn {
+  padding: 3px 10px !important;
+  font-size: 0.78rem !important;
+}
+
 /* Moxfield Export → Text steps list */
 .moxfield-steps {
   margin: 8px 0 8px 22px;

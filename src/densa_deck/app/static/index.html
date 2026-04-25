@@ -83,6 +83,7 @@ Mainboard:
             <button id="save-btn" class="btn btn-outline" title="Save a snapshot of this deck for later editing + comparison">Save a version</button>
             <button id="goldfish-btn" class="btn btn-outline" title="Pro: thousands of solo games, kill turn distribution">Goldfish (Pro)</button>
             <button id="gauntlet-btn" class="btn btn-outline" title="Pro: test vs 11 archetype profiles">Gauntlet (Pro)</button>
+            <button id="rule0-btn" class="btn btn-outline" title="Generate a pre-game discussion sheet (Rule 0 worksheet)">Rule 0 worksheet</button>
             <span id="analyze-status" class="status-text"></span>
           </div>
         </div>
@@ -322,8 +323,10 @@ Mainboard:
                   </select>
                 </label>
                 <button id="duel-run-btn" class="btn btn-primary">Run duel</button>
+                <button id="compare-decks-btn" class="btn btn-outline" title="Analyst prose comparison of the two decks (uses the local LLM)">Analyst compare (Pro)</button>
               </div>
               <div id="duel-result" class="duel-result hidden"></div>
+              <div id="compare-decks-result" class="duel-result hidden"></div>
             </div>
           </div>
         </div>
@@ -493,6 +496,26 @@ Mainboard:
       </div>
       <div class="modal-footer">
         <button id="moxfield-help-dismiss-btn" class="btn btn-primary">Got it — I'll paste it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rule 0 worksheet modal — pre-game discussion sheet for Commander.
+       Renders the deterministic worksheet with a copy-to-clipboard button
+       so the player can paste it into Discord / sleeve note / etc. -->
+  <div id="rule0-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Rule 0 worksheet</h2>
+        <button id="rule0-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="panel-hint">A 10-second-read sheet for pre-game discussion. Copy and paste into your playgroup chat before sitting down.</p>
+        <pre id="rule0-text" class="rule0-text">(loading…)</pre>
+      </div>
+      <div class="modal-footer">
+        <button id="rule0-copy-btn" class="btn btn-outline">Copy to clipboard</button>
+        <button id="rule0-dismiss-btn" class="btn btn-primary">Done</button>
       </div>
     </div>
   </div>

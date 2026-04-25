@@ -49,7 +49,8 @@ function cacheElements() {
     "coach-reset-btn", "coach-close-btn",
     "coach-messages", "coach-form", "coach-input", "coach-send-btn",
     "decklist-input", "deck-name-input", "format-select",
-    "analyze-btn", "save-btn", "goldfish-btn", "gauntlet-btn",
+    "analyze-btn", "save-btn", "goldfish-btn", "gauntlet-btn", "rule0-btn",
+    "rule0-modal", "rule0-text", "rule0-copy-btn", "rule0-close-btn", "rule0-dismiss-btn",
     "analyze-status", "analysis-result", "goldfish-result", "gauntlet-result",
     "refresh-decks-btn", "deck-list",
     "deck-editor-empty", "deck-editor-open",
@@ -58,6 +59,7 @@ function cacheElements() {
     "editor-save-version-btn", "editor-analyze-btn", "editor-history-btn", "editor-delete-btn",
     "editor-duel-btn", "editor-duel", "duel-opponent-select", "duel-sims-select",
     "duel-run-btn", "duel-result",
+    "compare-decks-btn", "compare-decks-result",
     "editor-history", "history-body", "diff-panel",
     "tier-status", "license-key-input", "license-activate-btn", "license-status",
     "system-status", "toast",
@@ -136,6 +138,31 @@ async function bootstrap() {
   els.save_btn.addEventListener("click", saveFromAnalyzeTab);
   els.goldfish_btn.addEventListener("click", runGoldfish);
   els.gauntlet_btn.addEventListener("click", runGauntlet);
+  if (els.rule0_btn) els.rule0_btn.addEventListener("click", openRule0Worksheet);
+  if (els.rule0_close_btn) els.rule0_close_btn.addEventListener("click", hideRule0);
+  if (els.rule0_dismiss_btn) els.rule0_dismiss_btn.addEventListener("click", hideRule0);
+  if (els.rule0_copy_btn) {
+    els.rule0_copy_btn.addEventListener("click", () => {
+      const text = els.rule0_text?.textContent || "";
+      if (!text) return;
+      const orig = els.rule0_copy_btn.textContent;
+      try {
+        navigator.clipboard.writeText(text).then(() => {
+          els.rule0_copy_btn.textContent = "Copied!";
+          setTimeout(() => { els.rule0_copy_btn.textContent = orig; }, 1500);
+        }).catch(() => {
+          // pywebview's clipboard support varies — fall back to manual select.
+          const r = document.createRange();
+          r.selectNode(els.rule0_text);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+          els.rule0_copy_btn.textContent = "Selected — Ctrl+C";
+          setTimeout(() => { els.rule0_copy_btn.textContent = orig; }, 2000);
+        });
+      } catch (e) { /* non-fatal */ }
+    });
+  }
   els.url_import_btn.addEventListener("click", importDeckFromUrl);
   // Ctrl/Cmd+Enter in the decklist textarea triggers Analyze
   els.decklist_input.addEventListener("keydown", (e) => {
@@ -191,6 +218,9 @@ async function bootstrap() {
   els.editor_delete_btn.addEventListener("click", deleteCurrentDeck);
   els.editor_duel_btn.addEventListener("click", toggleDuelPanel);
   els.duel_run_btn.addEventListener("click", runDuel);
+  if (els.compare_decks_btn) {
+    els.compare_decks_btn.addEventListener("click", runAnalystCompare);
+  }
 
   // Settings tab
   els.license_activate_btn.addEventListener("click", activateLicense);
@@ -261,6 +291,59 @@ async function bootstrap() {
   if (els.combo_refresh_btn) {
     els.combo_refresh_btn.addEventListener("click", startComboRefresh);
   }
+
+  // Delegated handler for "Why? (Pro)" buttons next to unreliable cards
+  // — these are inside renderAnalysis output and re-rendered each Analyze
+  // run, so a single delegated listener avoids per-render binding.
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".explain-card-btn");
+    if (!btn) return;
+    ev.preventDefault();
+    if (!state.tier?.is_pro) {
+      toast("Card explanations are Pro — activate a license on Settings.", "error");
+      return;
+    }
+    const cardName = btn.dataset.card;
+    if (!cardName) return;
+    const text = els.decklist_input.value.trim();
+    if (!text) {
+      toast("Re-run Analyze first so we have a deck to inspect.", "error");
+      return;
+    }
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Thinking…";
+    const target = $("explain-card-result");
+    if (target) {
+      target.classList.remove("hidden");
+      target.innerHTML = `<p class="panel-hint">Running the analyst on <strong>${escape(cardName)}</strong>…</p>`;
+    }
+    try {
+      const r = await callApi("explain_card_in_deck", text, cardName,
+                              els.format_select.value,
+                              els.deck_name_input.value || "Unnamed Deck");
+      if (target) {
+        const verifiedBadge = r.verified
+          ? `<span class="confidence">verified ${(r.confidence * 100).toFixed(0)}%</span>`
+          : `<span class="confidence" style="color:#e8a33b">unverified</span>`;
+        const flagsLine = (r.flags || []).length
+          ? `<p class="panel-hint">flags: ${r.flags.map(escape).join("; ")}</p>`
+          : "";
+        target.innerHTML = `
+          <div class="duel-verdict">
+            <div class="duel-verdict-headline">${escape(r.card_name)} ${verifiedBadge}</div>
+          </div>
+          <p>${escape(r.summary).replace(/\n/g, "<br>")}</p>
+          ${flagsLine}
+        `;
+      }
+    } catch (e) {
+      if (target) target.innerHTML = `<p class="panel-hint" style="color:#ff9999">Explain failed: ${escape(e.message)}</p>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  });
   if (els.db_diff_close_btn) {
     els.db_diff_close_btn.addEventListener("click", () => hideDbDiffModal());
   }
@@ -669,9 +752,9 @@ function renderAnalysis(r, target) {
 
     ${r.castability.unreliable_cards.length ? `
       <div class="panel result-section">
-        <h3>Castability warnings</h3>
+        <h3>Castability warnings ${helpIcon("castability", {title: "Castability"})}</h3>
         <table class="castability-table">
-          <thead><tr><th>Card</th><th>Cost</th><th>On-curve %</th><th>Bottleneck</th></tr></thead>
+          <thead><tr><th>Card</th><th>Cost</th><th>On-curve %</th><th>Bottleneck</th><th></th></tr></thead>
           <tbody>
             ${r.castability.unreliable_cards.map(c =>
               `<tr>
@@ -679,10 +762,12 @@ function renderAnalysis(r, target) {
                 <td>${escape(c.mana_cost)}</td>
                 <td>${(c.on_curve_probability * 100).toFixed(0)}%</td>
                 <td>${escape(c.bottleneck_color || "-")}</td>
+                <td><button class="btn btn-outline btn-slim explain-card-btn" data-card="${escape(c.name)}" title="Run the analyst on this single card (Pro)">Why? (Pro)</button></td>
               </tr>`
             ).join("")}
           </tbody>
         </table>
+        <div id="explain-card-result" class="explain-card-result hidden"></div>
       </div>` : ""}
 
     ${r.staples.missing.length ? `
@@ -716,6 +801,11 @@ function renderAnalysis(r, target) {
           ).join("")}
         </div>
       </div>` : ""}
+
+    <div id="combos-section" class="panel result-section hidden">
+      <h3>Detected combos <span id="combos-count" class="status-text"></span></h3>
+      <div id="combos-list"></div>
+    </div>
   `;
 
   // Fire the fuzzy-match lookup async so it doesn't block the main render.
@@ -723,6 +813,64 @@ function renderAnalysis(r, target) {
   // the user can click to fix their decklist.
   if (r.unresolved_cards.length) {
     fillUnresolvedSuggestions(r.unresolved_cards.slice(0, 20));
+  }
+
+  // Combo detection runs in the background — surfaces a "Detected combos"
+  // section in the analysis output if the cache is populated AND any
+  // combo lines match the deck. Stays hidden when the cache is empty so
+  // the user isn't nagged before they've refreshed combo data.
+  fillCombosForCurrentDeck();
+}
+
+async function fillCombosForCurrentDeck() {
+  const text = els.decklist_input.value.trim();
+  if (!text) return;
+  const section = $("combos-section");
+  const list = $("combos-list");
+  const count = $("combos-count");
+  if (!section || !list || !count) return;
+  try {
+    const r = await callApi(
+      "detect_combos_for_deck",
+      text, els.format_select.value,
+      els.deck_name_input.value || "Unnamed Deck",
+      25,
+    );
+    if (!r || r.match_count === 0) return;
+    count.textContent = `(${r.match_count})`;
+    list.innerHTML = (r.combos || []).map(c => `
+      <div class="combo-row">
+        <div class="combo-label">${escape(c.short_label)}</div>
+        <div class="combo-meta">
+          ${c.bracket_tag ? `<span class="badge-${escape(c.bracket_tag.toLowerCase())}" style="padding:1px 6px;border-radius:8px;font-size:0.72rem">tier ${escape(c.bracket_tag)}</span>` : ""}
+          ${c.popularity ? `<span class="status-text">${c.popularity.toLocaleString()} decks on Spellbook</span>` : ""}
+          <a href="#" class="external-link combo-link" data-url="${escape(c.spellbook_url)}">Open on Spellbook &rarr;</a>
+        </div>
+        ${c.description ? `<div class="combo-desc">${escape(c.description.split("\n")[0]).slice(0, 240)}</div>` : ""}
+      </div>
+    `).join("");
+    // Wire the combo external links — same pattern as the existing
+    // .external-link delegation: they're added after bootstrap so we
+    // bind them inline on insertion.
+    list.querySelectorAll(".combo-link").forEach(a => {
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const url = a.dataset.url;
+        try {
+          if (window.pywebview?.api?.open_external) {
+            window.pywebview.api.open_external(url);
+          } else {
+            window.open(url, "_blank");
+          }
+        } catch (e) { /* non-fatal */ }
+      });
+    });
+    section.classList.remove("hidden");
+  } catch (e) {
+    // ComboCacheEmpty / IngestRequired fall through here as Errors —
+    // we deliberately do NOT toast because both are user-actionable
+    // states (refresh combo data / ingest cards). The hidden section
+    // stays hidden when the cache isn't ready.
   }
 }
 
@@ -1007,6 +1155,67 @@ function toggleDuelPanel() {
   // Close the history panel if it's open — only one sub-tab at a time to
   // keep the editor column readable.
   els.editor_history.classList.add("hidden");
+}
+
+async function runAnalystCompare() {
+  if (!state.currentDeckId) return;
+  if (!state.tier?.is_pro) {
+    toast("Analyst compare is Pro — activate a license on Settings.", "error");
+    return;
+  }
+  const oppId = els.duel_opponent_select.value;
+  if (!oppId) {
+    toast("Pick an opponent deck first.", "error");
+    return;
+  }
+  els.compare_decks_btn.disabled = true;
+  const orig = els.compare_decks_btn.textContent;
+  els.compare_decks_btn.textContent = "Comparing…";
+  els.compare_decks_result.classList.remove("hidden");
+  els.compare_decks_result.innerHTML = `<p class="panel-hint">Running the analyst — usually 5-15s on the local model…</p>`;
+  try {
+    const r = await callApi("compare_decks_analyst", state.currentDeckId, oppId);
+    const sign = r.power_gap >= 0 ? "+" : "";
+    const verifiedBadge = r.verified
+      ? `<span class="confidence">verified ${(r.confidence * 100).toFixed(0)}%</span>`
+      : `<span class="confidence" style="color:#e8a33b">unverified</span>`;
+    const deltaRows = Object.entries(r.role_deltas || {})
+      .map(([k, v]) => {
+        const s = v >= 0 ? "+" : "";
+        const color = v === 0 ? "var(--color-text-muted)"
+          : v > 0 ? "var(--color-accent-green, #34d399)" : "var(--color-primary)";
+        return `<tr><td>${escape(k)}</td><td style="text-align:right;color:${color};font-weight:600">${s}${v}</td></tr>`;
+      })
+      .join("");
+    const addedSample = (r.added_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
+    const removedSample = (r.removed_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
+    els.compare_decks_result.innerHTML = `
+      <div class="duel-verdict">
+        <div class="duel-verdict-headline">Analyst comparison ${verifiedBadge}</div>
+        <div class="duel-verdict-sub">Power gap (B - A): ${sign}${r.power_gap.toFixed(1)}</div>
+      </div>
+      <div class="panel" style="margin-top:8px">
+        <p>${escape(r.summary).replace(/\n/g, "<br>")}</p>
+        <div class="panel-row" style="gap: 16px; align-items: flex-start;">
+          <div style="flex:1">
+            <h4>Role deltas (B − A)</h4>
+            <table class="gauntlet-table"><tbody>${deltaRows}</tbody></table>
+          </div>
+          <div style="flex:1">
+            <h4>Added in B</h4>
+            <p class="panel-hint">${addedSample}${(r.added_cards || []).length > 6 ? ` … +${r.added_cards.length - 6} more` : ""}</p>
+            <h4 style="margin-top:10px">Removed in B</h4>
+            <p class="panel-hint">${removedSample}${(r.removed_cards || []).length > 6 ? ` … +${r.removed_cards.length - 6} more` : ""}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  } catch (e) {
+    els.compare_decks_result.innerHTML = `<p class="panel-hint" style="color:#ff9999">Compare failed: ${escape(e.message)}</p>`;
+  } finally {
+    els.compare_decks_btn.disabled = false;
+    els.compare_decks_btn.textContent = orig;
+  }
 }
 
 async function runDuel() {
@@ -1294,6 +1503,35 @@ function renderGauntlet(r) {
     </div>
   `;
   els.gauntlet_result.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ------------------------------ Rule 0 worksheet ------------------------------
+
+async function openRule0Worksheet() {
+  const text = els.decklist_input.value.trim();
+  if (!text) { toast("Paste a decklist first.", "error"); return; }
+  if (!els.rule0_modal) return;
+  els.rule0_modal.classList.remove("hidden");
+  els.rule0_modal.setAttribute("aria-hidden", "false");
+  els.rule0_text.textContent = "(loading...)";
+  try {
+    const r = await callApi(
+      "build_rule0_worksheet",
+      text,
+      els.format_select.value,
+      els.deck_name_input.value || "Unnamed Deck",
+      true,  // include_combos
+    );
+    els.rule0_text.textContent = r.rendered_text || "(no output)";
+  } catch (e) {
+    els.rule0_text.textContent = "Error: " + e.message;
+  }
+}
+
+function hideRule0() {
+  if (!els.rule0_modal) return;
+  els.rule0_modal.classList.add("hidden");
+  els.rule0_modal.setAttribute("aria-hidden", "true");
 }
 
 // ------------------------------ Setup (ingest + analyst pull) ------------------------------
