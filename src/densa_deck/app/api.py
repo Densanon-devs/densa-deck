@@ -92,7 +92,10 @@ class AppApi:
         self._progress: dict[str, dict] = {
             "ingest": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
             "analyst_pull": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
+            "combo_refresh": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
         }
+        # Lazily resolved by _get_combo_store() on first combo call.
+        self._combo_store = None
         self._threads: dict[str, threading.Thread] = {}
         # Active coach REPL sessions, keyed by opaque uuid tokens so the
         # frontend can track them without exposing the CoachSession object
@@ -1079,6 +1082,395 @@ class AppApi:
             return {"ok": False, "error": f"Failed to clear draft: {e}"}
         return {"cleared": True}
 
+    # ------------------------------------------------------------------ combos (Commander Spellbook)
+
+    @_safe
+    def get_combo_status(self) -> dict:
+        """Return the combo-cache status for the Settings panel.
+
+        Empty cache = "Refresh combos" button surfaced. Non-empty =
+        show the combo count and last-refresh timestamp.
+        """
+        from densa_deck.combos import ComboStore
+        store = self._get_combo_store()
+        return {
+            "combo_count": store.combo_count(),
+            "last_refresh_at": store.get_metadata("last_refresh_at") or "",
+            "source": store.get_metadata("source") or "",
+        }
+
+    @_safe
+    def detect_combos_for_deck(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        limit: int = 25,
+    ) -> dict:
+        """Run combo detection on the given decklist.
+
+        Returns a dict with the matched combos sorted by popularity. The
+        UI can render the most-popular 25 by default and let the user
+        load more. Empty result set is fine — most casual decks won't
+        have combos.
+
+        Frontend should also call get_combo_status first; if the cache is
+        empty, prompt the user to click "Refresh combos" before running
+        detection (we don't auto-refresh on demand to keep this call cheap).
+        """
+        store = self._get_combo_store()
+        if store.combo_count() == 0:
+            return {
+                "ok": False,
+                "error": "Combo data not loaded yet. Refresh from Settings → Combo data first.",
+                "error_type": "ComboCacheEmpty",
+            }
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):  # error envelope
+            return deck
+        from densa_deck.combos import detect_combos
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        matches = detect_combos(
+            store=store,
+            deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity,
+            limit=limit,
+        )
+        return {
+            "deck_name": deck.name,
+            "match_count": len(matches),
+            "color_identity": deck_color_identity,
+            "combos": [_combo_to_dict(m) for m in matches],
+        }
+
+    @_safe
+    def combo_refresh_start(self) -> dict:
+        """Kick off a background combo-data refresh from Commander Spellbook.
+
+        Polls via combo_refresh_progress() — same UX shape as ingest_start
+        / analyst_pull_start.
+        """
+        with self._progress_lock:
+            current = self._progress.get("combo_refresh", {})
+            existing_thread = self._threads.get("combo_refresh")
+            if current.get("running") or (existing_thread and existing_thread.is_alive()):
+                return {"ok": False, "error": "Combo refresh already running"}
+            self._progress["combo_refresh"] = {
+                "pct": 0, "message": "Starting...", "done": False,
+                "error": None, "running": True,
+            }
+            t = threading.Thread(target=self._do_combo_refresh, daemon=True)
+            self._threads["combo_refresh"] = t
+            t.start()
+        return {"ok": True, "started": True}
+
+    @_safe
+    def combo_refresh_progress(self) -> dict:
+        return self._read_progress("combo_refresh")
+
+    def _get_combo_store(self):
+        """Lazily resolve a ComboStore instance scoped to this AppApi.
+
+        Stored next to the card DB so all per-user state stays under
+        a single ~/.densa-deck/ directory.
+        """
+        from densa_deck.combos import ComboStore, DEFAULT_COMBO_DB_PATH
+        if getattr(self, "_combo_store", None) is None:
+            if self._db_path:
+                path = Path(self._db_path).parent / "combos.db"
+            else:
+                path = DEFAULT_COMBO_DB_PATH
+            self._combo_store = ComboStore(db_path=path)
+        return self._combo_store
+
+    def _do_combo_refresh(self):
+        """Background worker for combo refresh.
+
+        Walks the Commander Spellbook /variants/ pagination, writing into
+        the local SQLite store. Updates self._progress["combo_refresh"]
+        at every page boundary so the UI bar advances without the worker
+        having to estimate a total upfront.
+        """
+        try:
+            from densa_deck.combos import refresh_combo_snapshot
+            store = self._get_combo_store()
+
+            def _on_page(pages: int, combos_seen: int):
+                # The dataset is ~30k items at PAGE_SIZE=500 → ~60 pages.
+                # Cap reported pct at 95 until the upsert finishes so the
+                # bar visibly completes only when the data is actually
+                # written, not just downloaded.
+                est_pct = min(int((pages / 60.0) * 95), 95)
+                self._update_progress(
+                    "combo_refresh",
+                    pct=est_pct,
+                    message=f"Fetched {combos_seen} combos across {pages} pages...",
+                )
+
+            written = refresh_combo_snapshot(
+                store=store,
+                user_agent=f"DensaDeck/0.2.0 (combo-fetch)",
+                progress_cb=_on_page,
+            )
+            self._update_progress(
+                "combo_refresh",
+                pct=100,
+                message=f"Done — {written} combos cached.",
+                done=True, running=False,
+            )
+        except Exception as e:
+            self._update_progress(
+                "combo_refresh",
+                error=str(e),
+                message=f"Combo refresh failed: {e}",
+                done=True, running=False,
+            )
+
+    # ------------------------------------------------------------------ analyst Phase 6
+
+    @_safe
+    def compare_decks_analyst(
+        self,
+        deck_a_id: str,
+        deck_b_id: str,
+    ) -> dict:
+        """Compare two saved decks and return analyst prose + numeric deltas.
+
+        Both decks must be saved (have at least one VersionStore snapshot).
+        Loads the latest of each, runs static analysis on both, computes
+        the diff, and runs the compare-decks prompt against the cached
+        coach backend.
+        """
+        store = self._get_vstore()
+        snap_a = store.get_latest(deck_a_id)
+        snap_b = store.get_latest(deck_b_id)
+        if snap_a is None:
+            return {"ok": False, "error": f"No saved versions for deck '{deck_a_id}'."}
+        if snap_b is None:
+            return {"ok": False, "error": f"No saved versions for deck '{deck_b_id}'."}
+
+        from densa_deck.analyst.phase6 import compare_decks
+        from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.formats.profiles import detect_archetype
+        from densa_deck.versioning.storage import diff_versions
+
+        deck_a = self._build_deck(_snapshot_to_text(snap_a), snap_a.format,
+                                  snap_a.name or deck_a_id)
+        if isinstance(deck_a, dict):
+            return deck_a
+        deck_b = self._build_deck(_snapshot_to_text(snap_b), snap_b.format,
+                                  snap_b.name or deck_b_id)
+        if isinstance(deck_b, dict):
+            return deck_b
+
+        ar = run_static_analysis(deck_a)
+        br = run_static_analysis(deck_b)
+        pa = estimate_power_level(deck_a)
+        pb = estimate_power_level(deck_b)
+        archetype_a = detect_archetype(deck_a)
+        archetype_b = detect_archetype(deck_b)
+
+        # Use the existing diff_versions on the snapshot pair so the
+        # "added" / "removed" lists have the same shape the diff modal
+        # already understands.
+        d = diff_versions(snap_a, snap_b)
+        added_cards = list(d.added.keys())
+        removed_cards = list(d.removed.keys())
+
+        # Score deltas: use static analysis scores (b - a per axis).
+        score_deltas = {
+            k: float(br.scores.get(k, 0.0) - ar.scores.get(k, 0.0))
+            for k in (ar.scores.keys() | br.scores.keys())
+        }
+        role_deltas = {
+            "lands":       int(br.land_count - ar.land_count),
+            "ramp":        int(br.ramp_count - ar.ramp_count),
+            "draw":        int(br.draw_engine_count - ar.draw_engine_count),
+            "interaction": int(br.interaction_count - ar.interaction_count),
+            "threats":     int(br.threat_count - ar.threat_count),
+        }
+
+        backend = self._get_coach_backend()
+        result = compare_decks(
+            backend=backend,
+            deck_a_name=deck_a.name,
+            deck_b_name=deck_b.name,
+            deck_a_archetype=archetype_a.value if hasattr(archetype_a, "value") else str(archetype_a),
+            deck_b_archetype=archetype_b.value if hasattr(archetype_b, "value") else str(archetype_b),
+            deck_a_power=float(pa.overall),
+            deck_b_power=float(pb.overall),
+            added_cards=added_cards,
+            removed_cards=removed_cards,
+            score_deltas=score_deltas,
+            role_deltas=role_deltas,
+        )
+        return {
+            "summary": result.summary,
+            "confidence": result.confidence,
+            "verified": result.verified,
+            "added_cards": result.added_in_b,
+            "removed_cards": result.removed_in_b,
+            "score_deltas": dict(result.score_deltas),
+            "role_deltas": dict(result.role_deltas),
+            "power_gap": result.power_gap,
+        }
+
+    @_safe
+    def explain_card_in_deck(
+        self,
+        decklist_text: str,
+        card_name: str,
+        format_: str | None = None,
+        name: str = "Deck",
+    ) -> dict:
+        """Explain why one named card was flagged in this deck.
+
+        Pulls the rule-engine flags for the named card from castability +
+        cuts ranking + advanced analysis, then runs the explain-card
+        prompt against the coach backend. The frontend's "Why is this
+        card flagged?" link from the unreliable-cards table calls this.
+        """
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        # Find the entry for the requested card.
+        entry = next((e for e in deck.entries if e.card and e.card.name.lower() == card_name.lower()), None)
+        if entry is None or entry.card is None:
+            return {"ok": False, "error": f"Card '{card_name}' not in deck."}
+
+        result = run_static_analysis(deck)
+        castability = analyze_castability(deck, result.color_sources)
+        # Compute rule-engine flags for this card.
+        flags: list[str] = []
+        on_curve = None
+        bottleneck = None
+        for c in castability.unreliable_cards:
+            if c.name.lower() == card_name.lower():
+                on_curve = float(c.on_curve_probability)
+                bottleneck = c.bottleneck_color or None
+                flags.append(
+                    f"unreliable on curve (P={on_curve:.2f})"
+                    + (f"; bottleneck color {bottleneck}" if bottleneck else "")
+                )
+                break
+
+        # Cut-candidate ranker — pull the same signals here that the
+        # cuts pass would produce.
+        from densa_deck.analyst.candidates import rank_cut_candidates
+        for cand in rank_cut_candidates(deck, limit=20):
+            if cand.entry.card and cand.entry.card.name.lower() == card_name.lower():
+                flags.extend(cand.reasons)
+                break
+
+        deck_colors = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        from densa_deck.analyst.phase6 import explain_card
+        backend = self._get_coach_backend()
+        result_obj = explain_card(
+            backend=backend,
+            card_name=entry.card.name,
+            mana_cost=entry.card.mana_cost or "",
+            cmc=float(entry.card.cmc or 0.0),
+            deck_name=deck.name,
+            deck_colors=deck_colors,
+            color_sources=dict(result.color_sources),
+            on_curve_prob=on_curve,
+            bottleneck_color=bottleneck,
+            flags=flags,
+            role_tags=[t.value for t in (entry.card.tags or [])],
+        )
+        return {
+            "card_name": result_obj.card_name,
+            "summary": result_obj.summary,
+            "confidence": result_obj.confidence,
+            "verified": result_obj.verified,
+            "flags": result_obj.flags,
+            "on_curve_prob": result_obj.on_curve_prob,
+            "bottleneck_color": result_obj.bottleneck_color,
+        }
+
+    @_safe
+    def build_rule0_worksheet(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        include_combos: bool = True,
+    ) -> dict:
+        """Assemble + render a Rule 0 pre-game worksheet.
+
+        Pure rule-engine output — no LLM call needed (the worksheet
+        narrates structured data deterministically). When `include_combos`
+        is True and the combo cache is populated, surfaces detected
+        combo lines on the worksheet too.
+        """
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.analyst.phase6 import build_rule0_worksheet as _build, render_rule0_text
+        from densa_deck.formats.profiles import detect_archetype
+
+        analysis = run_static_analysis(deck)
+        power = estimate_power_level(deck)
+        archetype = detect_archetype(deck)
+        color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+
+        combo_lines: list[str] = []
+        if include_combos:
+            store = self._get_combo_store()
+            if store.combo_count() > 0:
+                from densa_deck.combos import detect_combos
+                deck_card_names = [e.card.name for e in deck.entries if e.card]
+                matches = detect_combos(
+                    store=store,
+                    deck_card_names=deck_card_names,
+                    deck_color_identity=color_identity,
+                    limit=5,
+                )
+                combo_lines = [m.combo.short_label() for m in matches]
+
+        notable_cards = [e.card.name for e in deck.entries
+                         if e.card and "Legendary" in (e.card.type_line or "")][:6]
+
+        ws = _build(
+            deck_name=deck.name,
+            archetype=archetype.value if hasattr(archetype, "value") else str(archetype),
+            color_identity=color_identity,
+            power=power,
+            analysis=analysis,
+            goldfish_report=None,
+            combo_lines=combo_lines,
+            notable_cards=notable_cards,
+        )
+        return {
+            "deck_name": ws.deck_name,
+            "archetype": ws.archetype,
+            "color_identity": ws.color_identity,
+            "power_overall": ws.power_overall,
+            "power_tier": ws.power_tier,
+            "bracket": ws.bracket,
+            "avg_kill_turn": ws.avg_kill_turn,
+            "fastest_kill_turn": ws.fastest_kill_turn,
+            "interaction_count": ws.interaction_count,
+            "interaction_density": ws.interaction_density,
+            "combo_lines": ws.combo_lines,
+            "notable_cards": ws.notable_cards,
+            "pre_game_notes": ws.pre_game_notes,
+            "land_count": ws.land_count,
+            "ramp_count": ws.ramp_count,
+            "draw_count": ws.draw_count,
+            "rendered_text": render_rule0_text(ws),
+        }
+
     @_safe
     def save_builder_as_deck(
         self,
@@ -1907,6 +2299,25 @@ def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
             "win_condition_quality": _delta("win_condition_quality"),
             "card_quality": _delta("card_quality"),
         },
+    }
+
+
+def _combo_to_dict(matched) -> dict:
+    """Flatten a MatchedCombo for the desktop bridge."""
+    c = matched.combo
+    return {
+        "combo_id": c.combo_id,
+        "cards": list(c.cards),
+        "templates": list(c.templates),
+        "produces": list(c.produces),
+        "color_identity": c.color_identity,
+        "bracket_tag": c.bracket_tag,
+        "description": c.description,
+        "popularity": c.popularity,
+        "spellbook_url": c.spellbook_url,
+        "short_label": c.short_label(),
+        "in_deck_cards": list(matched.in_deck_cards),
+        "unsatisfied_templates": matched.unsatisfied_templates,
     }
 
 

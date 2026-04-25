@@ -1,13 +1,17 @@
 """Prompt templates for the analyst.
 
-Each template is a pure function that returns a prompt string. Two template
+Each template is a pure function that returns a prompt string. Three template
 categories:
 
-1. Prose-only prompts (executive summary, power narration). Output is
-   pure text — no card emission required, no hallucination surface.
+1. Prose-only prompts (executive summary, power narration, compare decks,
+   explain card). Output is pure text — no card emission required, no
+   hallucination surface.
 
 2. Tag-constrained prompts (cuts, adds). Output must reference only the
    tags provided in the candidate table. Verifiers enforce this.
+
+3. Phase-6 narratives (compare-decks, explain-card) live in (1) — they
+   only narrate structured data the caller passes in.
 
 Templates embed a few-shot example so small models know the target format.
 """
@@ -278,3 +282,170 @@ archetype. One pick per line. Each line: `[tag]: one-sentence reason`.
 [OUTPUT]
 """
 
+
+# =============================================================================
+# Phase 6: compare deck A vs deck B — prose narration of a deck_diff
+# =============================================================================
+
+_COMPARE_FEWSHOT = """\
+[EXAMPLE]
+Input:
+  Deck A: My Atraxa (4-color, power 6.5/10, midrange)
+  Deck B: Reference netdeck "cEDH Atraxa Stax" (power 9.5/10, stax)
+  Differences:
+    Adds in B not in A (12): Mana Drain, Mana Crypt, Smothering Tithe, ...
+    Cuts in B not in A (8): Cultivate, Rampant Growth, ...
+  Score deltas A→B: speed +18, interaction +22, combo_potential +30
+  Power gap: A 6.5 → B 9.5 (-3.0)
+
+Output:
+  Your Atraxa diverges from the cEDH netdeck most sharply on speed and
+  interaction. The reference list trades 8 mid-curve growers (Cultivate,
+  Rampant Growth, etc.) for 12 fast-mana / counterspell pieces — that
+  swap alone explains the +18 speed and +22 interaction deltas. The
+  combo-potential jump (+30) comes from tutors + the Thoracle / Demonic
+  Consultation line, none of which appear in your build.
+
+  To close the gap without going full cEDH, the most leverage-per-cut
+  is in the mana base: swapping two of your six mid-curve ramp pieces
+  for Mana Crypt + Mana Vault buys back about 8 power-points of speed.
+  The interaction gap is harder — it requires Force of Will / Mana
+  Drain density, which is a budget conversation. Don't try to copy the
+  combo line unless your playgroup is OK with it; that's a power-tier
+  shift, not a tuning shift.
+[/EXAMPLE]
+"""
+
+
+def compare_decks_prompt(
+    deck_a_name: str,
+    deck_b_name: str,
+    deck_a_archetype: str,
+    deck_b_archetype: str,
+    deck_a_power: float,
+    deck_b_power: float,
+    added_cards: list[str],          # in B, not in A
+    removed_cards: list[str],         # in A, not in B
+    score_deltas: dict[str, float],   # B - A per axis
+    role_deltas: dict[str, int] | None = None,  # B - A per role count
+) -> str:
+    """Comparison prompt: narrate the difference between two decks.
+
+    Pure prose — the LLM only narrates structured deltas. Specific card
+    names appear inside [INPUT] because they're drawn from the user's
+    own decks, same safety class as the cut/add candidate tables.
+    """
+    # Cap the lists so a wildly different pair of decks doesn't blow up
+    # the prompt size and overwhelm a small model.
+    add_sample = ", ".join(added_cards[:8]) or "none"
+    cut_sample = ", ".join(removed_cards[:8]) or "none"
+    delta_sample = ", ".join(
+        f"{k} {'+' if v >= 0 else ''}{v:.0f}"
+        for k, v in sorted(score_deltas.items(), key=lambda kv: -abs(kv[1]))[:5]
+    ) or "no axis deltas"
+    role_line = ""
+    if role_deltas:
+        role_sample = ", ".join(
+            f"{k} {'+' if v >= 0 else ''}{v}"
+            for k, v in sorted(role_deltas.items(), key=lambda kv: -abs(kv[1]))[:5]
+        )
+        role_line = f"\nRole deltas (B - A): {role_sample}"
+    power_gap = deck_b_power - deck_a_power
+    power_sign = "+" if power_gap >= 0 else ""
+
+    return f"""You are a Magic: The Gathering deck analyst comparing two decks.
+Write a 2-paragraph comparison narrating the most-impactful differences and
+recommending which 1-3 swaps would close the gap with the highest leverage.
+Do NOT introduce specific card names the data does not reference. Tone:
+direct, helpful, no hype.
+
+{_COMPARE_FEWSHOT}
+
+[INPUT]
+Deck A: {deck_a_name} ({deck_a_archetype}, power {deck_a_power:.1f}/10)
+Deck B: {deck_b_name} ({deck_b_archetype}, power {deck_b_power:.1f}/10)
+Power gap (B - A): {power_sign}{power_gap:.1f}
+
+Adds in B not in A ({len(added_cards)}): {add_sample}
+Cuts in B not in A ({len(removed_cards)}): {cut_sample}
+
+Score deltas (B - A): {delta_sample}{role_line}
+
+[OUTPUT]
+"""
+
+
+# =============================================================================
+# Phase 6: explain-a-card — narrate why one specific card is flagged
+# =============================================================================
+
+_EXPLAIN_FEWSHOT = """\
+[EXAMPLE]
+Input:
+  Card: Cryptic Command — {1}{U}{U}{U} (CMC 4)
+  Deck: Esper midrange (WUB), 8 W sources / 14 U sources / 9 B sources
+  Castability flags:
+    On-curve probability: 0.34 (low — bottleneck color: U)
+    Reason: triple-U pip on turn 4 needs 3 untapped U-producing lands;
+    your land base provides that 34% of the time.
+  Role: card_draw / counterspell
+
+Output:
+  Cryptic Command is your single most demanding card on the mana base —
+  triple-U on turn 4 means you need three untapped Islands or U-producing
+  duals in play, and your 14 U-source mana base only delivers that on
+  about 1 in 3 hands. The card is a 4-mode upgrade when it casts, but
+  if it's stranding in your hand 2 out of 3 games it's effectively a
+  3-mana mulligan trigger. Two paths: bump U sources to 17-18 (likely a
+  pair of land-cycle adjustments), or replace it with a single-pip
+  alternative like Counterflux — same role, much higher cast rate on
+  the curve you have.
+[/EXAMPLE]
+"""
+
+
+def explain_card_prompt(
+    card_name: str,
+    mana_cost: str,
+    cmc: float,
+    deck_name: str,
+    deck_colors: list[str],
+    color_sources: dict[str, int],
+    on_curve_prob: float | None,
+    bottleneck_color: str | None,
+    flags: list[str],
+    role_tags: list[str],
+) -> str:
+    """Explain-a-card prompt — narrate why ONE card is flagged.
+
+    `flags` is a free-text list of rule-engine signals (e.g. "high_cmc_non_finisher",
+    "redundant_ramp", "color-screw risk"). `on_curve_prob` is the castability
+    probability if known (None if not flagged for castability). The LLM never
+    introduces NEW card names — only narrates the named card's situation.
+    """
+    sources = ", ".join(f"{c}: {n}" for c, n in sorted(color_sources.items())) or "n/a"
+    flag_text = "\n  - " + "\n  - ".join(flags[:6]) if flags else " (none surfaced)"
+    role_text = ", ".join(role_tags) if role_tags else "no functional role tags"
+    castability_line = ""
+    if on_curve_prob is not None:
+        bn = f", bottleneck color: {bottleneck_color}" if bottleneck_color else ""
+        castability_line = f"\nOn-curve probability: {on_curve_prob:.2f}{bn}"
+    deck_color_str = "".join(deck_colors) or "colorless"
+
+    return f"""You are a Magic: The Gathering deck analyst explaining why a
+single card was flagged in this deck. Write 1-2 short paragraphs. Narrate
+the structured signals — do NOT introduce new card names. If you suggest a
+replacement archetype (e.g. "a single-pip alternative"), describe it by
+shape, not by specific card name.
+
+{_EXPLAIN_FEWSHOT}
+
+[INPUT]
+Card: {card_name} — {mana_cost} (CMC {cmc:.0f})
+Deck: {deck_name} ({deck_color_str})
+Color sources in deck: {sources}{castability_line}
+Roles: {role_text}
+Rule-engine flags:{flag_text}
+
+[OUTPUT]
+"""

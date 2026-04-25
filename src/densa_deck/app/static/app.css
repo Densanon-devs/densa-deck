@@ -1861,3 +1861,22 @@ code {
   line-height: 1.4;
 }
 
+/* Moxfield Export → Text steps list */
+.moxfield-steps {
+  margin: 8px 0 8px 22px;
+  padding: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.moxfield-steps li {
+  margin-bottom: 6px;
+}
+.moxfield-steps a {
+  color: var(--color-accent-green, #34d399);
+  text-decoration: none;
+  word-break: break-all;
+}
+.moxfield-steps a:hover {
+  text-decoration: underline;
+}
+

@@ -47,6 +47,11 @@ FEATURE_TIERS: dict[str, Tier] = {
     "advanced_scoring": Tier.PRO,
     "custom_benchmark_suites": Tier.PRO,
     "analyst": Tier.PRO,  # LLM-backed analyst: executive summary + cut suggestions
+    # Phase 6 + combos
+    "combos": Tier.FREE,            # Combo detection — free-tier feature, gives free users a real reason to ingest
+    "rule0": Tier.FREE,              # Pre-game worksheet — pure rule-engine narration, no LLM
+    "explain_card": Tier.PRO,        # Per-card analyst narration
+    "compare_decks": Tier.PRO,       # Two-deck analyst narration
 }
 
 # Map CLI command names to feature keys
@@ -69,6 +74,10 @@ COMMAND_FEATURES: dict[str, str] = {
     "coach": "analyst",    # interactive REPL — uses analyst backend, Pro-gated
     "app": "info",         # GUI launcher — free tier can launch; Pro features gated inside
     "register-protocol": "info",  # Registry helper; always available
+    "combos": "combos",
+    "rule0": "rule0",
+    "explain": "explain_card",
+    "compare-decks": "compare_decks",
 }
 
 _CONFIG_PATH = Path.home() / ".densa-deck" / "config.json"

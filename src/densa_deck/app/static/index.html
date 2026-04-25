@@ -436,6 +436,20 @@ Mainboard:
         </div>
 
         <div class="settings-row">
+          <h3>Combo data (Commander Spellbook)</h3>
+          <p class="panel-hint">Local snapshot of community-curated combos used by deck analysis. Free tier — refresh on demand to surface "your deck has these N combo lines" alongside the static numbers. Attribution: Commander Spellbook (MIT, &copy; 2023 Commander-Spellbook).</p>
+          <div id="combo-status" class="settings-row" style="margin: 0;">(loading...)</div>
+          <div class="setup-action-row">
+            <button id="combo-refresh-btn" class="btn btn-primary">Refresh combo data</button>
+            <span id="combo-refresh-status" class="status-text"></span>
+          </div>
+          <div id="combo-refresh-progress-wrap" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="combo-refresh-progress-fill" class="progress-fill"></div></div>
+            <div id="combo-refresh-progress-msg" class="progress-msg"></div>
+          </div>
+        </div>
+
+        <div class="settings-row">
           <h3>Analyst model (optional, Pro)</h3>
           <p class="panel-hint">Local LLM for executive summary + cut suggestions. Runs fully offline after download. Choose 0.5B (~400 MB, faster) or 3B (~1.8 GB, better prose).</p>
           <div class="setup-action-row">
@@ -454,6 +468,34 @@ Mainboard:
       </div>
     </section>
   </main>
+
+  <!-- Moxfield-help modal — shown when URL import fails for a moxfield
+       deck URL. Walks the user through the 3-step Export → Text workaround
+       Moxfield's Cloudflare gate forces. Includes an "Open this deck on
+       moxfield.com" link so the user lands directly on the right page. -->
+  <div id="moxfield-help-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Moxfield blocks direct imports</h2>
+        <button id="moxfield-help-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <p>Moxfield's Cloudflare gate rejects automated imports. The
+          fastest way to load this deck is the built-in
+          <strong>Export → Text</strong> feature — about 10 seconds:</p>
+        <ol class="moxfield-steps">
+          <li>Open the deck on moxfield.com — <a href="#" id="moxfield-help-open-link" class="external-link" data-url=""></a></li>
+          <li>On the deck page, click <strong>More</strong> → <strong>Export</strong> → <strong>Text</strong></li>
+          <li>Copy the list (Ctrl+A then Ctrl+C) and paste it into the
+            <em>Paste a decklist</em> box below.</li>
+        </ol>
+        <p class="panel-hint">Archidekt URL imports work directly — paste those instead if you have a copy of the deck on Archidekt.</p>
+      </div>
+      <div class="modal-footer">
+        <button id="moxfield-help-dismiss-btn" class="btn btn-primary">Got it — I'll paste it</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Pro-gate modal — shown when a free-tier user tries a Pro action
        from the builder (save deck). Draft is preserved. -->

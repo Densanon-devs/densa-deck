@@ -34,6 +34,9 @@ function cacheElements() {
     "db-diff-modal", "db-diff-body", "db-diff-close-btn", "db-diff-dismiss-btn",
     // Settings: DB preferences + check now
     "pref-auto-check", "pref-auto-download", "check-db-update-btn",
+    // Settings: Commander Spellbook combo refresh
+    "combo-status", "combo-refresh-btn", "combo-refresh-status",
+    "combo-refresh-progress-wrap", "combo-refresh-progress-fill", "combo-refresh-progress-msg",
     // URL import
     "url-import-input", "url-import-btn", "url-import-status",
     // Update + setup banner bodies
@@ -255,11 +258,44 @@ async function bootstrap() {
   if (els.pref_auto_download) {
     els.pref_auto_download.addEventListener("change", onPrefChange);
   }
+  if (els.combo_refresh_btn) {
+    els.combo_refresh_btn.addEventListener("click", startComboRefresh);
+  }
   if (els.db_diff_close_btn) {
     els.db_diff_close_btn.addEventListener("click", () => hideDbDiffModal());
   }
   if (els.db_diff_dismiss_btn) {
     els.db_diff_dismiss_btn.addEventListener("click", () => hideDbDiffModal());
+  }
+  // Moxfield workaround modal — close/dismiss + "open Moxfield deck"
+  const mxClose = $("moxfield-help-close-btn");
+  const mxDismiss = $("moxfield-help-dismiss-btn");
+  const mxOpenLink = $("moxfield-help-open-link");
+  if (mxClose) mxClose.addEventListener("click", hideMoxfieldWorkaround);
+  if (mxDismiss) mxDismiss.addEventListener("click", hideMoxfieldWorkaround);
+  if (mxOpenLink) {
+    mxOpenLink.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      const url = mxOpenLink.dataset.url || "";
+      if (!url) return;
+      try {
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+          window.pywebview.api.open_external(url);
+        } else {
+          window.open(url, "_blank");
+        }
+      } catch (e) { /* non-fatal */ }
+    });
+  }
+  // After dismissing the modal, focus the decklist textarea so the user
+  // can paste the exported list immediately. Done via the dismiss button
+  // because closing via × may signal "not now."
+  if (mxDismiss) {
+    mxDismiss.addEventListener("click", () => {
+      if (els.decklist_input) {
+        try { els.decklist_input.focus(); } catch (e) { /* non-fatal */ }
+      }
+    });
   }
   // Force a coach-backend re-probe on every launch so an in-place
   // installer update (which dumps us into a fresh process but points at
@@ -454,6 +490,44 @@ async function onPrefChange() {
     });
   } catch (e) {
     toast("Saving preference failed: " + e.message, "error");
+  }
+}
+
+async function loadComboStatus() {
+  if (!els.combo_status) return;
+  try {
+    const s = await callApi("get_combo_status");
+    if (!s) return;
+    const count = s.combo_count || 0;
+    if (count === 0) {
+      els.combo_status.innerHTML = `<div class="card missing"><strong>Combo cache</strong><br>Empty — click <strong>Refresh combo data</strong> below to populate (~30k combos, 30-60s download).</div>`;
+    } else {
+      const lastDate = s.last_refresh_at
+        ? escape(s.last_refresh_at.slice(0, 10))
+        : "never";
+      els.combo_status.innerHTML = `<div class="card ready"><strong>Combo cache</strong><br>${count.toLocaleString()} combos cached (last refresh ${lastDate})</div>`;
+    }
+  } catch (e) {
+    // Non-fatal — combo cache check failure shouldn't block Settings.
+  }
+}
+
+async function startComboRefresh() {
+  if (!els.combo_refresh_btn) return;
+  els.combo_refresh_btn.disabled = true;
+  els.combo_refresh_status.textContent = "Starting...";
+  els.combo_refresh_progress_wrap.classList.remove("hidden");
+  try {
+    await callApi("combo_refresh_start");
+    pollProgress("combo_refresh", () => {
+      els.combo_refresh_btn.disabled = false;
+      els.combo_refresh_status.textContent = "";
+      loadComboStatus();
+    });
+  } catch (e) {
+    els.combo_refresh_btn.disabled = false;
+    els.combo_refresh_status.textContent = "";
+    toast("Combo refresh failed to start: " + e.message, "error");
   }
 }
 
@@ -1049,6 +1123,7 @@ async function refreshSettings() {
       </div>
     `;
     await loadUserPrefsIntoSettings();
+    await loadComboStatus();
   } catch (e) {
     toast("Settings refresh failed: " + e.message, "error");
   }
@@ -1314,12 +1389,52 @@ async function importDeckFromUrl() {
     els.url_import_input.value = "";
   } catch (e) {
     els.url_import_status.textContent = "";
-    toast("URL import failed: " + e.message, "error");
+    // If this was a Moxfield URL, show the dedicated workaround modal
+    // instead of a transient toast — the workaround is the supported
+    // path (Export → Text) and we want to make it dead-simple to follow.
+    const isMoxfield = /moxfield\.com\/decks\//i.test(url);
+    if (isMoxfield) {
+      showMoxfieldWorkaround(url);
+    } else {
+      toast("URL import failed: " + e.message, "error");
+    }
   } finally {
     els.url_import_btn.disabled = false;
     // Clear the status message after a few seconds so it doesn't linger
     setTimeout(() => { els.url_import_status.textContent = ""; }, 5000);
   }
+}
+
+// Moxfield is behind Cloudflare and blocks automated imports — instead of
+// a generic error toast, show a dedicated modal with a 3-step workaround
+// that takes the user to the Export → Text feature on Moxfield. The
+// research agent's recommendation: keep this UX path until Moxfield ships
+// a documented public API.
+function showMoxfieldWorkaround(originalUrl) {
+  const m = $("moxfield-help-modal");
+  if (!m) {
+    // Modal not in DOM yet — fall back to a toast. Shouldn't happen if
+    // the bundled index.html is current.
+    toast(
+      "Moxfield blocks direct imports. Use Export → Text on the deck page, then paste below.",
+      "error",
+    );
+    return;
+  }
+  const linkEl = $("moxfield-help-open-link");
+  if (linkEl) {
+    linkEl.dataset.url = originalUrl;
+    linkEl.textContent = originalUrl;
+  }
+  m.classList.remove("hidden");
+  m.setAttribute("aria-hidden", "false");
+}
+
+function hideMoxfieldWorkaround() {
+  const m = $("moxfield-help-modal");
+  if (!m) return;
+  m.classList.add("hidden");
+  m.setAttribute("aria-hidden", "true");
 }
 
 // ------------------------------ Coach tab ------------------------------

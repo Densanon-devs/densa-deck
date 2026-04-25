@@ -255,6 +255,62 @@ def main():
     )
     analyst_subs.add_parser("show", help="Show the configured model path + availability")
 
+    # combos command — Commander Spellbook integration (free tier)
+    combos_parser = subparsers.add_parser(
+        "combos",
+        help="Detect combos in a deck via Commander Spellbook",
+    )
+    combos_subs = combos_parser.add_subparsers(dest="combos_action")
+    combos_refresh = combos_subs.add_parser(
+        "refresh", help="Fetch the latest combo dataset from Commander Spellbook")
+    combos_refresh.add_argument(
+        "--db", type=Path, help="Override combo DB path (default: ~/.densa-deck/combos.db)")
+    combos_status = combos_subs.add_parser(
+        "status", help="Show local combo cache status (count + last refresh)")
+    combos_status.add_argument("--db", type=Path)
+    combos_detect = combos_subs.add_parser(
+        "detect", help="Detect combos in a deck file or stdin")
+    combos_detect.add_argument(
+        "deck", nargs="?", help="Deck file path (or '-' / omitted for stdin)")
+    combos_detect.add_argument(
+        "--format", default="commander",
+        help="Format for color-identity / legality (default: commander)")
+    combos_detect.add_argument("--db", type=Path, help="Override combo DB path")
+    combos_detect.add_argument(
+        "--limit", type=int, default=25,
+        help="Max combos to print (default: 25)")
+
+    # rule0 command — pre-game discussion worksheet (free tier)
+    rule0_parser = subparsers.add_parser(
+        "rule0",
+        help="Build a Rule 0 pre-game worksheet for a deck")
+    rule0_parser.add_argument(
+        "deck", nargs="?", help="Deck file path (or '-' / omitted for stdin)")
+    rule0_parser.add_argument(
+        "--format", default="commander",
+        help="Format profile (default: commander)")
+    rule0_parser.add_argument(
+        "--no-combos", action="store_true",
+        help="Skip combo detection even if the cache is populated")
+
+    # explain command (Pro) — narrate why one card was flagged
+    explain_parser = subparsers.add_parser(
+        "explain", help="Explain why a single card was flagged in a deck (Pro)")
+    explain_parser.add_argument("deck", help="Deck file path")
+    explain_parser.add_argument("card", help="Card name to explain")
+    explain_parser.add_argument(
+        "--format", default="commander",
+        help="Format profile (default: commander)")
+
+    # compare-decks command (Pro) — analyst narration of A vs B
+    compare_decks_parser = subparsers.add_parser(
+        "compare-decks",
+        help="Compare two saved decks via the analyst (Pro)")
+    compare_decks_parser.add_argument(
+        "deck_a_id", help="First saved deck id")
+    compare_decks_parser.add_argument(
+        "deck_b_id", help="Second saved deck id")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -304,6 +360,14 @@ def main():
         cmd_app(args)
     elif command == "register-protocol":
         cmd_register_protocol(args)
+    elif command == "combos":
+        cmd_combos(args)
+    elif command == "rule0":
+        cmd_rule0(args)
+    elif command == "explain":
+        cmd_explain(args)
+    elif command == "compare-decks":
+        cmd_compare_decks(args)
 
 
 def _get_db(args) -> CardDatabase:
@@ -2556,6 +2620,322 @@ def _render_trends(report: TrendReport):
         ))
 
     console.print()
+
+
+# =============================================================================
+# Phase 6 + Combos (v0.2.x integration commands)
+# =============================================================================
+
+
+def _read_deck_text(arg) -> str:
+    """Pull a decklist from a file path or stdin (`-` / no arg)."""
+    if arg is None or arg == "-":
+        return sys.stdin.read()
+    return Path(arg).read_text(encoding="utf-8")
+
+
+def cmd_combos(args):
+    """Subcommands: refresh / status / detect."""
+    from densa_deck.combos import ComboStore, refresh_combo_snapshot, detect_combos
+
+    action = getattr(args, "combos_action", None)
+    db_path = getattr(args, "db", None)
+    store = ComboStore(db_path=db_path) if db_path else ComboStore()
+
+    if action == "status":
+        count = store.combo_count()
+        last = store.get_metadata("last_refresh_at") or "(never)"
+        console.print(f"[cyan]Combo cache:[/cyan] {count} combos, last refresh {last}")
+        if count == 0:
+            console.print("[yellow]Run `densa-deck combos refresh` to populate.[/yellow]")
+        return
+
+    if action == "refresh":
+        console.print("[cyan]Fetching Commander Spellbook combo dataset...[/cyan]")
+        with console.status("[bold green]walking /variants/...") as status:
+            def _on_page(pages: int, seen: int):
+                status.update(f"[bold green]page {pages} — {seen} combos")
+            written = refresh_combo_snapshot(store=store, progress_cb=_on_page)
+        console.print(f"[green]Done — {written} combos cached.[/green]")
+        return
+
+    if action == "detect":
+        if store.combo_count() == 0:
+            console.print(
+                "[yellow]Combo cache empty. Run `densa-deck combos refresh` first.[/yellow]"
+            )
+            return
+        # Resolve the deck so we have card objects and color identity.
+        text = _read_deck_text(args.deck)
+        if not text.strip():
+            console.print("[red]No deck text provided.[/red]")
+            return
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.deck.resolver import resolve_deck
+        from densa_deck.models import Format
+        db = _get_db(args)
+        if db.card_count() == 0:
+            console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+            return
+        try:
+            fmt = Format(args.format)
+        except ValueError:
+            fmt = Format.COMMANDER
+        entries = parse_decklist(text)
+        deck = resolve_deck(entries, db, format=fmt)
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        matches = detect_combos(
+            store=store,
+            deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity,
+            limit=args.limit,
+        )
+        if not matches:
+            console.print("[green]No combos detected.[/green]")
+            return
+        console.print(f"[bold green]{len(matches)} combo line{'' if len(matches) == 1 else 's'} found:[/bold green]")
+        for i, m in enumerate(matches, start=1):
+            label = m.combo.short_label()
+            extra = ""
+            if m.unsatisfied_templates:
+                extra = f"  [dim](note: {m.unsatisfied_templates} template prerequisite{'s' if m.unsatisfied_templates != 1 else ''})[/dim]"
+            console.print(f"  {i:>2}. {label}{extra}")
+            console.print(f"      [dim]{m.combo.spellbook_url}[/dim]")
+        return
+
+    console.print("[yellow]Usage:[/yellow] densa-deck combos {refresh|status|detect <deck>}")
+
+
+def cmd_rule0(args):
+    """Build + print a Rule 0 pre-game worksheet for a deck."""
+    from densa_deck.analysis.power_level import estimate_power_level
+    from densa_deck.analysis.static import analyze_deck as run_static_analysis
+    from densa_deck.analyst.phase6 import build_rule0_worksheet, render_rule0_text
+    from densa_deck.combos import ComboStore, detect_combos
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.formats.profiles import detect_archetype
+    from densa_deck.models import Format
+
+    text = _read_deck_text(args.deck)
+    if not text.strip():
+        console.print("[red]No deck text provided.[/red]")
+        return
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+        return
+    try:
+        fmt = Format(args.format)
+    except ValueError:
+        fmt = Format.COMMANDER
+    entries = parse_decklist(text)
+    deck = resolve_deck(entries, db, format=fmt)
+    analysis = run_static_analysis(deck)
+    power = estimate_power_level(deck)
+    archetype = detect_archetype(deck)
+    color_identity = sorted({
+        c.value for e in deck.entries if e.card for c in e.card.color_identity
+    })
+
+    combo_lines: list[str] = []
+    if not args.no_combos:
+        store = ComboStore()
+        if store.combo_count() > 0:
+            deck_card_names = [e.card.name for e in deck.entries if e.card]
+            matches = detect_combos(
+                store=store,
+                deck_card_names=deck_card_names,
+                deck_color_identity=color_identity,
+                limit=5,
+            )
+            combo_lines = [m.combo.short_label() for m in matches]
+
+    notable_cards = [e.card.name for e in deck.entries
+                     if e.card and "Legendary" in (e.card.type_line or "")][:6]
+    ws = build_rule0_worksheet(
+        deck_name=deck.name,
+        archetype=archetype.value if hasattr(archetype, "value") else str(archetype),
+        color_identity=color_identity,
+        power=power,
+        analysis=analysis,
+        goldfish_report=None,
+        combo_lines=combo_lines,
+        notable_cards=notable_cards,
+    )
+    console.print(render_rule0_text(ws))
+
+
+def cmd_explain(args):
+    """Explain why one named card is flagged in the given deck."""
+    from densa_deck.analysis.castability import analyze_castability
+    from densa_deck.analysis.static import analyze_deck as run_static_analysis
+    from densa_deck.analyst.candidates import rank_cut_candidates
+    from densa_deck.analyst.phase6 import explain_card
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.models import Format
+
+    text = Path(args.deck).read_text(encoding="utf-8")
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+        return
+    try:
+        fmt = Format(args.format)
+    except ValueError:
+        fmt = Format.COMMANDER
+    entries = parse_decklist(text)
+    deck = resolve_deck(entries, db, format=fmt)
+    target = next(
+        (e for e in deck.entries if e.card and e.card.name.lower() == args.card.lower()),
+        None,
+    )
+    if target is None or target.card is None:
+        console.print(f"[red]Card '{args.card}' not in deck.[/red]")
+        return
+
+    result = run_static_analysis(deck)
+    castability = analyze_castability(deck, result.color_sources)
+    flags: list[str] = []
+    on_curve = None
+    bottleneck = None
+    for c in castability.unreliable_cards:
+        if c.name.lower() == args.card.lower():
+            on_curve = float(c.on_curve_probability)
+            bottleneck = c.bottleneck_color or None
+            flags.append(f"unreliable on curve (P={on_curve:.2f})")
+            if bottleneck:
+                flags.append(f"bottleneck color: {bottleneck}")
+            break
+    for cand in rank_cut_candidates(deck, limit=20):
+        if cand.entry.card and cand.entry.card.name.lower() == args.card.lower():
+            flags.extend(cand.reasons)
+            break
+
+    deck_colors = sorted({
+        c.value for e in deck.entries if e.card for c in e.card.color_identity
+    })
+    backend = _resolve_analyst_backend()
+    r = explain_card(
+        backend=backend,
+        card_name=target.card.name,
+        mana_cost=target.card.mana_cost or "",
+        cmc=float(target.card.cmc or 0.0),
+        deck_name=deck.name,
+        deck_colors=deck_colors,
+        color_sources=dict(result.color_sources),
+        on_curve_prob=on_curve,
+        bottleneck_color=bottleneck,
+        flags=flags,
+        role_tags=[t.value for t in (target.card.tags or [])],
+    )
+    console.print(f"[bold cyan]{r.card_name}[/bold cyan]")
+    if r.summary:
+        console.print(r.summary)
+    if r.flags:
+        console.print(f"[dim]flags: {', '.join(r.flags)}[/dim]")
+
+
+def cmd_compare_decks(args):
+    """Compare two SAVED decks via the analyst — narrates the diff prose."""
+    from densa_deck.analysis.power_level import estimate_power_level
+    from densa_deck.analysis.static import analyze_deck as run_static_analysis
+    from densa_deck.analyst.phase6 import compare_decks
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.formats.profiles import detect_archetype
+    from densa_deck.models import Format
+    from densa_deck.versioning.storage import VersionStore, diff_versions
+
+    store = VersionStore()
+    snap_a = store.get_latest(args.deck_a_id)
+    snap_b = store.get_latest(args.deck_b_id)
+    if snap_a is None:
+        console.print(f"[red]No saved versions for deck '{args.deck_a_id}'.[/red]")
+        return
+    if snap_b is None:
+        console.print(f"[red]No saved versions for deck '{args.deck_b_id}'.[/red]")
+        return
+
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+        return
+
+    def _resolve(snap):
+        # Reconstruct a deck from a snapshot's stored zones.
+        from densa_deck.app.api import _snapshot_to_text
+        entries = parse_decklist(_snapshot_to_text(snap))
+        try:
+            fmt = Format(snap.format) if snap.format else Format.COMMANDER
+        except ValueError:
+            fmt = Format.COMMANDER
+        return resolve_deck(entries, db, name=snap.name or snap.deck_id, format=fmt)
+
+    deck_a = _resolve(snap_a)
+    deck_b = _resolve(snap_b)
+    ar = run_static_analysis(deck_a)
+    br = run_static_analysis(deck_b)
+    pa = estimate_power_level(deck_a)
+    pb = estimate_power_level(deck_b)
+    archetype_a = detect_archetype(deck_a)
+    archetype_b = detect_archetype(deck_b)
+
+    d = diff_versions(snap_a, snap_b)
+    score_deltas = {
+        k: float(br.scores.get(k, 0.0) - ar.scores.get(k, 0.0))
+        for k in (ar.scores.keys() | br.scores.keys())
+    }
+    role_deltas = {
+        "lands":       int(br.land_count - ar.land_count),
+        "ramp":        int(br.ramp_count - ar.ramp_count),
+        "draw":        int(br.draw_engine_count - ar.draw_engine_count),
+        "interaction": int(br.interaction_count - ar.interaction_count),
+        "threats":     int(br.threat_count - ar.threat_count),
+    }
+
+    backend = _resolve_analyst_backend()
+    r = compare_decks(
+        backend=backend,
+        deck_a_name=deck_a.name, deck_b_name=deck_b.name,
+        deck_a_archetype=archetype_a.value if hasattr(archetype_a, "value") else str(archetype_a),
+        deck_b_archetype=archetype_b.value if hasattr(archetype_b, "value") else str(archetype_b),
+        deck_a_power=float(pa.overall),
+        deck_b_power=float(pb.overall),
+        added_cards=list(d.added.keys()),
+        removed_cards=list(d.removed.keys()),
+        score_deltas=score_deltas,
+        role_deltas=role_deltas,
+    )
+    console.print(f"[bold cyan]{deck_a.name}[/bold cyan]  vs  [bold cyan]{deck_b.name}[/bold cyan]")
+    console.print(f"[dim]power gap (B - A): {r.power_gap:+.1f}[/dim]")
+    if r.summary:
+        console.print(r.summary)
+
+
+def _resolve_analyst_backend():
+    """Pick LlamaCpp if importable + model present, else MockBackend.
+
+    Mirrors the desktop app's _get_coach_backend logic so CLI explain /
+    compare-decks pick up the user's downloaded GGUF without an env var.
+    """
+    import os
+    if os.environ.get("MTG_ANALYST_BACKEND", "").lower() == "mock":
+        from densa_deck.analyst import MockBackend
+        return MockBackend(default="(Mock backend — set MTG_ANALYST_BACKEND= to use the real model.)")
+    try:
+        from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend
+        backend = LlamaCppBackend()
+        if backend.is_available():
+            return backend
+    except Exception:
+        pass
+    from densa_deck.analyst import MockBackend
+    return MockBackend(default="(Analyst model not installed — install via `densa-deck analyst pull`.)")
 
 
 if __name__ == "__main__":
