@@ -183,6 +183,29 @@ class TestStructuredSearch:
         names2 = {c.name for c in page2}
         assert not (names1 & names2)
 
+    def test_types_filter_excludes_subtype_false_positives(self, card_lib):
+        """Regression: type_line "Creature — Illusion Island" must NOT
+        match a `types=['land']` query just because 'Island' appears in
+        the subtype portion. The pre-em-dash split prevents the leak."""
+        # Add a card whose subtype contains the word "Land" — Mistform
+        # Island is the canonical example. Use a fresh card_lib row.
+        from densa_deck.models import Card, CardLayout, Color, Legality
+        card_lib.upsert_cards([Card(
+            scryfall_id="sid-mistform", oracle_id="oid-mistform",
+            name="Mistform Island",
+            layout=CardLayout.NORMAL, cmc=2, mana_cost="{1}{U}",
+            type_line="Creature — Illusion Island",
+            colors=[Color.BLUE], color_identity=[Color.BLUE],
+            legalities={"commander": Legality.LEGAL}, rarity="common",
+            is_creature=True,
+        )])
+        cards, _ = card_lib.search_structured(types=["land"])
+        names = [c.name for c in cards]
+        # Forest is a real land — must be present
+        assert "Forest" in names
+        # Mistform Island is a Creature, NOT a land — must be absent
+        assert "Mistform Island" not in names
+
     def test_combined_filters(self, card_lib):
         # Green cards, CMC 3, commander-legal — should be only Cultivate.
         cards, total = card_lib.search_structured(

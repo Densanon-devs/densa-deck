@@ -365,14 +365,28 @@
   }
 
   function clearDraft() {
-    // Soft reset — ask for confirmation only if the deck is not already empty.
+    // Soft reset — ask for confirmation only if the deck is not already
+    // empty. window.confirm in some pywebview versions returns undefined
+    // instead of a real bool; treat anything that's not strictly !== false
+    // as "cancel" so a borked confirm() doesn't silently nuke the draft.
     const count = totalCardCount();
-    if (count > 0 && !confirm(`Clear ${count} card${count === 1 ? "" : "s"} from the current draft?`)) {
-      return;
+    if (count > 0) {
+      let answered;
+      try {
+        answered = window.confirm(`Clear ${count} card${count === 1 ? "" : "s"} from the current draft?`);
+      } catch (err) {
+        answered = undefined;
+      }
+      if (answered !== true) return;
     }
     builderState.deck = { name: "", format: "commander", mainboard: {}, sideboard: {}, commander: {} };
     const nameInput = e("build-deck-name"); if (nameInput) nameInput.value = "";
-    markDirty();
+    // Reset the load flag so a draft created later (e.g. restored from
+    // backup, or written by a parallel session) is picked up next time
+    // the user opens the Build tab. Without this, _draftLoaded sticks
+    // at true and loadDraft becomes a no-op until app restart.
+    builderState._draftLoaded = false;
+    builderState.dirty = false;
     renderDeck();
     recomputeStats();
     // Drop the persisted draft so a next-launch restore doesn't bring it back.
@@ -521,12 +535,23 @@
       curve[bucket] += ent.qty;
       totalNonLandCmc += (ent.cmc || 0) * ent.qty;
       totalNonLandCards += ent.qty;
-      // Pip counting from mana_cost string (e.g. "{2}{G}{G}" -> 2 G pips)
+      // Pip counting from mana_cost string. Counts each colored pip — a
+      // hybrid pip like {W/U} contributes 1 to each of W and U. Phyrexian
+      // {W/P} also counts as 1 W. Generic {2} / {X} pips don't count.
+      // Use a tokenizer rather than per-color regex so {W/U} is matched
+      // exactly once and contributes to both colors symmetrically.
       const mc = ent.mana_cost || "";
-      for (const c of ["W", "U", "B", "R", "G"]) {
-        const re = new RegExp(`\\{${c}\\}`, "g");
-        const matches = mc.match(re);
-        if (matches) pipCounts[c] += matches.length * ent.qty;
+      const tokenRe = /\{([^}]+)\}/g;
+      let m;
+      while ((m = tokenRe.exec(mc)) !== null) {
+        const tok = m[1].toUpperCase();
+        for (const c of ["W", "U", "B", "R", "G"]) {
+          // A token contributes to color c if c appears between non-letter
+          // boundaries — covers {W}, {W/U}, {2/W}, {W/P}, {W/U/P}.
+          if (new RegExp(`(^|[^A-Z])${c}([^A-Z]|$)`).test(tok)) {
+            pipCounts[c] += ent.qty;
+          }
+        }
       }
     }
     const totalCurve = curve.reduce((a, b) => a + b, 0) || 1;

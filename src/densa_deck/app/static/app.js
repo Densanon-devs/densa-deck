@@ -348,6 +348,16 @@ function hideCardDbUpdateBanner() {
 }
 
 async function runCardDbUpdateNow() {
+  // Guard against double-fire when an auto-mode ingest is already in
+  // flight — without this, two pollProgress("ingest") loops can be
+  // attached, each firing the what-changed modal independently.
+  try {
+    const p = await callApi("ingest_progress");
+    if (p && p.running) {
+      toast("Card database update already in progress.", "info");
+      return;
+    }
+  } catch (e) { /* fall through and try anyway */ }
   if (els.card_db_update_now_btn) els.card_db_update_now_btn.disabled = true;
   hideCardDbUpdateBanner();
   startCardDbUpdateIngest();

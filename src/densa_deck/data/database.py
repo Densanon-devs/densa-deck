@@ -302,15 +302,31 @@ class CardDatabase:
             conditions.append("(price_usd IS NULL OR price_usd <= ?)")
             params.append(float(max_price))
 
-        # Types: each token becomes an individual LIKE against type_line,
-        # joined with OR — mirrors the "show me creatures OR instants" UX.
+        # Types: each token matches the PRIMARY type portion of type_line
+        # only — i.e. the substring before the em-dash subtype delimiter.
+        # Without this guard, type_line LIKE '%land%' matches Mistform
+        # Island ("Creature - Illusion Island") because "Island" appears
+        # in the subtype. Scryfall always uses the unicode em-dash
+        # U+2014 ' - ' to separate types from subtypes, so we anchor the
+        # LIKE on either "tok " or "tok\n" / start-of-string and exclude
+        # rows whose tok-occurrence is only after the em-dash.
         if types:
             type_fragments = []
             for t in types:
                 tok = (t or "").strip().lower()
                 if not tok:
                     continue
-                type_fragments.append("type_line LIKE ? COLLATE NOCASE")
+                # Substring to the left of " - "; on a row with no em-dash
+                # the entire type_line is the primary types portion.
+                # SUBSTR(type_line, 1, INSTR(type_line, " - ") - 1) when
+                # INSTR returns 0 yields an empty string, breaking the
+                # match — so we fall back to the full type_line in that
+                # case via a CASE expression.
+                type_fragments.append(
+                    "(CASE WHEN INSTR(type_line, ' — ') > 0 "
+                    "      THEN SUBSTR(type_line, 1, INSTR(type_line, ' — ') - 1) "
+                    "      ELSE type_line END) LIKE ? COLLATE NOCASE"
+                )
                 params.append(f"%{tok}%")
             if type_fragments:
                 conditions.append("(" + " OR ".join(type_fragments) + ")")

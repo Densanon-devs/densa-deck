@@ -137,7 +137,10 @@ def require_pro(feature: str) -> bool:
 
 
 def set_tier(tier: str):
-    """Save tier to config file."""
+    """Save tier to config file. Atomic write so a crash mid-save can't
+    leave the next launch with a half-truncated config.json — and so a
+    concurrent set_user_preferences (which also writes this file)
+    can't lose the tier field on a torn-write race."""
     _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     config = {}
     if _CONFIG_PATH.exists():
@@ -146,4 +149,14 @@ def set_tier(tier: str):
         except (json.JSONDecodeError, OSError):
             pass
     config["tier"] = tier
-    _CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    import os as _os
+    tmp = _CONFIG_PATH.with_suffix(_CONFIG_PATH.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    _os.replace(tmp, _CONFIG_PATH)

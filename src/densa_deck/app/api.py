@@ -936,9 +936,15 @@ class AppApi:
         first-run, not an update, or (b) the diff was already consumed.
         Keeping it single-use avoids re-showing the modal every time the
         user switches to Settings after the initial dismissal.
+
+        Held under _progress_lock because _do_ingest writes
+        self._last_ingest_diff from a worker thread; without the lock,
+        a poll racing the worker's final assignment could read torn
+        state or lose the diff entirely.
         """
-        diff = self._last_ingest_diff
-        self._last_ingest_diff = None
+        with self._progress_lock:
+            diff = self._last_ingest_diff
+            self._last_ingest_diff = None
         return diff
 
     # ------------------------------------------------------------------ deckbuilder (Build tab)
@@ -1498,13 +1504,17 @@ class AppApi:
                 # Capture the post-ingest snapshot and stash the diff on
                 # the progress dict so the frontend can fetch it once
                 # it sees done=True. Skip entirely for first-run ingests.
+                # Held under _progress_lock because get_last_ingest_diff
+                # reads + clears this field from the dispatcher thread.
                 if pre_snapshot:
                     post_snapshot = db.snapshot_oracle_identities()
-                    self._last_ingest_diff = _compute_card_db_diff(
+                    new_diff = _compute_card_db_diff(
                         pre_snapshot, post_snapshot,
                     )
                 else:
-                    self._last_ingest_diff = None
+                    new_diff = None
+                with self._progress_lock:
+                    self._last_ingest_diff = new_diff
 
                 self._update_progress(
                     "ingest",
