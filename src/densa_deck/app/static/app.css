@@ -1861,6 +1861,12 @@ code {
   line-height: 1.4;
 }
 
+/* Combo win-turn distribution bar — distinct shade from kill bars so
+   "combo win turn" doesn't read as "damage-clock kill turn". */
+.kill-turn-dist .combo-fill {
+  background: linear-gradient(90deg, #c084fc, #818cf8);
+}
+
 /* AI deckbuild suggestions modal — rows in the picker */
 .suggest-row {
   display: flex;

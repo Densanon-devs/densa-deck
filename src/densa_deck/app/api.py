@@ -258,6 +258,16 @@ class AppApi:
         if self._vstore is not None:
             self._vstore.close()
             self._vstore = None
+        # Combos store opens lazily on first detect/refresh — close it
+        # too so the SQLite file handle isn't left dangling. Without this,
+        # Windows test tempdirs can't be cleaned up because the .db file
+        # is still locked by our connection.
+        if getattr(self, "_combo_store", None) is not None:
+            try:
+                self._combo_store.close()
+            except Exception:
+                pass
+            self._combo_store = None
 
     # ------------------------------------------------------------------ coach persistence
 
@@ -2349,6 +2359,7 @@ class AppApi:
     def run_goldfish(
         self, decklist_text: str, format_: str | None = None,
         name: str = "Deck", sims: int = 1000, seed: int | None = None,
+        include_combos: bool = True,
     ) -> dict:
         """Run goldfish simulation. Sync — typically 3-15s for 1000 sims.
 
@@ -2356,12 +2367,37 @@ class AppApi:
         count than CLI (1000 vs. 10000) because the GUI cares about latency
         over tight error bars — users can re-run with a higher count via the
         sims param if they want.
+
+        When include_combos is True (default) and the user has refreshed
+        their Commander Spellbook combo cache, the goldfish run also tracks
+        combo-assembly turns and reports combo_win_rate / average_combo_turn /
+        combo_win_turn_distribution alongside the damage stats. Pass False
+        to skip combo evaluation (saves a few ms per game on 30k-row decks
+        when the user only cares about the damage clock).
         """
         from densa_deck.goldfish.runner import run_goldfish_batch
         deck = self._build_deck(decklist_text, format_, name)
         if isinstance(deck, dict):  # error envelope
             return deck
-        report = run_goldfish_batch(deck, simulations=sims, seed=seed)
+        # Pull combos that touch any deck card from the local cache when
+        # available. The runner pre-filters to only deck-relevant combos
+        # so passing the full set is safe but wasteful — we narrow up
+        # front via the per-card index for speed.
+        combos = []
+        if include_combos:
+            store = self._get_combo_store()
+            if store.combo_count() > 0:
+                seen_ids: set[str] = set()
+                deck_card_names = {e.card.name for e in deck.entries if e.card}
+                for name in deck_card_names:
+                    for cid in store.lookup_combos_for_card(name):
+                        if cid in seen_ids:
+                            continue
+                        seen_ids.add(cid)
+                        c = store.get_combo(cid)
+                        if c is not None:
+                            combos.append(c)
+        report = run_goldfish_batch(deck, simulations=sims, seed=seed, combos=combos)
         return _goldfish_to_dict(report)
 
     @_safe
@@ -2968,6 +3004,16 @@ def _goldfish_to_dict(report) -> dict:
         "average_spells_cast": report.average_spells_cast,
         "most_cast_spells": [list(pair) for pair in report.most_cast_spells],
         "objective_pass_rates": dict(getattr(report, "objective_pass_rates", {})),
+        # Combo-win fields (zero/empty when no combos were tracked or when
+        # the cache wasn't populated). The frontend should only render the
+        # combo section when combos_evaluated > 0.
+        "combos_evaluated": getattr(report, "combos_evaluated", 0),
+        "combo_win_rate": getattr(report, "combo_win_rate", 0.0),
+        "average_combo_win_turn": getattr(report, "average_combo_win_turn", 0.0),
+        "combo_win_turn_distribution": {
+            str(k): v for k, v in getattr(report, "combo_win_turn_distribution", {}).items()
+        },
+        "top_combo_lines": [list(pair) for pair in getattr(report, "top_combo_lines", [])],
     }
 
 

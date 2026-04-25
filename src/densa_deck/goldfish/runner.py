@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 from rich.console import Console
 
 from densa_deck.classification.tagger import classify_card
+# Combo import goes through .models (not the package root) so we don't
+# pull in httpx and the refresh-snapshot walker — goldfish should stay
+# importable without network deps.
+from densa_deck.combos.models import Combo
 from densa_deck.goldfish.heuristics import play_turn
 from densa_deck.goldfish.mulligan import mulligan_phase
 from densa_deck.goldfish.objectives import (
@@ -44,6 +48,13 @@ class GameResult:
     turn_metrics: list[TurnMetrics] = field(default_factory=list)
     objectives_met: dict[str, bool] = field(default_factory=dict)
     objectives_met_turn: dict[str, int | None] = field(default_factory=dict)
+    # Combo-aware tracking — populated when run_goldfish_batch was given
+    # a `combos` list. combo_win_turn = first turn where every card of
+    # any matching combo is in possession (battlefield + hand + graveyard
+    # all together), simulating "the player can assemble + fire the
+    # combo this turn." combo_id is whichever combo fired first.
+    combo_win_turn: int | None = None
+    combo_id_fired: str | None = None
 
 
 @dataclass
@@ -80,6 +91,16 @@ class GoldfishReport:
     # Objectives
     objective_pass_rates: dict[str, float] = field(default_factory=dict)
 
+    # Combo wins (only populated when run_goldfish_batch was given combos)
+    combos_evaluated: int = 0  # how many combo lines we checked against
+    combo_win_rate: float = 0.0  # % of games where any combo was assembled
+    average_combo_win_turn: float = 0.0
+    combo_win_turn_distribution: dict[int, float] = field(default_factory=dict)
+    # Top combo lines by frequency, with their hit-rate. Each tuple is
+    # (combo_id, short_label, count, rate). Useful for surfacing
+    # "your most-fired combo across 1000 games was X" in the UI.
+    top_combo_lines: list[tuple[str, str, int, float]] = field(default_factory=list)
+
     # Per-game results (for advanced analysis)
     game_results: list[GameResult] = field(default_factory=list)
 
@@ -91,8 +112,17 @@ def run_goldfish_batch(
     objectives: list[Objective] | None = None,
     seed: int | None = None,
     store_games: bool = False,
+    combos: list[Combo] | None = None,
 ) -> GoldfishReport:
-    """Run a batch of goldfish simulations and aggregate results."""
+    """Run a batch of goldfish simulations and aggregate results.
+
+    `combos` (optional): list of Commander Spellbook combos to track
+    during simulation. When provided, each game also records the
+    earliest turn at which all cards of any combo are in the player's
+    possession (battlefield + hand + graveyard) — a fair proxy for
+    "the deck could have fired this combo by this turn." When omitted
+    or empty, the report's combo_* fields stay at their defaults.
+    """
     if seed is not None:
         random.seed(seed)
 
@@ -104,6 +134,16 @@ def run_goldfish_batch(
     # Generate default objectives if none provided
     if objectives is None:
         objectives = default_objectives(deck)
+
+    # Pre-filter combos to those whose pieces all appear in this deck —
+    # nothing else can possibly fire, and skipping them up front avoids a
+    # per-turn check loop over irrelevant entries on every simulation.
+    deck_card_names = {e.card.name for e in deck.entries if e.card}
+    relevant_combos: list[Combo] = []
+    if combos:
+        for c in combos:
+            if c.cards and all(name in deck_card_names for name in c.cards):
+                relevant_combos.append(c)
 
     results: list[GameResult] = []
     spell_counter: Counter[str] = Counter()
@@ -120,7 +160,7 @@ def run_goldfish_batch(
             for o in objectives
         ]
 
-        result = _run_single_game(deck, max_turns, game_objectives)
+        result = _run_single_game(deck, max_turns, game_objectives, relevant_combos)
         results.append(result)
 
         # Track spell frequency
@@ -130,6 +170,8 @@ def run_goldfish_batch(
 
     # Aggregate
     report = _aggregate_results(results, simulations, max_turns, objectives, spell_counter)
+    report.combos_evaluated = len(relevant_combos)
+    _aggregate_combo_results(report, results, simulations, relevant_combos)
     if store_games:
         report.game_results = results
 
@@ -140,8 +182,19 @@ def _run_single_game(
     deck: Deck,
     max_turns: int,
     objectives: list[Objective],
+    combos: list[Combo] | None = None,
 ) -> GameResult:
-    """Run a single goldfish game."""
+    """Run a single goldfish game.
+
+    When `combos` is non-empty, after each turn we check whether all
+    cards of any tracked combo are in the player's possession (in
+    battlefield, hand, or graveyard). The first turn this is true for
+    any combo is recorded as combo_win_turn — simulating "by this
+    turn the player could fire the combo line." We record only the
+    FIRST combo to fire because the goldfish doesn't have a real
+    decision model for which combo a player would prefer; surfacing
+    "the earliest one" matches the kill-turn convention.
+    """
     state = GameState()
     is_commander = deck.format and deck.format.value in ("commander", "brawl", "oathbreaker", "duel")
     state.life = 40 if is_commander else 20
@@ -153,6 +206,16 @@ def _run_single_game(
     # Mulligan phase
     mulls = mulligan_phase(state, deck)
 
+    # Pre-build a map from combo to the lower-cased card-name set so the
+    # per-turn check is a single subset comparison instead of iterating
+    # combo.cards each call. Skipped when combos is empty.
+    combo_index: list[tuple[Combo, frozenset[str]]] = []
+    if combos:
+        combo_index = [(c, frozenset(name.lower() for name in c.cards)) for c in combos]
+
+    combo_win_turn: int | None = None
+    combo_id_fired: str | None = None
+
     # Play turns
     for _ in range(max_turns):
         state.begin_turn()
@@ -161,6 +224,20 @@ def _run_single_game(
 
         # Check objectives
         check_objectives(state, objectives)
+
+        # Check combo assembly — only if we haven't already fired one this
+        # game. "In possession" = battlefield + hand + graveyard. We don't
+        # check the command zone separately because the commander is
+        # always treated as "available" via casting; if a combo requires
+        # the commander, casting it puts it on the battlefield where this
+        # check picks it up.
+        if combo_index and combo_win_turn is None:
+            possessed = _possessed_card_names(state)
+            for combo, combo_set in combo_index:
+                if combo_set.issubset(possessed):
+                    combo_win_turn = state.turn
+                    combo_id_fired = combo.combo_id
+                    break
 
         if state.game_over:
             break
@@ -178,9 +255,63 @@ def _run_single_game(
         turn_metrics=list(state.turn_history),
         objectives_met={o.name: o.met for o in objectives},
         objectives_met_turn={o.name: o.met_on_turn for o in objectives},
+        combo_win_turn=combo_win_turn,
+        combo_id_fired=combo_id_fired,
     )
 
     return result
+
+
+def _possessed_card_names(state: GameState) -> frozenset[str]:
+    """Lowercased card-name set for everything currently in the player's
+    possession (battlefield + hand + graveyard).
+
+    Used by the combo-aware turn check. Excluded zones: library (unknown
+    to the player) and exile (out of reach for combo assembly without
+    further effects).
+    """
+    names: set[str] = set()
+    for p in state.battlefield:
+        if p.card:
+            names.add(p.card.name.lower())
+    for entry in state.hand:
+        if entry.card:
+            names.add(entry.card.name.lower())
+    for entry in state.graveyard:
+        if entry.card:
+            names.add(entry.card.name.lower())
+    return frozenset(names)
+
+
+def _aggregate_combo_results(
+    report: GoldfishReport,
+    results: list[GameResult],
+    simulations: int,
+    combos: list[Combo],
+) -> None:
+    """Fold combo-fire data into the report. No-op when combos is empty."""
+    if not combos or simulations <= 0:
+        return
+    fired = [r.combo_win_turn for r in results if r.combo_win_turn is not None]
+    if not fired:
+        return
+    report.combo_win_rate = round(len(fired) / simulations, 4)
+    report.average_combo_win_turn = round(sum(fired) / len(fired), 2)
+    dist: Counter[int] = Counter(fired)
+    report.combo_win_turn_distribution = {k: round(v / simulations, 4) for k, v in sorted(dist.items())}
+
+    # Top combo lines by frequency. Build a lookup so we can resolve
+    # combo_id → short label without hitting the combo store again.
+    label_for: dict[str, str] = {}
+    for c in combos:
+        label_for[c.combo_id] = c.short_label()
+    fire_counter: Counter[str] = Counter(
+        r.combo_id_fired for r in results if r.combo_id_fired
+    )
+    report.top_combo_lines = [
+        (cid, label_for.get(cid, cid), count, round(count / simulations, 4))
+        for cid, count in fire_counter.most_common(5)
+    ]
 
 
 def _aggregate_results(

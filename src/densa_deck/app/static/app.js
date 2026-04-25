@@ -1511,6 +1511,54 @@ function renderGoldfish(r) {
     `<li>${escape(name)} <span class="status-text">cast in ${count} games</span></li>`
   ).join("");
 
+  // Combo wins panel — only renders when combos were actually evaluated.
+  // Builds two pieces: a "Combo wins" stat-card (sits next to kill stats)
+  // and a per-turn distribution row underneath, mirroring the kill-turn
+  // distribution UI.
+  const combosEvaluated = r.combos_evaluated || 0;
+  const comboWinRate = r.combo_win_rate || 0;
+  const avgComboTurn = r.average_combo_win_turn || 0;
+  const comboCard = combosEvaluated > 0 ? `
+    <div class="stat-card"><div class="label">Combo win rate</div>
+      <div class="value">${(comboWinRate * 100).toFixed(0)}%</div>
+      <div class="sub">${avgComboTurn ? `turn ${avgComboTurn.toFixed(1)} avg` : "no combos assembled"}</div>
+    </div>
+  ` : "";
+
+  let comboDistSection = "";
+  if (combosEvaluated > 0 && Object.keys(r.combo_win_turn_distribution || {}).length) {
+    const dist = r.combo_win_turn_distribution || {};
+    const cTurns = Object.keys(dist).map(Number).sort((a, b) => a - b);
+    const cMax = Math.max(...Object.values(dist), 0.0001);
+    const cRows = cTurns.map(t => {
+      const rate = dist[t];
+      const pct = (rate / cMax) * 100;
+      return `<div class="kill-turn-row">
+        <span class="turn-label">Turn ${t}</span>
+        <span class="track"><span class="fill combo-fill" style="width:${pct}%"></span></span>
+        <span class="rate-label">${(rate * 100).toFixed(1)}%</span>
+      </div>`;
+    }).join("");
+    const topLines = (r.top_combo_lines || []).slice(0, 5).map(([id, label, count, rate]) =>
+      `<li><strong>${escape(label)}</strong> &middot; <span class="status-text">${count} game${count === 1 ? "" : "s"} (${(rate * 100).toFixed(1)}%)</span></li>`,
+    ).join("");
+    comboDistSection = `
+      <div class="result-section">
+        <h3>Combo win-turn distribution</h3>
+        <p class="panel-hint">${combosEvaluated} combo line${combosEvaluated === 1 ? "" : "s"} tracked. A "combo win" means all pieces were in possession (battlefield + hand + graveyard) by the listed turn.</p>
+        <div class="kill-turn-dist">${cRows}</div>
+        ${topLines ? `<h4>Top firing combos</h4><ul class="rec-list">${topLines}</ul>` : ""}
+      </div>
+    `;
+  } else if (combosEvaluated > 0) {
+    comboDistSection = `
+      <div class="result-section">
+        <h3>Combos</h3>
+        <p class="panel-hint">${combosEvaluated} combo line${combosEvaluated === 1 ? "" : "s"} tracked, but none assembled in ${r.simulations} games.</p>
+      </div>
+    `;
+  }
+
   els.goldfish_result.innerHTML = `
     <div class="panel">
       <h2>Goldfish simulation — ${r.simulations} games</h2>
@@ -1519,6 +1567,7 @@ function renderGoldfish(r) {
         <div class="stat-card"><div class="label">Kill rate</div><div class="value">${(r.kill_rate * 100).toFixed(0)}%</div><div class="sub">games dealing 40+ damage</div></div>
         <div class="stat-card"><div class="label">Avg mulligans</div><div class="value">${r.average_mulligans.toFixed(2)}</div></div>
         <div class="stat-card"><div class="label">Commander cast rate</div><div class="value">${(r.commander_cast_rate * 100).toFixed(0)}%</div><div class="sub">turn ${r.average_commander_turn.toFixed(1)} avg</div></div>
+        ${comboCard}
       </div>
 
       ${turns.length ? `
@@ -1526,6 +1575,8 @@ function renderGoldfish(r) {
           <h3>Kill-turn distribution</h3>
           <div class="kill-turn-dist">${rows}</div>
         </div>` : ""}
+
+      ${comboDistSection}
 
       ${mostCast ? `
         <div class="result-section">
