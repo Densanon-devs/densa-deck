@@ -38,6 +38,17 @@ hidden_imports = (
     + collect_submodules("jinja2", on_error="ignore")
     + collect_submodules("markupsafe", on_error="ignore")
     + collect_submodules("diskcache", on_error="ignore")
+    # MCP SDK + transitive deps for the `densa-deck mcp serve` subcommand.
+    # All optional — if any of these aren't installed, PyInstaller skips
+    # them; the CLI command still imports lazily and prints a clear
+    # install hint. Bundling them by default means the desktop binary
+    # ships an MCP-ready engine without a separate user-facing install.
+    + collect_submodules("mcp", on_error="ignore")
+    + collect_submodules("httpx_sse", on_error="ignore")
+    + collect_submodules("sse_starlette", on_error="ignore")
+    + collect_submodules("starlette", on_error="ignore")
+    + collect_submodules("anyio", on_error="ignore")
+    + collect_submodules("uvicorn", on_error="ignore")
     + ["typing_extensions"]
 )
 

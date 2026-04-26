@@ -243,6 +243,19 @@ def main():
         help="Remove the registration instead of adding it",
     )
 
+    # mcp command — expose the engine to AI clients over the Model Context
+    # Protocol. `densa-deck mcp serve` runs a stdio server that Claude
+    # desktop / ulcagent / Cursor / etc. can mount as a subprocess.
+    mcp_parser = subparsers.add_parser(
+        "mcp", help="Run an MCP (Model Context Protocol) server (Pro features license-gated)")
+    mcp_subs = mcp_parser.add_subparsers(dest="mcp_action")
+    mcp_serve = mcp_subs.add_parser(
+        "serve", help="Run the MCP server on stdio for AI clients to mount")
+    mcp_serve.add_argument(
+        "--read-only", action="store_true",
+        help="Skip registering Pro tools entirely — agent can't see goldfish/gauntlet/coach",
+    )
+
     # analyst command (Pro) — manage the local GGUF model for the LLM analyst layer
     analyst_parser = subparsers.add_parser(
         "analyst", help="Manage the local LLM analyst model (Pro)")
@@ -426,6 +439,8 @@ def main():
         cmd_app(args)
     elif command == "register-protocol":
         cmd_register_protocol(args)
+    elif command == "mcp":
+        cmd_mcp(args)
     elif command == "combos":
         cmd_combos(args)
     elif command == "rule0":
@@ -1402,6 +1417,33 @@ def _handle_activation_url(url: str):
             console.print(f"[yellow]Deep-link activation failed — invalid key.[/yellow]")
     except Exception as e:
         console.print(f"[yellow]Deep-link parse failed ({e}); launching normally.[/yellow]")
+
+
+def cmd_mcp(args):
+    """Run the Densa Deck MCP server on stdio.
+
+    `densa-deck mcp serve` is the entry point — AI clients (Claude desktop,
+    ulcagent, Cursor) launch this as a subprocess and talk JSON-RPC over
+    the pipes. Free-tier tools (analyze, search, combos, version history)
+    are always exposed; Pro tools (goldfish, gauntlet, analyst, coach) are
+    license-gated via tiers.get_user_tier() — same gate the desktop UI
+    uses, so a Pro license unlocks all three surfaces from one activation.
+
+    `--read-only` skips registering Pro tools entirely (defense-in-depth
+    for users who want to expose the server to a less-trusted agent).
+    """
+    action = getattr(args, "mcp_action", None)
+    if action != "serve":
+        console.print(
+            "[yellow]Usage: densa-deck mcp serve [--read-only][/yellow]\n"
+            "[dim]Add this server to your AI client's MCP config to drive "
+            "the engine via tool calls.[/dim]"
+        )
+        return
+    # Lazy import — keeps the rest of the CLI importable even when the
+    # optional `mcp` SDK isn't installed.
+    from densa_deck.mcp.server import run_stdio_server
+    run_stdio_server(read_only=getattr(args, "read_only", False))
 
 
 def cmd_register_protocol(args):
