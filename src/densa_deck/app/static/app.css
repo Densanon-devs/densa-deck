@@ -858,6 +858,12 @@ body {
   color: #8fe388;
 }
 
+.toast.warn {
+  border-color: #e8a33b;
+  color: #e8a33b;
+  max-width: 520px;
+}
+
 code {
   background: var(--color-bg);
   padding: 1px 6px;

@@ -31,6 +31,8 @@ function cacheElements() {
     "tier-badge", "setup-banner", "update-banner",
     // Card DB update banner + what-changed modal
     "card-db-update-banner", "card-db-update-banner-body", "card-db-update-now-btn",
+    // Combo cache stale banner (>90d) — one-shot launch prompt
+    "combo-stale-banner", "combo-stale-banner-body", "combo-stale-refresh-btn",
     "db-diff-modal", "db-diff-body", "db-diff-close-btn", "db-diff-dismiss-btn",
     // Settings: DB preferences + check now
     "pref-auto-check", "pref-auto-download", "check-db-update-btn",
@@ -94,13 +96,28 @@ async function callApi(method, ...args) {
   return result;
 }
 
-function toast(message, kind = "info") {
+function toast(message, kind = "info", durationMs = 4000) {
   const t = els.toast;
   t.textContent = message;
   t.className = "toast " + kind;
   t.classList.remove("hidden");
   clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => t.classList.add("hidden"), 4000);
+  toast._timer = setTimeout(() => t.classList.add("hidden"), durationMs);
+}
+
+// When a save snapshot reports `combos_broken`, surface it as a follow-up
+// warning toast so the user knows their edit dropped a combo line. Stays on
+// screen longer than a normal toast since the names matter.
+function notifyCombosBroken(snap) {
+  const broken = (snap && snap.combos_broken) || [];
+  if (!broken.length) return;
+  const labels = broken.slice(0, 3).map(c => c.short_label || c.name || "(combo)");
+  const more = broken.length > 3 ? ` (+${broken.length - 3} more)` : "";
+  const word = broken.length === 1 ? "combo" : "combos";
+  setTimeout(() => {
+    toast(`Heads up: this save broke ${broken.length} ${word} — ${labels.join("; ")}${more}`,
+          "warn", 8000);
+  }, 1200);
 }
 
 // ------------------------------ Tabs ------------------------------
@@ -408,6 +425,57 @@ async function bootstrap() {
   const replayBtn = document.getElementById("replay-tour-btn");
   if (replayBtn && window.Tour) {
     replayBtn.addEventListener("click", () => window.Tour.restart());
+  }
+
+  // One-shot stale-combo prompt: if the cache is 90+ days old AND the user
+  // hasn't already dismissed the banner for the current cohort, surface
+  // it. Dismissals are keyed off `last_refresh_at` so the prompt re-fires
+  // after the next refresh ages out.
+  setTimeout(() => { maybePromptStaleCombos(); }, 400);
+  if (els.combo_stale_refresh_btn) {
+    els.combo_stale_refresh_btn.addEventListener("click", () => {
+      els.combo_stale_banner.classList.add("hidden");
+      switchView("settings");
+      // Settings tab loads loadComboStatus on view, so the freshness card
+      // updates without an extra refresh round-trip.
+      startComboRefresh();
+    });
+  }
+}
+
+async function maybePromptStaleCombos() {
+  if (!els.combo_stale_banner) return;
+  let s;
+  try {
+    s = await callApi("get_combo_status");
+  } catch (e) { return; }
+  if (!s || !s.combo_count || !s.last_refresh_at) return;
+  let daysAgo;
+  try {
+    const refreshDate = new Date(s.last_refresh_at);
+    daysAgo = (Date.now() - refreshDate.getTime()) / (1000 * 60 * 60 * 24);
+  } catch (e) { return; }
+  if (daysAgo < 90) return;
+  // localStorage key encodes the cohort so dismissing one stale window
+  // doesn't suppress the prompt forever — once the user refreshes, the
+  // key changes and a future >90d window prompts again.
+  const dismissKey = `combo-stale-dismissed:${s.last_refresh_at}`;
+  try {
+    if (localStorage.getItem(dismissKey)) return;
+  } catch (e) { /* localStorage may be disabled — fall through and prompt anyway */ }
+
+  els.combo_stale_banner_body.innerHTML =
+    `<strong>Combo data is ${Math.floor(daysAgo)} days old.</strong> ` +
+    `Commander Spellbook adds new variants weekly — refresh to keep detection accurate.`;
+  els.combo_stale_banner.classList.remove("hidden");
+  // The shared .banner-close handler hides the banner; we layer onto it
+  // here to also persist the dismissal for this cohort.
+  const closeBtn = els.combo_stale_banner.querySelector(".banner-close");
+  if (closeBtn && !closeBtn.dataset.staleHandlerWired) {
+    closeBtn.dataset.staleHandlerWired = "1";
+    closeBtn.addEventListener("click", () => {
+      try { localStorage.setItem(dismissKey, "1"); } catch (e) { /* non-fatal */ }
+    });
   }
 }
 
@@ -1053,6 +1121,7 @@ async function saveFromAnalyzeTab() {
     const snap = await callApi("save_deck_version",
       deckId, name, text, els.format_select.value, "initial save");
     toast(`Saved "${name}" as v${snap.version_number}.`, "success");
+    notifyCombosBroken(snap);
   } catch (e) {
     toast("Save failed: " + e.message, "error");
   }
@@ -1170,6 +1239,7 @@ async function saveEditorAsNewVersion() {
       state.currentDeckId, state.currentSnapshot.deck_id,
       text, state.currentSnapshot.format || "commander", notes);
     toast(`Saved as v${snap.version_number}.`, "success");
+    notifyCombosBroken(snap);
     await openDeck(state.currentDeckId);
   } catch (e) {
     toast("Save failed: " + e.message, "error");
@@ -1349,6 +1419,26 @@ async function runAnalystCompare() {
       .join("");
     const addedSample = (r.added_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
     const removedSample = (r.removed_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
+    // Combo gained / lost — only render the section when at least one
+    // bucket is non-empty. Each row carries an external-link affordance
+    // pointing at the upstream Spellbook page (handled below).
+    const cmpGained = (r.combo_gained || []);
+    const cmpLost = (r.combo_lost || []);
+    const cmpComboBlock = (cmpGained.length || cmpLost.length) ? `
+      <div style="margin-top:10px">
+        <h4>Combos in B vs A</h4>
+        ${cmpGained.length ? `
+          <strong class="diff-add">Newly complete in B (${cmpGained.length}):</strong>
+          <ul>${cmpGained.map(c =>
+            `<li class="diff-add">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+          ).join("")}</ul>` : ""}
+        ${cmpLost.length ? `
+          <strong class="diff-remove">Lost in B (${cmpLost.length}):</strong>
+          <ul>${cmpLost.map(c =>
+            `<li class="diff-remove">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+          ).join("")}</ul>` : ""}
+      </div>
+    ` : "";
     els.compare_decks_result.innerHTML = `
       <div class="duel-verdict">
         <div class="duel-verdict-headline">Analyst comparison ${verifiedBadge}</div>
@@ -1368,8 +1458,15 @@ async function runAnalystCompare() {
             <p class="panel-hint">${removedSample}${(r.removed_cards || []).length > 6 ? ` … +${r.removed_cards.length - 6} more` : ""}</p>
           </div>
         </div>
+        ${cmpComboBlock}
       </div>
     `;
+    els.compare_decks_result.querySelectorAll("a.external-link").forEach(a =>
+      a.addEventListener("click", (e) => {
+        e.preventDefault();
+        const url = a.dataset.url;
+        if (url) callApi("open_external", url).catch(() => {});
+      }));
   } catch (e) {
     els.compare_decks_result.innerHTML = `<p class="panel-hint" style="color:#ff9999">Compare failed: ${escape(e.message)}</p>`;
   } finally {

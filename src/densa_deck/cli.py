@@ -303,6 +303,21 @@ def main():
         "--format", default="commander", help="Format profile (default: commander)")
     combos_density.add_argument("--db", type=Path)
 
+    # Debug helper: given a deck + a Spellbook combo id (the URL slug like
+    # "1234-5678-..."), report which pieces the deck has and which are
+    # missing. Useful for diagnosing why a combo isn't showing in detect /
+    # near-miss output.
+    combos_verify = combos_subs.add_parser(
+        "verify",
+        help="Check whether a deck contains all pieces of a named combo")
+    combos_verify.add_argument(
+        "deck", help="Deck file (or '-' for stdin)")
+    combos_verify.add_argument(
+        "combo_id", help="Commander Spellbook combo id (URL slug)")
+    combos_verify.add_argument(
+        "--format", default="commander", help="Format profile (default: commander)")
+    combos_verify.add_argument("--db", type=Path)
+
     # bracket command — Commander bracket-fit assessment (free tier)
     bracket_parser = subparsers.add_parser(
         "bracket", help="Assess how a deck fits a Commander bracket (1-precon ... 5-cedh)")
@@ -611,11 +626,14 @@ def cmd_analyze(args):
                         deck, result,
                         deck_id_override=getattr(args, "deck_id", None),
                     )
+                combo_lines, protected_card_names = _collect_combo_context(deck)
                 analyst_output = _run_analyst(
                     deck, result, power, adv, archetype.value,
                     seed=getattr(args, "llm_seed", 0),
                     playgroup_power=getattr(args, "playgroup_power", None),
                     version_diff=version_diff,
+                    combo_lines=combo_lines,
+                    protected_card_names=protected_card_names,
                 )
                 # Swaps are computed from the same analyst runner using the
                 # rule-engine ranker + candidate DB — no new LLM call.
@@ -628,6 +646,7 @@ def cmd_analyze(args):
                         archetype=archetype.value, db=db,
                         format_name=(deck.format.value if deck.format else "commander"),
                         swap_count=swap_count,
+                        protected_card_names=protected_card_names,
                     )
                 _render_analyst(analyst_output)
 
@@ -1763,11 +1782,54 @@ def _load_prev_version_diff(deck, result, deck_id_override: str | None = None) -
     }
 
 
+def _collect_combo_context(deck):
+    """Detect combos in `deck` and return (combo_lines, protected_card_names).
+
+    Reads the local Commander Spellbook cache. Returns ([], None) if the
+    cache is empty or detection fails — combo awareness is opt-in and never
+    blocks an analyze run. `protected_card_names` is None (not an empty
+    set) when there are no combos, so the analyst's cut ranker keeps its
+    default no-protection branch instead of receiving an empty filter.
+    """
+    try:
+        from densa_deck.combos import ComboStore, detect_combos
+    except Exception:
+        return [], None
+    try:
+        store = ComboStore()
+        if store.combo_count() <= 0:
+            return [], None
+        deck_card_names = [e.card.name for e in deck.entries if e.card]
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        matches = detect_combos(
+            store=store,
+            deck_card_names=deck_card_names,
+            deck_color_identity=deck_color_identity,
+            limit=8,
+        )
+        if not matches:
+            return [], None
+        combo_lines = [m.combo.short_label() for m in matches]
+        # `rank_cut_candidates` compares with `card.name.lower() in protected`,
+        # so the set must hold lowercase names.
+        protected: set[str] = set()
+        for m in matches:
+            for name in m.in_deck_cards:
+                protected.add(name.lower())
+        return combo_lines, protected
+    except Exception:
+        return [], None
+
+
 def _run_analyst(
     deck, result, power, adv, archetype_value: str,
     seed: int = 42,
     playgroup_power: float | None = None,
     version_diff: dict | None = None,
+    combo_lines: list[str] | None = None,
+    protected_card_names: set[str] | None = None,
 ):
     """Run the LLM analyst layer. Picks backend from MTG_ANALYST_BACKEND env var.
 
@@ -1812,6 +1874,8 @@ def _run_analyst(
         archetype=archetype_value, format_name=(deck.format.value if deck.format else "commander"),
         playgroup_power=playgroup_power,
         version_diff=version_diff,
+        combo_lines=combo_lines,
+        protected_card_names=protected_card_names,
     )
 
 
@@ -2831,6 +2895,82 @@ def cmd_combos(args):
             console.print(f"  {i:>2}. {n.combo.short_label()}")
             console.print(f"      [dim]missing: {missing_str}[/dim]")
             console.print(f"      [dim]{n.combo.spellbook_url}[/dim]")
+        return
+
+    if action == "verify":
+        if store.combo_count() == 0:
+            console.print(
+                "[yellow]Combo cache empty. Run `densa-deck combos refresh` first.[/yellow]"
+            )
+            return
+        combo = store.get_combo(args.combo_id)
+        if combo is None:
+            console.print(
+                f"[red]No combo found for id '{args.combo_id}'.[/red] "
+                "[dim]Use `densa-deck combos detect` to surface ids the cache knows.[/dim]"
+            )
+            return
+        text = _read_deck_text(args.deck)
+        if not text.strip():
+            console.print("[red]No deck text provided.[/red]")
+            return
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.deck.resolver import resolve_deck
+        from densa_deck.models import Format
+        db = _get_db(args)
+        if db.card_count() == 0:
+            console.print("[yellow]Card database empty — run `densa-deck ingest` first.[/yellow]")
+            return
+        try:
+            fmt = Format(args.format)
+        except ValueError:
+            fmt = Format.COMMANDER
+        entries = parse_decklist(text)
+        deck = resolve_deck(entries, db, format=fmt)
+        deck_color_identity = sorted({
+            c.value for e in deck.entries if e.card for c in e.card.color_identity
+        })
+        # Case-insensitive match — mirrors detect_combos in
+        # `densa_deck.combos.matcher` so verify and detect agree on a
+        # given combo's "is it in the deck" verdict.
+        deck_lower = {e.card.name.lower() for e in deck.entries if e.card}
+
+        missing = [c for c in combo.cards if c.lower() not in deck_lower]
+        # Color-identity check mirrors detect_combos so the verdict matches
+        # what `combos detect` would say if this combo's cards were all in.
+        combo_ci = set(combo.color_identity or "")
+        deck_ci = set(deck_color_identity)
+        ci_ok = combo_ci.issubset(deck_ci)
+
+        console.print(f"[bold]Combo:[/bold] {combo.short_label()}")
+        console.print(f"[dim]{combo.spellbook_url}[/dim]")
+        console.print()
+        for c in combo.cards:
+            mark = "[green]✓[/green]" if c.lower() in deck_lower else "[red]✗[/red]"
+            console.print(f"  {mark} {c}")
+        if combo.templates:
+            console.print()
+            console.print("[bold]Templates (not deck-checked):[/bold]")
+            for t in combo.templates:
+                console.print(f"  • {t}")
+
+        console.print()
+        if not missing and ci_ok:
+            console.print(
+                f"[green]Deck contains all {len(combo.cards)} pieces "
+                "and color identity fits.[/green]"
+            )
+        elif not missing and not ci_ok:
+            extra = "".join(sorted(combo_ci - deck_ci))
+            console.print(
+                f"[yellow]All pieces present, but combo needs colors {extra} "
+                f"outside the deck's identity ({''.join(sorted(deck_ci)) or 'C'}).[/yellow]"
+            )
+        else:
+            console.print(
+                f"[yellow]Missing {len(missing)} of {len(combo.cards)} piece"
+                f"{'' if len(missing) == 1 else 's'}: {', '.join(missing)}.[/yellow]"
+            )
         return
 
     if action == "detect":
