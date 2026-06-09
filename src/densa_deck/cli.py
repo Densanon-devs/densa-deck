@@ -106,6 +106,14 @@ def main():
         "--swaps", type=int, default=0, metavar="N",
         help="Generate N paired cut+add swap suggestions (Pro; requires --with-llm)",
     )
+    analyze_parser.add_argument(
+        "--budget", type=float, default=None, metavar="USD",
+        help="Per-card USD ceiling; flags cards above the cap in the pricing summary.",
+    )
+    analyze_parser.add_argument(
+        "--playgroup", type=str, default=None, metavar="NAME",
+        help="Tune the analyst against a saved pod. Defaults to the default pod when set.",
+    )
 
     # probability command
     prob_parser = subparsers.add_parser("probability", help="Run probability analysis on a decklist")
@@ -302,6 +310,57 @@ def main():
     )
     analyst_subs.add_parser("show", help="Show the configured model path + availability")
 
+    # iterate command — propose/preview/history of changes against a deck
+    iter_parser = subparsers.add_parser(
+        "iterate",
+        help="Propose concrete cuts/adds and preview their structural impact",
+    )
+    iter_subs = iter_parser.add_subparsers(dest="iterate_action")
+    iter_propose = iter_subs.add_parser("propose", help="List cut + add proposals for a deck")
+    iter_propose.add_argument("file", type=str, help="Path to decklist file")
+    iter_propose.add_argument("--format", type=str, default=None, choices=[f.value for f in Format])
+    iter_propose.add_argument("--budget", type=float, default=None, metavar="USD",
+                              help="Per-card USD ceiling for add suggestions.")
+    iter_propose.add_argument("--db", type=str, help="Custom card DB path")
+    iter_propose.add_argument("--cut-limit", type=int, default=6)
+    iter_propose.add_argument("--add-limit", type=int, default=6)
+
+    iter_preview = iter_subs.add_parser("preview", help="Preview one cut/add and show metric deltas")
+    iter_preview.add_argument("file", type=str, help="Path to decklist file")
+    iter_preview.add_argument("kind", choices=["cut", "add"], help="Change kind")
+    iter_preview.add_argument("card_name", type=str, help="Card name to cut/add")
+    iter_preview.add_argument("--format", type=str, default=None, choices=[f.value for f in Format])
+    iter_preview.add_argument("--db", type=str, help="Custom card DB path")
+
+    iter_history = iter_subs.add_parser("history", help="Show iteration history for a deck_id")
+    iter_history.add_argument("deck_id", type=str, help="Deck identifier used at accept time")
+    iter_history.add_argument("--limit", type=int, default=25)
+
+    # playgroup command — store/manage pod profiles for tuning recommendations
+    playgroup_parser = subparsers.add_parser(
+        "playgroup",
+        help="Manage playgroup (pod) profiles for analyst-tuned recommendations",
+    )
+    playgroup_subs = playgroup_parser.add_subparsers(dest="playgroup_action")
+    pg_list = playgroup_subs.add_parser("list", help="List pods (or show one)")
+    pg_list.add_argument("name", nargs="?", default=None, help="Pod name (omit to list all)")
+    pg_add = playgroup_subs.add_parser("add", help="Add or update a pod member")
+    pg_add.add_argument("pod", type=str, help="Pod name (created if it doesn't exist)")
+    pg_add.add_argument("commander", type=str, help="Commander name (the pod member's identity)")
+    pg_add.add_argument("--archetype", type=str, default="unknown",
+                        help="Archetype tag (combo / control / aggro / midrange / ...)")
+    pg_add.add_argument("--power", type=_playgroup_power_type, default=None,
+                        help="Power level on the 1-10 Commander scale")
+    pg_add.add_argument("--notes", type=str, default="", help="Optional notes about this player")
+    pg_remove = playgroup_subs.add_parser("remove", help="Remove a member from a pod")
+    pg_remove.add_argument("pod", type=str, help="Pod name")
+    pg_remove.add_argument("commander", type=str, help="Commander name to drop")
+    pg_delete = playgroup_subs.add_parser("delete", help="Delete an entire pod")
+    pg_delete.add_argument("pod", type=str, help="Pod name to delete")
+    pg_default = playgroup_subs.add_parser(
+        "set-default", help="Mark a pod as the default for analyze --playgroup")
+    pg_default.add_argument("pod", type=str, help="Pod name")
+
     # combos command — Commander Spellbook integration (free tier)
     combos_parser = subparsers.add_parser(
         "combos",
@@ -487,6 +546,10 @@ def main():
         cmd_bracket(args)
     elif command == "export":
         cmd_export(args)
+    elif command == "playgroup":
+        cmd_playgroup(args)
+    elif command == "iterate":
+        cmd_iterate(args)
 
 
 def _get_db(args) -> CardDatabase:
@@ -654,6 +717,29 @@ def cmd_analyze(args):
                     for s in recommended[:5]:
                         console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
 
+        # Pricing summary — free tier feature, surfaces Scryfall data we
+        # already ingest. Quiet when the deck has no priced cards at all.
+        from densa_deck.analysis.pricing import compute_deck_value
+        budget_cap = getattr(args, "budget", None)
+        deck_value = compute_deck_value(deck, budget_per_card_usd=budget_cap)
+        if deck_value.total_known_usd > 0 or deck_value.unpriced_count > 0:
+            console.print()
+            total_line = f"  [bold]Deck value:[/bold] [green]${deck_value.total_known_usd:.2f}[/green]"
+            if deck_value.unpriced_count > 0:
+                total_line += f" [dim]({deck_value.unpriced_count} unpriced)[/dim]"
+            console.print(total_line)
+            if deck_value.priciest:
+                top = deck_value.priciest[:3]
+                bits = [f"{l.name} ${l.line_total:.0f}" for l in top]
+                console.print(f"    [dim]Priciest: {' | '.join(bits)}[/dim]")
+            if budget_cap is not None and deck_value.over_budget:
+                console.print(
+                    f"    [yellow]Over budget (>${budget_cap:.0f}/card):[/yellow] "
+                    f"[dim]{len(deck_value.over_budget)} card(s)[/dim]"
+                )
+                for line in deck_value.over_budget[:5]:
+                    console.print(f"      [dim]- {line.name}: ${line.unit_price_usd:.2f}[/dim]")
+
         console.print()
 
         # Probability layer (--deep) [PRO]
@@ -676,6 +762,7 @@ def cmd_analyze(args):
                         deck_id_override=getattr(args, "deck_id", None),
                     )
                 combo_lines, protected_card_names = _collect_combo_context(deck)
+                pod_context = _load_pod_context(getattr(args, "playgroup", None))
                 analyst_output = _run_analyst(
                     deck, result, power, adv, archetype.value,
                     seed=getattr(args, "llm_seed", 0),
@@ -683,6 +770,7 @@ def cmd_analyze(args):
                     version_diff=version_diff,
                     combo_lines=combo_lines,
                     protected_card_names=protected_card_names,
+                    pod_context=pod_context,
                 )
                 # Swaps are computed from the same analyst runner using the
                 # rule-engine ranker + candidate DB — no new LLM call.
@@ -2127,6 +2215,7 @@ def _run_analyst(
     version_diff: dict | None = None,
     combo_lines: list[str] | None = None,
     protected_card_names: set[str] | None = None,
+    pod_context=None,
 ):
     """Run the LLM analyst layer. Picks backend from MTG_ANALYST_BACKEND env var.
 
@@ -2173,6 +2262,7 @@ def _run_analyst(
         version_diff=version_diff,
         combo_lines=combo_lines,
         protected_card_names=protected_card_names,
+        pod_context=pod_context,
     )
 
 
@@ -3641,6 +3731,204 @@ def cmd_export(args):
         sys.stdout.write(content)
         if not content.endswith("\n"):
             sys.stdout.write("\n")
+
+
+def cmd_iterate(args):
+    """`densa-deck iterate {propose,preview,history}` — close the build loop."""
+    from densa_deck.deck.parser import parse_decklist
+    from densa_deck.deck.resolver import resolve_deck
+    from densa_deck.iteration import (
+        IterationStore, Proposal, preview_change, propose_changes,
+    )
+
+    action = getattr(args, "iterate_action", None)
+    if action == "history":
+        store = IterationStore()
+        records = store.history(args.deck_id, limit=args.limit)
+        summary = store.summary(args.deck_id)
+        if not records:
+            console.print(f"[dim]No iteration history for deck_id '{args.deck_id}'.[/dim]")
+            return
+        console.print(
+            f"[bold]Iteration history — {args.deck_id}[/bold]  "
+            f"[dim]({summary['total_records']} records, "
+            f"{summary['accepted_cuts']}+{summary['accepted_adds']} accepted)[/dim]"
+        )
+        if summary["net_power_delta"] is not None:
+            sign = "+" if summary["net_power_delta"] >= 0 else ""
+            console.print(f"  [dim]Net power delta: {sign}{summary['net_power_delta']}[/dim]\n")
+        for r in records:
+            mark = "[green]Y[/green]" if r.accepted else "[red]X[/red]"
+            tag = r.kind.upper()
+            console.print(f"  {mark} [bold]{tag}[/bold] {r.card_name} [dim]({r.source} • {r.created_at})[/dim]")
+        return
+
+    # propose / preview both need a parsed deck.
+    text = Path(args.file).read_text(encoding="utf-8")
+    db = _get_db(args)
+    if db.card_count() == 0:
+        console.print("[red]Card DB empty — run `densa-deck ingest` first.[/red]")
+        sys.exit(1)
+    entries = parse_decklist(text)
+    try:
+        fmt = Format(args.format) if args.format else None
+    except ValueError:
+        fmt = None
+    deck = resolve_deck(entries, db, name=Path(args.file).stem, format=fmt)
+
+    if action == "preview":
+        proposal = Proposal(kind=args.kind, card_name=args.card_name,
+                            reason="", source="cli", signal="")
+        result = preview_change(deck, proposal, db=db)
+        if result.error and result.proposal.kind == "cut":
+            console.print(f"[red]{result.error}[/red]")
+            return
+        console.print(
+            f"[bold]{result.proposal.kind.upper()}[/bold] {result.proposal.card_name}"
+        )
+        if result.error:
+            console.print(f"  [yellow]{result.error}[/yellow]")
+        for key, diff in result.deltas.items():
+            if diff is None or diff == 0:
+                continue
+            sign = "+" if diff > 0 else ""
+            console.print(f"  [dim]{key}:[/dim] {sign}{diff}")
+        return
+
+    # propose (default)
+    proposals = propose_changes(
+        deck=deck, db=db, format_=fmt,
+        cut_limit=args.cut_limit, add_limit=args.add_limit,
+        budget_usd=getattr(args, "budget", None),
+    )
+    if not proposals:
+        console.print("[dim]No proposals surfaced — the deck looks tight.[/dim]")
+        return
+    console.print(f"[bold]Proposals for {Path(args.file).name}[/bold]  [dim]({len(proposals)})[/dim]\n")
+    for p in proposals:
+        kind_color = "yellow" if p.kind == "cut" else "green"
+        console.print(
+            f"  [bold {kind_color}]{p.kind.upper()}[/bold {kind_color}] [bold]{p.card_name}[/bold] "
+            f"[dim](score {p.score:.1f}, {p.source})[/dim]"
+        )
+        console.print(f"      [dim]{p.reason}[/dim]")
+
+
+def _load_pod_context(name: str | None):
+    """Resolve a pod by name (or default if name is None / blank) and
+    derive its PodContext. Returns None when no matching pod exists or
+    the playgroup DB hasn't been touched yet — `--playgroup` is opt-in."""
+    if name is None:
+        # Honor an unflagged default only when the user has explicitly
+        # marked a pod as default. We don't auto-load on every analyze
+        # because that would silently change recommendations for users
+        # who experimented with pods once and moved on.
+        try:
+            from densa_deck.playgroup import PlaygroupStore, build_pod_context
+            store = PlaygroupStore()
+            pod = store.get_default_pod()
+            if pod is None:
+                return None
+            return build_pod_context(pod)
+        except Exception:
+            return None
+    name = name.strip()
+    if not name:
+        return None
+    try:
+        from densa_deck.playgroup import PlaygroupStore, build_pod_context
+        store = PlaygroupStore()
+        pod = store.get_pod(name)
+        if pod is None:
+            console.print(f"[yellow]No saved pod named '{name}' — analyst will run without pod context.[/yellow]")
+            return None
+        return build_pod_context(pod)
+    except Exception as e:
+        console.print(f"[yellow]Could not load pod '{name}': {e}[/yellow]")
+        return None
+
+
+def cmd_playgroup(args):
+    """Manage pod profiles for analyst tuning."""
+    from densa_deck.playgroup import PlaygroupStore
+    from densa_deck.playgroup.models import PodMember
+
+    store = PlaygroupStore()
+    action = getattr(args, "playgroup_action", None)
+
+    if action is None or action == "list":
+        name = getattr(args, "name", None) if action == "list" else None
+        if name:
+            pod = store.get_pod(name)
+            if not pod:
+                console.print(f"[yellow]No pod named '{name}'.[/yellow]")
+                return
+            _render_pod(pod)
+            return
+        pods = store.list_pods()
+        if not pods:
+            console.print("[dim]No pods saved. Add one with: densa-deck playgroup add <pod> <commander>[/dim]")
+            return
+        for pod in pods:
+            marker = " [bold cyan](default)[/bold cyan]" if pod.is_default else ""
+            console.print(f"  [bold]{pod.name}[/bold]{marker} — {pod.member_count()} member(s)")
+        return
+
+    if action == "add":
+        member = PodMember(
+            commander_name=args.commander,
+            archetype=(args.archetype or "unknown").lower(),
+            power_level=args.power,
+            notes=args.notes or "",
+        )
+        store.add_member(args.pod, member)
+        console.print(f"[green]Added '{member.commander_name}' to pod '{args.pod}'.[/green]")
+        return
+
+    if action == "remove":
+        ok = store.remove_member(args.pod, args.commander)
+        if ok:
+            console.print(f"[green]Removed '{args.commander}' from pod '{args.pod}'.[/green]")
+        else:
+            console.print(f"[yellow]No such member '{args.commander}' in pod '{args.pod}'.[/yellow]")
+        return
+
+    if action == "delete":
+        ok = store.delete_pod(args.pod)
+        if ok:
+            console.print(f"[green]Deleted pod '{args.pod}'.[/green]")
+        else:
+            console.print(f"[yellow]No pod named '{args.pod}'.[/yellow]")
+        return
+
+    if action == "set-default":
+        ok = store.set_default(args.pod)
+        if ok:
+            console.print(f"[green]Pod '{args.pod}' is now the default.[/green]")
+        else:
+            console.print(f"[yellow]No pod named '{args.pod}'.[/yellow]")
+        return
+
+    console.print(f"[red]Unknown playgroup action: {action}[/red]")
+
+
+def _render_pod(pod):
+    """Pretty-print a single pod."""
+    from densa_deck.playgroup.context import build_pod_context, render_pod_block
+    marker = " [bold cyan](default)[/bold cyan]" if pod.is_default else ""
+    console.print(f"\n[bold]{pod.name}[/bold]{marker} — {pod.member_count()} member(s)")
+    for i, m in enumerate(pod.members, start=1):
+        bits = [m.archetype]
+        if m.power_level is not None:
+            bits.append(f"power {m.power_level:.1f}")
+        if m.notes:
+            bits.append(m.notes)
+        console.print(f"  {i}. [bold]{m.commander_name}[/bold] — [dim]{', '.join(bits)}[/dim]")
+    ctx = build_pod_context(pod)
+    if ctx.member_count > 0:
+        console.print()
+        for line in render_pod_block(ctx).splitlines():
+            console.print(f"  [dim]{line}[/dim]")
 
 
 def _resolve_analyst_backend():

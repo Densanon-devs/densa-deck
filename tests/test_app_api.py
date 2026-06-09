@@ -142,6 +142,265 @@ class TestAnalyze:
         assert isinstance(result["power"]["overall"], (int, float))
 
 
+# ---------------------------------------------------------------- pricing
+
+@pytest.fixture
+def api_with_priced_cards(temp_dbs):
+    """API + a card library where every card has a known USD price."""
+    card_db, version_db = temp_dbs
+    db = CardDatabase(db_path=card_db)
+    cards = [
+        Card(
+            scryfall_id="sid-sol", oracle_id="oid-sol", name="Sol Ring",
+            layout=CardLayout.NORMAL, cmc=1, mana_cost="{1}",
+            type_line="Artifact", color_identity=[],
+            legalities={"commander": Legality.LEGAL},
+            oracle_text="{T}: Add {C}{C}.",
+            price_usd=2.5,
+        ),
+        Card(
+            scryfall_id="sid-arcane", oracle_id="oid-arcane", name="Arcane Signet",
+            layout=CardLayout.NORMAL, cmc=2, mana_cost="{2}",
+            type_line="Artifact", color_identity=[],
+            legalities={"commander": Legality.LEGAL},
+            oracle_text="{T}: Add one mana of any color.",
+            price_usd=1.0,
+        ),
+        Card(
+            scryfall_id="sid-vault", oracle_id="oid-vault", name="Mana Vault",
+            layout=CardLayout.NORMAL, cmc=1, mana_cost="{1}",
+            type_line="Artifact", color_identity=[],
+            legalities={"commander": Legality.LEGAL},
+            oracle_text="{T}: Add {C}{C}{C}.",
+            price_usd=80.0,
+        ),
+        Card(
+            scryfall_id="sid-cultivate", oracle_id="oid-cultivate", name="Cultivate",
+            layout=CardLayout.NORMAL, cmc=3, mana_cost="{2}{G}",
+            type_line="Sorcery", color_identity=[Color.GREEN],
+            legalities={"commander": Legality.LEGAL},
+            oracle_text="Search your library for a basic land.",
+            # No price_usd — exercises the unpriced path.
+        ),
+    ]
+    db.upsert_cards(cards)
+    db.close()
+    api = AppApi(db_path=card_db, version_db_path=version_db)
+    yield api
+    api.close()
+
+
+class TestPricing:
+    """Phase A: get_deck_value + tcgplayer_url_for_card endpoints."""
+
+    def test_get_deck_value_basic(self, api_with_priced_cards):
+        deck = "Commander:\n1 Sol Ring\n"
+        r = api_with_priced_cards.get_deck_value(deck, format_="commander", name="Test")
+        assert r["ok"] is True
+        d = r["data"]
+        assert d["total_known_usd"] == 2.5
+        assert d["unpriced_count"] == 0
+        assert d["priciest"][0]["tcgplayer_url"].startswith("https://www.tcgplayer.com/")
+
+    def test_get_deck_value_flags_over_budget(self, api_with_priced_cards):
+        deck = "Commander:\n1 Mana Vault\n\nMainboard:\n1 Arcane Signet\n"
+        r = api_with_priced_cards.get_deck_value(
+            deck, format_="commander", name="Test", budget_per_card_usd=10.0
+        )
+        assert r["ok"] is True
+        names = [c["name"] for c in r["data"]["over_budget"]]
+        assert "Mana Vault" in names
+        assert "Arcane Signet" not in names
+
+    def test_get_deck_value_counts_unpriced(self, api_with_priced_cards):
+        # Cultivate's fixture has no price_usd — it must land in unpriced.
+        deck = "Mainboard:\n1 Cultivate\n"
+        r = api_with_priced_cards.get_deck_value(deck, format_="commander", name="Test")
+        assert r["ok"] is True
+        assert r["data"]["unpriced_count"] == 1
+        assert r["data"]["total_known_usd"] == 0.0
+
+    def test_tcgplayer_url_for_card_endpoint(self, api):
+        r = api.tcgplayer_url_for_card("Jace, the Mind Sculptor")
+        assert r["ok"] is True
+        assert "tcgplayer.com" in r["data"]["tcgplayer_url"]
+        assert "Jace" in r["data"]["tcgplayer_url"]
+
+
+# ---------------------------------------------------------------- playgroup
+
+@pytest.fixture
+def api_with_playgroup_db(temp_dbs):
+    """API pointed at a fresh playgroup DB inside the temp dir.
+
+    PlaygroupStore defaults to ~/.densa-deck/playgroup.db; for tests we
+    override `_pg_store` to an instance pointing at a temp path so the
+    user's real pods aren't touched.
+    """
+    card_db, version_db = temp_dbs
+    api = AppApi(db_path=card_db, version_db_path=version_db)
+    # Point the lazy store at the temp dir BEFORE any endpoint touches it.
+    from densa_deck.playgroup import PlaygroupStore
+    api._pg_store = PlaygroupStore(db_path=card_db.parent / "playgroup.db")
+    yield api
+    api.close()
+
+
+class TestPlaygroupApi:
+    def test_list_empty(self, api_with_playgroup_db):
+        r = api_with_playgroup_db.list_playgroups()
+        assert r["ok"] is True
+        assert r["data"]["pods"] == []
+
+    def test_create_and_list(self, api_with_playgroup_db):
+        api_with_playgroup_db.create_playgroup("Wed Night")
+        r = api_with_playgroup_db.list_playgroups()
+        names = [p["name"] for p in r["data"]["pods"]]
+        assert "Wed Night" in names
+
+    def test_add_member_returns_full_pod(self, api_with_playgroup_db):
+        r = api_with_playgroup_db.add_pod_member(
+            "Wed", "Atraxa, Praetors' Voice",
+            archetype="control", power_level=7.5, notes="loves stax",
+        )
+        assert r["ok"] is True
+        pod = r["data"]["pod"]
+        assert pod["name"] == "Wed"
+        assert pod["member_count"] == 1
+        m = pod["members"][0]
+        assert m["commander_name"] == "Atraxa, Praetors' Voice"
+        assert m["archetype"] == "control"
+        assert m["power_level"] == 7.5
+        assert m["notes"] == "loves stax"
+
+    def test_get_playgroup_returns_context(self, api_with_playgroup_db):
+        api_with_playgroup_db.add_pod_member("Wed", "Korvold", archetype="aristocrats", power_level=8.0)
+        api_with_playgroup_db.add_pod_member("Wed", "Atraxa", archetype="control", power_level=7.0)
+        r = api_with_playgroup_db.get_playgroup("Wed")
+        assert r["ok"] is True
+        ctx = r["data"]["context"]
+        assert ctx["member_count"] == 2
+        assert ctx["avg_power"] == 7.5
+        assert "graveyard hate" in ctx["threat_themes"]
+
+    def test_set_default_and_get_default(self, api_with_playgroup_db):
+        api_with_playgroup_db.create_playgroup("A")
+        api_with_playgroup_db.create_playgroup("B")
+        api_with_playgroup_db.set_default_playgroup("B")
+        r = api_with_playgroup_db.get_default_playgroup()
+        assert r["ok"] is True
+        assert r["data"]["pod"]["name"] == "B"
+
+    def test_remove_member(self, api_with_playgroup_db):
+        api_with_playgroup_db.add_pod_member("Wed", "Atraxa")
+        r = api_with_playgroup_db.remove_pod_member("Wed", "Atraxa")
+        assert r["ok"] is True
+        assert r["data"]["removed"] is True
+        # The pod still exists; only the member is gone.
+        got = api_with_playgroup_db.get_playgroup("Wed")
+        assert got["data"]["pod"]["member_count"] == 0
+
+    def test_get_missing_pod_returns_not_found(self, api_with_playgroup_db):
+        r = api_with_playgroup_db.get_playgroup("Doesn't exist")
+        assert r["ok"] is False
+        assert r["error_type"] == "NotFound"
+
+
+# ---------------------------------------------------------------- iteration
+
+
+@pytest.fixture
+def api_with_iteration_db(temp_dbs):
+    """API + an isolated iteration log DB."""
+    card_db, version_db = temp_dbs
+    db = CardDatabase(db_path=card_db)
+    # Same priced library as TestPricing so propose_changes has cards to query
+    cards = [
+        Card(
+            scryfall_id="sid-sol", oracle_id="oid-sol", name="Sol Ring",
+            layout=CardLayout.NORMAL, cmc=1, mana_cost="{1}",
+            type_line="Artifact", color_identity=[],
+            legalities={"commander": Legality.LEGAL},
+            oracle_text="{T}: Add {C}{C}.",
+        ),
+        Card(
+            scryfall_id="sid-fil", oracle_id="oid-fil", name="Filler 7",
+            layout=CardLayout.NORMAL, cmc=7, mana_cost="{7}",
+            type_line="Creature — Beast", color_identity=[],
+            legalities={"commander": Legality.LEGAL},
+            is_creature=True,
+        ),
+        Card(
+            scryfall_id="sid-plains", oracle_id="oid-plains", name="Plains",
+            layout=CardLayout.NORMAL, is_land=True,
+            type_line="Basic Land — Plains", color_identity=[Color.WHITE],
+            legalities={"commander": Legality.LEGAL},
+        ),
+    ]
+    db.upsert_cards(cards)
+    db.close()
+    api = AppApi(db_path=card_db, version_db_path=version_db)
+    from densa_deck.iteration import IterationStore
+    api._iter_store = IterationStore(db_path=card_db.parent / "iter.db")
+    yield api
+    api.close()
+
+
+class TestIterationApi:
+    DECK = "Commander:\n1 Sol Ring\n\nMainboard:\n1 Filler 7\n35 Plains\n"
+
+    def test_propose_returns_cuts_and_adds(self, api_with_iteration_db):
+        r = api_with_iteration_db.propose_changes(self.DECK, format_="commander", name="T")
+        assert r["ok"] is True
+        kinds = {p["kind"] for p in r["data"]["proposals"]}
+        assert "cut" in kinds
+        cut_names = [p["card_name"] for p in r["data"]["proposals"] if p["kind"] == "cut"]
+        assert "Filler 7" in cut_names
+
+    def test_preview_change_shows_delta(self, api_with_iteration_db):
+        r = api_with_iteration_db.preview_change(
+            self.DECK, kind="cut", card_name="Filler 7",
+            format_="commander", name="T",
+        )
+        assert r["ok"] is True
+        assert r["data"]["deltas"]["total_cards"] == -1
+        assert "Filler 7" not in r["data"]["new_deck_text"]
+
+    def test_preview_missing_card_returns_error_string(self, api_with_iteration_db):
+        r = api_with_iteration_db.preview_change(
+            self.DECK, kind="cut", card_name="Nothing",
+            format_="commander", name="T",
+        )
+        assert r["ok"] is True
+        assert "not in the deck" in r["data"]["error"].lower()
+
+    def test_accept_change_writes_history(self, api_with_iteration_db):
+        r = api_with_iteration_db.accept_change(
+            deck_id="atraxa", decklist_text=self.DECK,
+            kind="cut", card_name="Filler 7", accepted=True,
+            format_="commander", name="T",
+        )
+        assert r["ok"] is True
+        assert "Filler 7" not in r["data"]["new_deck_text"]
+
+        hist = api_with_iteration_db.iteration_history("atraxa")
+        assert hist["ok"] is True
+        assert hist["data"]["summary"]["accepted_cuts"] == 1
+        assert hist["data"]["records"][0]["card_name"] == "Filler 7"
+
+    def test_rejected_change_logs_but_keeps_text(self, api_with_iteration_db):
+        r = api_with_iteration_db.accept_change(
+            deck_id="atraxa", decklist_text=self.DECK,
+            kind="cut", card_name="Filler 7", accepted=False,
+            format_="commander", name="T",
+        )
+        assert r["ok"] is True
+        # Rejected change returns the original text unchanged.
+        assert "Filler 7" in r["data"]["new_deck_text"]
+        hist = api_with_iteration_db.iteration_history("atraxa")
+        assert hist["data"]["summary"]["rejected_cuts"] == 1
+
+
 # ---------------------------------------------------------------- deck lab
 
 class TestDeckLab:

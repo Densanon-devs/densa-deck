@@ -52,6 +52,8 @@ FEATURE_TIERS: dict[str, Tier] = {
     "rule0": Tier.FREE,              # Pre-game worksheet — pure rule-engine narration, no LLM
     "explain_card": Tier.PRO,        # Per-card analyst narration
     "compare_decks": Tier.PRO,       # Two-deck analyst narration
+    "playgroup": Tier.FREE,          # Pod profile CRUD — local-only data
+    "iterate": Tier.FREE,            # Rule-engine proposals + preview — no LLM
 }
 
 # Map CLI command names to feature keys
@@ -80,6 +82,8 @@ COMMAND_FEATURES: dict[str, str] = {
     "compare-decks": "compare_decks",
     "bracket": "rule0",          # bracket fit is a free deterministic feature
     "export": "card_search",     # export is free (commodity feature)
+    "playgroup": "playgroup",    # pod CRUD — always available
+    "iterate": "iterate",        # iteration loop — propose/preview/history
 }
 
 _CONFIG_PATH = Path.home() / ".densa-deck" / "config.json"

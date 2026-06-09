@@ -242,6 +242,7 @@ Mainboard:
             <div class="build-deck-actions">
               <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a new deck (Pro)">Save deck (Pro)</button>
               <button id="build-suggest-btn" class="btn btn-outline" title="Pro: suggest 8 high-leverage adds based on role gaps + combo near-misses">Suggest adds (Pro)</button>
+              <button id="build-iterate-btn" class="btn btn-outline" title="Propose cut+add changes and preview their structural impact before applying">Iterate</button>
               <button id="build-export-btn" class="btn btn-outline" title="Export this draft as MTGO .dek / MTGA paste / Moxfield text">Export &rarr;</button>
               <button id="build-clear-btn" class="btn btn-outline btn-slim" title="Clear all cards from the current draft">Clear</button>
               <span id="build-save-status" class="status-text"></span>
@@ -562,11 +563,46 @@ Mainboard:
         <button id="suggest-close-btn" class="modal-close" title="Close">×</button>
       </div>
       <div class="modal-body">
+        <div class="suggest-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <label for="suggest-budget" class="status-text">Per-card budget (USD):</label>
+          <input id="suggest-budget" type="number" min="0" step="1" placeholder="no cap" style="width:90px"/>
+          <button id="suggest-refresh-btn" class="btn btn-slim">Refresh</button>
+          <span class="status-text" id="suggest-deck-value" style="margin-left:auto"></span>
+        </div>
         <p class="panel-hint" id="suggest-meta">(loading…)</p>
         <div id="suggest-list"></div>
       </div>
       <div class="modal-footer">
         <button id="suggest-dismiss-btn" class="btn btn-primary">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Iterate modal — list cut/add proposals, preview deltas on hover,
+       accept/reject inline. Each accepted change writes back to the draft
+       and logs the decision to ~/.densa-deck/iterations.db so the user can
+       review their iteration history across sessions. -->
+  <div id="iterate-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h2>Iterate — propose, preview, accept</h2>
+        <button id="iterate-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="iterate-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+          <label for="iterate-deck-id" class="status-text">Deck ID:</label>
+          <input id="iterate-deck-id" type="text" placeholder="e.g. atraxa" style="width:160px"/>
+          <label for="iterate-budget" class="status-text">Budget USD:</label>
+          <input id="iterate-budget" type="number" min="0" step="1" placeholder="no cap" style="width:90px"/>
+          <button id="iterate-refresh-btn" class="btn btn-slim">Refresh proposals</button>
+          <button id="iterate-history-btn" class="btn btn-slim">View history</button>
+          <span class="status-text" id="iterate-summary" style="margin-left:auto"></span>
+        </div>
+        <p class="panel-hint" id="iterate-meta">(loading…)</p>
+        <div id="iterate-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="iterate-dismiss-btn" class="btn btn-primary">Done</button>
       </div>
     </div>
   </div>

@@ -129,6 +129,7 @@ class AnalystRunner:
         version_diff: dict | None = None,
         combo_lines: list[str] | None = None,
         protected_card_names: set[str] | None = None,
+        pod_context=None,  # densa_deck.playgroup.PodContext (lazy import in callers)
     ) -> AnalystResult:
         """Run executive summary + cut suggestions + optional add suggestions.
 
@@ -159,6 +160,7 @@ class AnalystRunner:
                 playgroup_power=playgroup_power,
                 version_diff=version_diff,
                 combo_lines=combo_lines,
+                pod_context=pod_context,
             )
 
         if want_cuts:
@@ -192,6 +194,7 @@ class AnalystRunner:
         playgroup_power: float | None = None,
         version_diff: dict | None = None,
         combo_lines: list[str] | None = None,
+        pod_context=None,
     ) -> AnalystResult:
         color_identity = sorted({
             c.value
@@ -218,6 +221,7 @@ class AnalystRunner:
             playgroup_power=playgroup_power,
             version_diff=version_diff,
             combo_lines=combo_lines,
+            pod_context=pod_context,
         )
         gen = generate_with_verify(
             self.backend,

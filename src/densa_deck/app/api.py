@@ -1646,6 +1646,364 @@ class AppApi:
             "filename_hint": fname,
         }
 
+    # ---------------------------------------------------------------- iteration loop
+
+    def _get_iteration_store(self):
+        if getattr(self, "_iter_store", None) is None:
+            from densa_deck.iteration import IterationStore
+            self._iter_store = IterationStore()
+        return self._iter_store
+
+    @_safe
+    def propose_changes(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        cut_limit: int = 6,
+        add_limit: int = 6,
+        budget_usd: float | None = None,
+    ) -> dict:
+        """Surface cut + add proposals for the current draft.
+
+        Free-tier — pure rule-engine output, no LLM. Use this to drive
+        the Iterate tab's proposal list. Each proposal carries kind,
+        card_name, reason, source, signal so the UI can group + filter.
+        """
+        from densa_deck.iteration import propose_changes
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        # Combo-completion bias: pull near-miss combos so adds finishing a
+        # known line surface at the top.
+        store = self._get_combo_store()
+        combo_completers: set[str] = set()
+        protected: set[str] = set()
+        if store.combo_count() > 0:
+            try:
+                from densa_deck.combos import detect_combos, detect_near_miss_combos
+                deck_card_names = [e.card.name for e in deck.entries if e.card]
+                color_identity = sorted({
+                    c.value for e in deck.entries if e.card for c in e.card.color_identity
+                })
+                near = detect_near_miss_combos(
+                    store=store,
+                    deck_card_names=deck_card_names,
+                    deck_color_identity=color_identity,
+                    max_missing=1, limit=20,
+                )
+                for nm in near:
+                    for n in nm.missing_cards:
+                        combo_completers.add(n.lower())
+                # Combo pieces already in the deck are protected from cuts.
+                detected = detect_combos(
+                    store=store,
+                    deck_card_names=deck_card_names,
+                    deck_color_identity=color_identity,
+                    limit=20,
+                )
+                for m in detected:
+                    for n in m.combo.cards:
+                        protected.add(n)
+            except Exception:
+                pass
+
+        from densa_deck.models import Format
+        fmt = None
+        try:
+            fmt = Format(format_) if format_ else None
+        except ValueError:
+            fmt = None
+
+        db = self._get_db()
+        proposals = propose_changes(
+            deck=deck, db=db, format_=fmt,
+            protected_card_names=protected,
+            combo_completers=combo_completers,
+            cut_limit=cut_limit, add_limit=add_limit,
+            budget_usd=budget_usd,
+        )
+        return {
+            "deck_name": deck.name,
+            "count": len(proposals),
+            "proposals": [
+                {
+                    "kind": p.kind, "card_name": p.card_name, "reason": p.reason,
+                    "source": p.source, "signal": p.signal,
+                    "score": p.score, "role": p.role,
+                }
+                for p in proposals
+            ],
+        }
+
+    @_safe
+    def preview_change(
+        self,
+        decklist_text: str,
+        kind: str,
+        card_name: str,
+        format_: str | None = None,
+        name: str = "Deck",
+    ) -> dict:
+        """Apply a single proposal in-memory and return before/after metrics.
+
+        Fast — no goldfish, no LLM. Suitable for previewing every visible
+        proposal on hover.
+        """
+        from densa_deck.iteration import Proposal, preview_change
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+        proposal = Proposal(
+            kind=kind, card_name=card_name,
+            reason="", source="user-selected", signal="",
+        )
+        result = preview_change(deck, proposal, db=self._get_db())
+        return {
+            "proposal": {
+                "kind": result.proposal.kind,
+                "card_name": result.proposal.card_name,
+            },
+            "before": result.before,
+            "after": result.after,
+            "deltas": result.deltas,
+            "new_deck_text": result.new_deck_text,
+            "error": result.error,
+        }
+
+    @_safe
+    def accept_change(
+        self,
+        deck_id: str,
+        decklist_text: str,
+        kind: str,
+        card_name: str,
+        accepted: bool = True,
+        format_: str | None = None,
+        name: str = "Deck",
+        source: str = "",
+        signal: str = "",
+        reason: str = "",
+    ) -> dict:
+        """Log an accept/reject decision and return the updated decklist.
+
+        When accepted=True, also returns the new deck text the caller can
+        write back to disk. When accepted=False, the deck text is the
+        original — only the log row distinguishes the two.
+        """
+        from densa_deck.iteration import IterationRecord, Proposal, preview_change
+
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+
+        proposal = Proposal(
+            kind=kind, card_name=card_name,
+            reason=reason, source=source, signal=signal,
+        )
+        preview = preview_change(deck, proposal, db=self._get_db())
+        if preview.error and accepted and "(card not in DB" not in preview.error:
+            return {"ok": False, "error": preview.error, "error_type": "PreviewFailed"}
+
+        store = self._get_iteration_store()
+        record = store.record(IterationRecord(
+            id=None,
+            deck_id=deck_id, deck_name=deck.name,
+            kind=kind, card_name=card_name,
+            accepted=accepted,
+            source=source, signal=signal, reason=reason,
+            before_power=preview.before.get("power_overall"),
+            after_power=preview.after.get("power_overall"),
+            before_total_cards=preview.before.get("total_cards"),
+            after_total_cards=preview.after.get("total_cards"),
+        ))
+        new_text = preview.new_deck_text if accepted else decklist_text
+        return {
+            "record_id": record.id,
+            "new_deck_text": new_text,
+            "before": preview.before,
+            "after": preview.after,
+            "deltas": preview.deltas,
+        }
+
+    @_safe
+    def iteration_history(self, deck_id: str, limit: int = 50) -> dict:
+        """Return prior accept/reject decisions for this deck + summary stats."""
+        store = self._get_iteration_store()
+        records = store.history(deck_id, limit=limit)
+        return {
+            "deck_id": deck_id,
+            "summary": store.summary(deck_id),
+            "records": [
+                {
+                    "id": r.id, "kind": r.kind, "card_name": r.card_name,
+                    "accepted": r.accepted, "source": r.source,
+                    "signal": r.signal, "reason": r.reason,
+                    "before_power": r.before_power, "after_power": r.after_power,
+                    "before_total_cards": r.before_total_cards,
+                    "after_total_cards": r.after_total_cards,
+                    "created_at": r.created_at,
+                }
+                for r in records
+            ],
+        }
+
+    # ---------------------------------------------------------------- playgroup
+
+    def _get_playgroup_store(self):
+        """Lazy-init the playgroup SQLite store.
+
+        Held on `self` so we don't reopen the file on every endpoint hit;
+        SQLite handles re-entry fine but a single instance is cleaner.
+        """
+        if getattr(self, "_pg_store", None) is None:
+            from densa_deck.playgroup import PlaygroupStore
+            self._pg_store = PlaygroupStore()
+        return self._pg_store
+
+    @staticmethod
+    def _pod_to_dict(pod) -> dict:
+        return {
+            "name": pod.name,
+            "is_default": pod.is_default,
+            "created_at": pod.created_at,
+            "member_count": pod.member_count(),
+            "members": [
+                {
+                    "commander_name": m.commander_name,
+                    "archetype": m.archetype,
+                    "power_level": m.power_level,
+                    "notes": m.notes,
+                    "position": m.position,
+                }
+                for m in pod.members
+            ],
+        }
+
+    @_safe
+    def list_playgroups(self) -> dict:
+        """All saved pods (with members). Free-tier."""
+        store = self._get_playgroup_store()
+        pods = store.list_pods()
+        return {"pods": [self._pod_to_dict(p) for p in pods]}
+
+    @_safe
+    def get_playgroup(self, name: str) -> dict:
+        store = self._get_playgroup_store()
+        pod = store.get_pod(name)
+        if pod is None:
+            return {"ok": False, "error": f"No pod named '{name}'.", "error_type": "NotFound"}
+        ctx_dict = self._pod_context_dict(pod)
+        return {"pod": self._pod_to_dict(pod), "context": ctx_dict}
+
+    @_safe
+    def get_default_playgroup(self) -> dict:
+        store = self._get_playgroup_store()
+        pod = store.get_default_pod()
+        if pod is None:
+            return {"pod": None, "context": None}
+        return {"pod": self._pod_to_dict(pod), "context": self._pod_context_dict(pod)}
+
+    @_safe
+    def create_playgroup(self, name: str, is_default: bool = False) -> dict:
+        store = self._get_playgroup_store()
+        pod = store.create_pod(name, is_default=is_default)
+        return {"pod": self._pod_to_dict(pod)}
+
+    @_safe
+    def delete_playgroup(self, name: str) -> dict:
+        store = self._get_playgroup_store()
+        return {"deleted": store.delete_pod(name)}
+
+    @_safe
+    def set_default_playgroup(self, name: str) -> dict:
+        store = self._get_playgroup_store()
+        return {"set": store.set_default(name)}
+
+    @_safe
+    def add_pod_member(
+        self,
+        pod_name: str,
+        commander_name: str,
+        archetype: str = "unknown",
+        power_level: float | None = None,
+        notes: str = "",
+    ) -> dict:
+        from densa_deck.playgroup.models import PodMember
+        store = self._get_playgroup_store()
+        member = PodMember(
+            commander_name=commander_name,
+            archetype=(archetype or "unknown").lower(),
+            power_level=power_level,
+            notes=notes or "",
+        )
+        pod = store.add_member(pod_name, member)
+        return {"pod": self._pod_to_dict(pod)}
+
+    @_safe
+    def remove_pod_member(self, pod_name: str, commander_name: str) -> dict:
+        store = self._get_playgroup_store()
+        return {"removed": store.remove_member(pod_name, commander_name)}
+
+    @staticmethod
+    def _pod_context_dict(pod) -> dict:
+        from densa_deck.playgroup.context import build_pod_context, render_pod_block
+        ctx = build_pod_context(pod)
+        return {
+            "pod_name": ctx.pod_name,
+            "member_count": ctx.member_count,
+            "avg_power": ctx.avg_power,
+            "archetype_mix": ctx.archetype_mix,
+            "commanders": ctx.commanders,
+            "has_combo": ctx.has_combo,
+            "has_control": ctx.has_control,
+            "has_aggro": ctx.has_aggro,
+            "primary_archetypes": ctx.primary_archetypes(),
+            "threat_themes": ctx.threat_themes(),
+            "rendered_block": render_pod_block(ctx),
+        }
+
+    @_safe
+    def get_deck_value(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Deck",
+        budget_per_card_usd: float | None = None,
+    ) -> dict:
+        """Roll up Scryfall pricing across the deck.
+
+        Free-tier — pricing is commodity data and a draw to ingest. The
+        Build tab calls this on every dirty save to show a running total
+        and (if budget_per_card_usd is set) flag cards above the cap.
+
+        Returns total, unpriced-count, priciest-N (with TCGPlayer search
+        URLs), and the over-budget list. Cards Scryfall has no price for
+        are *counted* (`unpriced_count`), never treated as $0.
+        """
+        from densa_deck.analysis.pricing import compute_deck_value, value_to_dict
+
+        deck = self._build_deck(decklist_text, format_, name)
+        if isinstance(deck, dict):
+            return deck
+        value = compute_deck_value(deck, budget_per_card_usd=budget_per_card_usd)
+        out = value_to_dict(value)
+        out["deck_name"] = deck.name
+        return out
+
+    @_safe
+    def tcgplayer_url_for_card(self, card_name: str) -> dict:
+        """Return a TCGPlayer search URL for a single card name.
+
+        Thin wrapper so the frontend doesn't have to know the URL shape
+        (or remember to inject the `DENSA_TCGPLAYER_PARTNER` affiliate ID).
+        Used by the card popover and the priciest-cards row in the Build
+        tab's pricing panel.
+        """
+        from densa_deck.analysis.pricing import tcgplayer_search_url
+        return {"name": card_name, "tcgplayer_url": tcgplayer_search_url(card_name)}
+
     @_safe
     def assess_bracket_fit(
         self,
@@ -1838,7 +2196,7 @@ class AppApi:
 
             written = refresh_combo_snapshot(
                 store=store,
-                user_agent=f"DensaDeck/0.4.1 (combo-fetch)",
+                user_agent=f"DensaDeck/0.5.0 (combo-fetch)",
                 progress_cb=_on_page,
             )
             self._update_progress(

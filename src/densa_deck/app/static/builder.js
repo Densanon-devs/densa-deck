@@ -169,6 +169,20 @@
     const suggestDismiss = e("suggest-dismiss-btn");
     if (suggestClose) suggestClose.addEventListener("click", hideSuggestModal);
     if (suggestDismiss) suggestDismiss.addEventListener("click", hideSuggestModal);
+    const suggestRefresh = e("suggest-refresh-btn");
+    if (suggestRefresh) suggestRefresh.addEventListener("click", openSuggestModal);
+
+    // Iterate modal handlers
+    const iterateBtn = e("build-iterate-btn");
+    if (iterateBtn) iterateBtn.addEventListener("click", openIterateModal);
+    const iterateClose = e("iterate-close-btn");
+    const iterateDismiss = e("iterate-dismiss-btn");
+    const iterateRefresh = e("iterate-refresh-btn");
+    const iterateHistory = e("iterate-history-btn");
+    if (iterateClose) iterateClose.addEventListener("click", hideIterateModal);
+    if (iterateDismiss) iterateDismiss.addEventListener("click", hideIterateModal);
+    if (iterateRefresh) iterateRefresh.addEventListener("click", _loadProposals);
+    if (iterateHistory) iterateHistory.addEventListener("click", showIterationHistory);
 
     // Export modal handlers
     const exportClose = e("export-close-btn");
@@ -865,6 +879,36 @@
 
   // ---------------- Suggest adds (Pro AI deckbuild) ----------------
 
+  function _readBudget() {
+    const el = e("suggest-budget");
+    if (!el) return null;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
+  async function _refreshDeckValuePanel(budget) {
+    const out = e("suggest-deck-value");
+    if (!out) return;
+    try {
+      const r = await window.pywebview.api.get_deck_value(
+        draftToDecklistText(),
+        builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+        budget,
+      );
+      const d = r && r.data ? r.data : r;
+      if (!d || d.ok === false) { out.textContent = ""; return; }
+      const total = (d.total_known_usd || 0).toFixed(2);
+      const unpriced = d.unpriced_count || 0;
+      let txt = `Deck value: $${total}`;
+      if (unpriced > 0) txt += ` (${unpriced} unpriced)`;
+      if (budget != null && (d.over_budget || []).length > 0) {
+        txt += ` • ${d.over_budget.length} over $${budget}`;
+      }
+      out.textContent = txt;
+    } catch (_e) { out.textContent = ""; }
+  }
+
   async function openSuggestModal() {
     const m = e("suggest-modal");
     const list = e("suggest-list");
@@ -878,12 +922,14 @@
       meta.textContent = "Add at least one card to the deck so we have something to ground suggestions in.";
       return;
     }
+    const budget = _readBudget();
+    _refreshDeckValuePanel(budget);
     try {
       const r = await window.pywebview.api.suggest_deckbuild_additions(
         draftToDecklistText(),
         builderState.deck.format,
         builderState.deck.name || "Untitled deck",
-        8, null,
+        8, budget,
       );
       if (r && r.ok === false) {
         if (r.error_type === "ProRequired") {
@@ -897,17 +943,21 @@
       const data = r && r.data ? r.data : r;
       const gaps = (data.gaps || []).join(", ") || "no gaps detected";
       meta.textContent = `${data.count} suggestions • role gaps: ${gaps}`;
-      list.innerHTML = (data.suggestions || []).map((s, i) => `
+      list.innerHTML = (data.suggestions || []).map((s, i) => {
+        const priceTxt = (s.price_usd != null) ? `$${Number(s.price_usd).toFixed(2)}` : "—";
+        const tcgUrl = `https://www.tcgplayer.com/search/magic/product?q=${encodeURIComponent(s.name)}&view=grid&productLineName=magic`;
+        return `
         <div class="suggest-row" data-name="${escape(s.name)}" data-cmc="${s.cmc}" data-mc="${escape(s.mana_cost)}" data-tl="${escape(s.type_line)}">
           <div class="suggest-rank">#${i + 1}</div>
           <div class="suggest-card">
-            <div class="suggest-name">${escape(s.name)} <span class="status-text">${escape(s.mana_cost || "")}</span></div>
+            <div class="suggest-name">${escape(s.name)} <span class="status-text">${escape(s.mana_cost || "")}</span> <span class="status-text" style="margin-left:6px">${priceTxt}</span></div>
             <div class="status-text">${escape(s.type_line || "")} &middot; ${escape(s.role || "")}</div>
-            <div class="status-text" style="margin-top:2px">${escape(s.reason || "")}</div>
+            <div class="status-text" style="margin-top:2px">${escape(s.reason || "")} <a href="${tcgUrl}" target="_blank" rel="noopener" class="status-text" style="margin-left:6px">Buy on TCG</a></div>
           </div>
           <button class="btn btn-primary btn-slim suggest-add-btn">+ Add</button>
         </div>
-      `).join("") || `<p class="panel-hint">No suggestions surfaced. Try refreshing combo data on Settings or save the draft and run Analyze for richer signals.</p>`;
+      `;
+      }).join("") || `<p class="panel-hint">No suggestions surfaced. Try refreshing combo data on Settings or save the draft and run Analyze for richer signals.</p>`;
       // Wire each row's add button.
       list.querySelectorAll(".suggest-add-btn").forEach(btn => {
         btn.addEventListener("click", () => {
@@ -948,6 +998,276 @@
     if (!m) return;
     m.classList.add("hidden");
     m.setAttribute("aria-hidden", "true");
+  }
+
+  // ---------------- Iterate modal ----------------
+
+  function _iterateBudget() {
+    const el = e("iterate-budget");
+    if (!el) return null;
+    const v = parseFloat(el.value);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
+  function _iterateDeckId() {
+    const el = e("iterate-deck-id");
+    const raw = el ? (el.value || "").trim() : "";
+    if (raw) return raw;
+    // Default to the deck name so users who don't think about IDs still get
+    // a coherent history bucket. Replace spaces with dashes to keep it tidy.
+    return (builderState.deck.name || "untitled").toLowerCase().replace(/\s+/g, "-");
+  }
+
+  async function openIterateModal() {
+    const m = e("iterate-modal");
+    if (!m) return;
+    m.classList.remove("hidden");
+    m.setAttribute("aria-hidden", "false");
+    if (totalCardCount() === 0) {
+      e("iterate-meta").textContent = "Add at least one card to the draft before iterating.";
+      e("iterate-list").innerHTML = "";
+      return;
+    }
+    // Pre-fill the deck-id input with a stable default the user can edit.
+    if (e("iterate-deck-id") && !e("iterate-deck-id").value) {
+      e("iterate-deck-id").value = _iterateDeckId();
+    }
+    await _loadProposals();
+  }
+
+  function hideIterateModal() {
+    const m = e("iterate-modal");
+    if (!m) return;
+    m.classList.add("hidden");
+    m.setAttribute("aria-hidden", "true");
+  }
+
+  async function _loadProposals() {
+    const meta = e("iterate-meta");
+    const list = e("iterate-list");
+    meta.textContent = "Loading proposals…";
+    list.innerHTML = "";
+    try {
+      const r = await window.pywebview.api.propose_changes(
+        draftToDecklistText(),
+        builderState.deck.format,
+        builderState.deck.name || "Untitled deck",
+        6, 6,
+        _iterateBudget(),
+      );
+      if (r && r.ok === false) {
+        meta.textContent = "Error: " + (r.error || "(unknown)");
+        return;
+      }
+      const data = r && r.data ? r.data : r;
+      const props = data.proposals || [];
+      meta.textContent = props.length === 0
+        ? "No proposals surfaced — the deck looks tight."
+        : `${props.length} proposals (cuts and adds, sorted by impact).`;
+      list.innerHTML = props.map((p, i) => {
+        const kindColor = p.kind === "cut" ? "var(--color-warning, #c89000)" : "var(--color-success, #2a8f3a)";
+        return `
+        <div class="iterate-row" data-idx="${i}" data-kind="${p.kind}" data-name="${escape(p.card_name)}"
+             data-source="${escape(p.source)}" data-signal="${escape(p.signal)}" data-reason="${escape(p.reason)}"
+             style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-bottom:1px solid var(--color-border, #2c2c2c)">
+          <div style="font-weight:600;color:${kindColor};min-width:42px">${p.kind.toUpperCase()}</div>
+          <div style="flex:1;min-width:0">
+            <div><strong>${escape(p.card_name)}</strong> <span class="status-text">(${escape(p.source)}, score ${Number(p.score).toFixed(1)})</span></div>
+            <div class="status-text">${escape(p.reason)}</div>
+            <div class="iterate-delta status-text" style="margin-top:2px;font-family:ui-monospace,monospace"></div>
+          </div>
+          <div style="display:flex;gap:4px">
+            <button class="btn btn-slim iterate-preview-btn">Preview</button>
+            <button class="btn btn-primary btn-slim iterate-accept-btn">Accept</button>
+            <button class="btn btn-slim iterate-reject-btn" title="Log a reject so it doesn't keep resurfacing">Reject</button>
+          </div>
+        </div>`;
+      }).join("");
+      list.querySelectorAll(".iterate-row").forEach(row => {
+        const previewBtn = row.querySelector(".iterate-preview-btn");
+        const acceptBtn = row.querySelector(".iterate-accept-btn");
+        const rejectBtn = row.querySelector(".iterate-reject-btn");
+        if (previewBtn) previewBtn.addEventListener("click", () => _previewRow(row));
+        if (acceptBtn) acceptBtn.addEventListener("click", () => _acceptRow(row, true));
+        if (rejectBtn) rejectBtn.addEventListener("click", () => _acceptRow(row, false));
+      });
+    } catch (err) {
+      meta.textContent = "Failed: " + err.message;
+    }
+  }
+
+  function _renderDeltas(deltas, target) {
+    const interesting = ["power_overall", "average_cmc", "total_cards",
+                         "interaction_count", "ramp_count", "draw_count",
+                         "total_value_usd"];
+    const bits = [];
+    for (const k of interesting) {
+      const v = deltas[k];
+      if (v == null || v === 0) continue;
+      const sign = v > 0 ? "+" : "";
+      bits.push(`${k} ${sign}${v}`);
+    }
+    target.textContent = bits.length ? "Δ " + bits.join("  ") : "Δ (no measurable change)";
+  }
+
+  async function _previewRow(row) {
+    const deltaEl = row.querySelector(".iterate-delta");
+    if (!deltaEl) return;
+    deltaEl.textContent = "Previewing…";
+    try {
+      const r = await window.pywebview.api.preview_change(
+        draftToDecklistText(), row.dataset.kind, row.dataset.name,
+        builderState.deck.format, builderState.deck.name || "Untitled deck",
+      );
+      if (r && r.ok === false) {
+        deltaEl.textContent = "Preview error: " + (r.error || "(unknown)");
+        return;
+      }
+      const d = (r && r.data) ? r.data : r;
+      if (d.error) {
+        deltaEl.textContent = d.error;
+        return;
+      }
+      _renderDeltas(d.deltas || {}, deltaEl);
+    } catch (err) {
+      deltaEl.textContent = "Preview failed: " + err.message;
+    }
+  }
+
+  function _findEntryAcrossZones(name) {
+    // Look through commander → mainboard → sideboard → companion for the
+    // first matching entry (case-insensitive). Returns [zoneName, entryObj]
+    // or null. Iterate by zone so cuts hit the most likely zone first.
+    const zones = ["commander", "mainboard", "sideboard", "companion"];
+    const target = (name || "").toLowerCase();
+    for (const z of zones) {
+      const bucket = builderState.deck[z];
+      if (!bucket) continue;
+      for (const key of Object.keys(bucket)) {
+        if (key.toLowerCase() === target) return [z, key, bucket[key]];
+      }
+    }
+    return null;
+  }
+
+  function _applyCutInPlace(name) {
+    const found = _findEntryAcrossZones(name);
+    if (!found) return false;
+    const [zone, key, entry] = found;
+    entry.qty -= 1;
+    if (entry.qty <= 0) delete builderState.deck[zone][key];
+    return true;
+  }
+
+  async function _applyAddInPlace(name) {
+    // Look up the card by exact name so addToDeck gets the full shape it
+    // needs for bucketing + stats. Falls back to a stub on lookup miss so
+    // the entry still appears (it'll just contribute nothing to type/curve).
+    try {
+      const r = await window.pywebview.api.search_cards(name);
+      const data = (r && r.data) ? r.data : r;
+      const cards = (data && (data.cards || data.results)) || (Array.isArray(data) ? data : []);
+      const exact = cards.find(c => (c.name || "").toLowerCase() === name.toLowerCase());
+      const card = exact || cards[0] || { name, type_line: "" };
+      addToDeck(card);
+      return true;
+    } catch (_e) {
+      addToDeck({ name, type_line: "" });
+      return true;
+    }
+  }
+
+  async function _acceptRow(row, accepted) {
+    const deltaEl = row.querySelector(".iterate-delta");
+    try {
+      const r = await window.pywebview.api.accept_change(
+        _iterateDeckId(),
+        draftToDecklistText(),
+        row.dataset.kind, row.dataset.name, accepted,
+        builderState.deck.format, builderState.deck.name || "Untitled deck",
+        row.dataset.source, row.dataset.signal, row.dataset.reason,
+      );
+      if (r && r.ok === false) {
+        if (deltaEl) deltaEl.textContent = "Error: " + (r.error || "(unknown)");
+        return;
+      }
+      const d = (r && r.data) ? r.data : r;
+      if (accepted) {
+        // Apply the change directly to the in-memory draft so the Build tab
+        // updates immediately, without forcing a full state rebuild from the
+        // server's rewritten text.
+        if (row.dataset.kind === "cut") {
+          _applyCutInPlace(row.dataset.name);
+        } else if (row.dataset.kind === "add") {
+          await _applyAddInPlace(row.dataset.name);
+        }
+        markDirty();
+        renderDeck();
+        recomputeStats();
+        row.style.opacity = "0.5";
+        const accBtn = row.querySelector(".iterate-accept-btn"); if (accBtn) accBtn.disabled = true;
+        const rejBtn = row.querySelector(".iterate-reject-btn"); if (rejBtn) rejBtn.disabled = true;
+        if (deltaEl) _renderDeltas(d.deltas || {}, deltaEl);
+      } else {
+        row.style.opacity = "0.4";
+        const accBtn = row.querySelector(".iterate-accept-btn"); if (accBtn) accBtn.disabled = true;
+        const rejBtn = row.querySelector(".iterate-reject-btn"); if (rejBtn) rejBtn.disabled = true;
+        if (deltaEl) deltaEl.textContent = "(rejected — logged)";
+      }
+      await _loadIterationSummary();
+    } catch (err) {
+      if (deltaEl) deltaEl.textContent = "Failed: " + err.message;
+    }
+  }
+
+  async function _loadIterationSummary() {
+    const out = e("iterate-summary");
+    if (!out) return;
+    try {
+      const r = await window.pywebview.api.iteration_history(_iterateDeckId(), 1);
+      const d = (r && r.data) ? r.data : r;
+      if (!d || !d.summary) { out.textContent = ""; return; }
+      const s = d.summary;
+      let txt = `${s.accepted_cuts + s.accepted_adds} accepted (${s.accepted_cuts} cuts, ${s.accepted_adds} adds)`;
+      if (s.net_power_delta != null) {
+        const sign = s.net_power_delta >= 0 ? "+" : "";
+        txt += ` • net power ${sign}${s.net_power_delta}`;
+      }
+      out.textContent = txt;
+    } catch (_e) { out.textContent = ""; }
+  }
+
+  async function showIterationHistory() {
+    const list = e("iterate-list");
+    const meta = e("iterate-meta");
+    meta.textContent = "Loading history…";
+    list.innerHTML = "";
+    try {
+      const r = await window.pywebview.api.iteration_history(_iterateDeckId(), 50);
+      const d = (r && r.data) ? r.data : r;
+      const records = (d && d.records) || [];
+      if (records.length === 0) {
+        meta.textContent = "No history yet — accept or reject a proposal to start building one.";
+        return;
+      }
+      const s = d.summary || {};
+      const deltaTxt = s.net_power_delta != null
+        ? `net power ${s.net_power_delta >= 0 ? "+" : ""}${s.net_power_delta}`
+        : "net power n/a";
+      meta.textContent = `${records.length} records • ${s.accepted_cuts} cuts, ${s.accepted_adds} adds accepted • ${deltaTxt}`;
+      list.innerHTML = records.map(r => {
+        const mark = r.accepted ? "✓" : "✕";
+        const color = r.accepted ? "var(--color-success, #2a8f3a)" : "var(--color-muted, #888)";
+        return `<div style="display:flex;gap:8px;padding:4px;border-bottom:1px solid var(--color-border, #2c2c2c)">
+          <div style="color:${color};font-weight:600;min-width:18px">${mark}</div>
+          <div style="font-weight:600;min-width:42px">${r.kind.toUpperCase()}</div>
+          <div style="flex:1">${escape(r.card_name)}</div>
+          <div class="status-text">${escape(r.created_at || "")}</div>
+        </div>`;
+      }).join("");
+    } catch (err) {
+      meta.textContent = "Failed: " + err.message;
+    }
   }
 
   // ---------------- Export modal (MTGO / MTGA / Moxfield) ----------------

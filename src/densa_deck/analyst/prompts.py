@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from densa_deck.analyst.add_candidates import AddCandidate, render_add_table
 from densa_deck.analyst.candidates import CutCandidate, render_cut_table
+from densa_deck.playgroup.models import PodContext
+from densa_deck.playgroup.context import render_pod_block
 
 
 # =============================================================================
@@ -75,6 +77,7 @@ def executive_summary_prompt(
     playgroup_power: float | None = None,
     version_diff: dict | None = None,  # {"added": {...}, "removed": {...}, "score_deltas": {...}}
     combo_lines: list[str] | None = None,
+    pod_context: PodContext | None = None,
 ) -> str:
     """Executive summary prompt — prose only, no card references required.
 
@@ -129,33 +132,57 @@ def executive_summary_prompt(
             "input lists). The second paragraph can still address tuning."
         )
 
+    # Pod context outranks the single-number playgroup_power when present —
+    # avg_power from the pod is more informative than a manually-entered target,
+    # AND it brings commander names + archetype mix the prompt can lean on.
+    # We still respect playgroup_power as a fallback so the existing flag works.
+    effective_pod_power = None
+    if pod_context is not None and pod_context.member_count > 0 and pod_context.avg_power is not None:
+        effective_pod_power = pod_context.avg_power
+    elif playgroup_power is not None:
+        effective_pod_power = playgroup_power
+
     playgroup_line = ""
     playgroup_instruction = ""
-    if playgroup_power is not None:
-        gap = power_overall - playgroup_power
+    if effective_pod_power is not None:
+        gap = power_overall - effective_pod_power
         if gap >= 1.0:
             fit_phrase = "OVER-PITCHES (this deck is stronger than the table)"
         elif gap <= -1.0:
             fit_phrase = "UNDER-DELIVERS (the table will out-pace this deck)"
         else:
             fit_phrase = "FITS the playgroup"
-        playgroup_line = f"\nPlaygroup target: {playgroup_power:.1f}/10 — this deck {fit_phrase}"
+        playgroup_line = f"\nPlaygroup target: {effective_pod_power:.1f}/10 — this deck {fit_phrase}"
         playgroup_instruction = (
             " The second paragraph should explicitly address whether this "
             "deck fits the playgroup target and what to adjust if it doesn't."
         )
 
+    pod_block = ""
+    pod_instruction = ""
+    if pod_context is not None and pod_context.member_count > 0:
+        rendered = render_pod_block(pod_context)
+        if rendered:
+            pod_block = f"\n{rendered}"
+            themes = pod_context.threat_themes()
+            if themes:
+                theme_clause = ", ".join(themes[:3])
+                pod_instruction = (
+                    f" When discussing tuning, prioritize answers for this pod's "
+                    f"profile (e.g. {theme_clause}) rather than a generic table."
+                )
+
     return f"""You are a Magic: The Gathering deck analyst. Write a 2-paragraph
 executive summary of the deck described below. Narrate the structured data
 below in natural prose — do NOT introduce specific card names the data does
-not reference. Keep paragraphs tight. Tone: direct, helpful, no hype.{combo_instruction}{playgroup_instruction}
+not reference. Keep paragraphs tight. Tone: direct, helpful, no hype.{combo_instruction}{playgroup_instruction}{pod_instruction}
 
 {_SUMMARY_FEWSHOT}
 
 [INPUT]
 Deck: {deck_name} ({colors}, {format_name})
 Archetype: {archetype}
-Power: {power_overall:.1f}/10 ({power_tier}){playgroup_line}{version_diff_line}{combo_lines_block}
+Power: {power_overall:.1f}/10 ({power_tier}){playgroup_line}{version_diff_line}{combo_lines_block}{pod_block}
 Land count: {land_count}
 Ramp: {ramp_count}
 Draw: {draw_count}
