@@ -249,8 +249,11 @@ def _first_significant_char(path: Path) -> str:
                 return ch
 
 
-def iter_raw_cards(path: Path) -> Iterator[dict]:
-    """Yield raw Scryfall card dicts from a bulk file.
+def iter_bulk_records(path: Path) -> Iterator[dict]:
+    """Yield raw records from any Scryfall bulk file.
+
+    Shared by the card ingest and the opt-in rulings download — both are
+    the same gzipped-JSONL-or-JSON-array shape.
 
     Handles both payload shapes Scryfall has shipped — a single JSON array
     and JSON Lines (one object per line) — gzipped or plain, detected by
@@ -269,6 +272,10 @@ def iter_raw_cards(path: Path) -> Iterator[dict]:
             if not line or line in ("[", "]"):
                 continue
             yield json.loads(line)
+
+
+# Kept as the card-ingest-facing name; the implementation is format-generic.
+iter_raw_cards = iter_bulk_records
 
 
 def load_bulk_file(path: Path) -> list[Card]:

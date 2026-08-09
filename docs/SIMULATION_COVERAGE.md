@@ -136,9 +136,24 @@ archetype detection. "Legality only" formats still validate against the
 banned list and simulate at the correct life total, but have no tuned
 deckbuilding targets.
 
-**Rulings are not ingested.** Scryfall publishes per-card rulings as a
-separate bulk file; the engine does not download or use it. Nothing in the
-simulator or validator depends on rulings text.
+### Rulings (opt-in)
+
+Wizards' official per-card rulings are a separate ~5 MB Scryfall bulk
+file. They are **not** part of the card ingest and are never downloaded
+automatically — nothing in the simulator or validator depends on them, so
+they stay opt-in and are removable in one step.
+
+| Action | CLI | Desktop |
+|--------|-----|---------|
+| Check status | `densa-deck rulings status` | Settings → Official rulings |
+| Opt in | `densa-deck rulings download` | **Download rulings** |
+| Read for a card | `densa-deck rulings show "Doubling Season"` | — |
+| Opt back out | `densa-deck rulings remove` | **Remove** |
+
+Stored in its own `~/.densa-deck/rulings.db`, so opting out is a file
+delete and users who never opt in carry no extra weight. Rulings text is
+© Wizards of the Coast, distributed via Scryfall; both are credited
+wherever rulings are shown.
 
 ## Adding a new mechanic
 

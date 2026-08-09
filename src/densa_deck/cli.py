@@ -437,6 +437,17 @@ def main():
         "--format", default="commander",
         help="Format profile (default: commander)")
 
+    # rulings command — opt-in official rulings download (free tier)
+    rulings_parser = subparsers.add_parser(
+        "rulings",
+        help="Opt in to official card rulings (separate ~5 MB download)")
+    rulings_sub = rulings_parser.add_subparsers(dest="rulings_action")
+    rulings_sub.add_parser("status", help="Is the rulings data installed, and is it current?")
+    rulings_sub.add_parser("download", help="Download or refresh the rulings dataset")
+    show_rulings = rulings_sub.add_parser("show", help="Show rulings for a card")
+    show_rulings.add_argument("card", help="Card name")
+    rulings_sub.add_parser("remove", help="Delete the rulings data")
+
     # coverage command — simulator fidelity canary (free tier)
     coverage_parser = subparsers.add_parser(
         "coverage",
@@ -508,6 +519,8 @@ def main():
         cmd_ingest(args)
     elif command == "coverage":
         cmd_coverage(args)
+    elif command == "rulings":
+        cmd_rulings(args)
     elif command == "analyze":
         cmd_analyze(args)
     elif command == "probability":
@@ -3249,6 +3262,104 @@ def _read_deck_text(arg) -> str:
     if arg is None or arg == "-":
         return sys.stdin.read()
     return Path(arg).read_text(encoding="utf-8")
+
+
+def cmd_rulings(args):
+    """Opt-in rulings: status / download / show / remove.
+
+    Rulings are never fetched as part of a normal ingest — this is the
+    only path that downloads them, and it only runs when asked.
+    """
+    import asyncio
+
+    from densa_deck.data.rulings import (
+        RULINGS_ATTRIBUTION, RulingsStore, download_rulings,
+        rulings_update_available,
+    )
+
+    action = getattr(args, "rulings_action", None) or "status"
+    store = RulingsStore()
+
+    if action == "status":
+        if not store.is_installed():
+            console.print(
+                "[yellow]Rulings are not installed.[/yellow]\n"
+                "[dim]Official card rulings are an optional ~5 MB download, "
+                "separate from card data.\nRun 'densa-deck rulings download' "
+                "to opt in.[/dim]"
+            )
+            return
+        count = store.ruling_count()
+        downloaded = store.get_metadata("last_download_completed_at") or "unknown"
+        console.print(f"[green]Rulings installed:[/green] {count:,} rulings")
+        console.print(f"[dim]Last downloaded: {downloaded}[/dim]")
+        loop = asyncio.new_event_loop()
+        try:
+            info = loop.run_until_complete(rulings_update_available(store))
+        finally:
+            loop.close()
+        if info.get("error"):
+            console.print(f"[dim]Update check failed: {info['error']}[/dim]")
+        elif info.get("available"):
+            console.print(
+                f"[yellow]A newer rulings file is available[/yellow] "
+                f"(Scryfall updated {info.get('remote_updated_at', '')}). "
+                "Run 'densa-deck rulings download' to refresh."
+            )
+        else:
+            console.print("[dim]Up to date.[/dim]")
+        console.print(f"\n[dim]{RULINGS_ATTRIBUTION}[/dim]")
+        return
+
+    if action == "download":
+        console.print("[cyan]Downloading official rulings from Scryfall (~5 MB)...[/cyan]")
+        loop = asyncio.new_event_loop()
+        try:
+            count = loop.run_until_complete(download_rulings(store))
+        except Exception as exc:
+            console.print(f"[bold red]Rulings download failed: {exc}[/bold red]")
+            raise SystemExit(1)
+        finally:
+            loop.close()
+        console.print(f"[bold green]Done — {count:,} rulings stored.[/bold green]")
+        console.print(f"[dim]{RULINGS_ATTRIBUTION}[/dim]")
+        return
+
+    if action == "remove":
+        if store.remove():
+            console.print("[green]Rulings data removed.[/green]")
+        else:
+            console.print("[yellow]No rulings data to remove.[/yellow]")
+        return
+
+    if action == "show":
+        if not store.is_installed():
+            console.print(
+                "[yellow]Rulings are not installed.[/yellow] "
+                "[dim]Run 'densa-deck rulings download' first.[/dim]"
+            )
+            return
+        db = _get_db(args)
+        try:
+            card = db.lookup_by_name(args.card)
+            if card is None:
+                console.print(f"[red]Card not found: {args.card}[/red]")
+                return
+            rulings = store.rulings_for_oracle_id(card.oracle_id)
+            if not rulings:
+                console.print(f"[yellow]No rulings for '{card.name}'.[/yellow]")
+                return
+            console.print(f"\n[bold]{card.name}[/bold] — {len(rulings)} ruling"
+                          f"{'s' if len(rulings) != 1 else ''}\n")
+            for r in rulings:
+                date = r["published_at"] or "undated"
+                console.print(f"  [dim]{date}[/dim]  {r['comment']}")
+            console.print(f"\n[dim]{RULINGS_ATTRIBUTION}[/dim]")
+        finally:
+            db.close()
+        return
+
+    console.print("[yellow]Usage: densa-deck rulings {status|download|show <card>|remove}[/yellow]")
 
 
 def cmd_coverage(args):
