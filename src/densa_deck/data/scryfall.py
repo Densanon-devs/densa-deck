@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import sys
 from pathlib import Path
+from typing import IO, Iterator
 
 import httpx
 from rich.console import Console
@@ -19,6 +21,40 @@ SCRYFALL_BULK_API = "https://api.scryfall.com/bulk-data"
 BULK_TYPE = "oracle_cards"  # One entry per unique card (no reprints)
 
 
+def bulk_download_url(manifest: dict) -> str:
+    """Pull the bulk-file URL out of a Scryfall manifest entry.
+
+    Scryfall renamed this field from `download_uri` to `jsonl_download_uri`
+    when they switched the bulk payload from a JSON array to gzipped JSON
+    Lines. We accept either, newest name last-resort first, so the ingest
+    works against both the old and the current API shape.
+
+    Raises KeyError with an explicit message if neither is present — a
+    loud failure here is far better than the silent one we shipped.
+    """
+    for key in ("download_uri", "jsonl_download_uri"):
+        url = manifest.get(key)
+        if url:
+            return str(url)
+    raise KeyError(
+        "Scryfall bulk manifest has neither 'download_uri' nor "
+        f"'jsonl_download_uri' (keys present: {sorted(manifest)})"
+    )
+
+
+def bulk_size_bytes(manifest: dict) -> int:
+    """Bulk-file size in bytes, tolerating Scryfall's `size` ->
+    `compressed_size` rename. Returns 0 when neither is present."""
+    for key in ("size", "compressed_size"):
+        value = manifest.get(key)
+        if value:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+    return 0
+
+
 async def fetch_bulk_data_url() -> str:
     """Backwards-compatible accessor that only returns the download URL.
 
@@ -26,18 +62,20 @@ async def fetch_bulk_data_url() -> str:
     timestamp for update-check comparisons.
     """
     entry = await fetch_bulk_data_manifest()
-    return entry["download_uri"]
+    return bulk_download_url(entry)
 
 
 async def fetch_bulk_data_manifest() -> dict:
     """Return the full Scryfall bulk-data manifest entry for oracle_cards.
 
-    The entry includes `download_uri`, `updated_at` (ISO 8601), `size`
-    (bytes), and `content_type`. The `updated_at` timestamp is what the
-    "is my local card DB out of date?" check compares against — Scryfall
-    regenerates the bulk file whenever new cards are added to their
-    Oracle, which is typically once per set release but can happen
-    between sets for errata.
+    Read the URL and size out of the returned entry with
+    `bulk_download_url()` / `bulk_size_bytes()` rather than indexing it
+    directly — Scryfall has renamed both fields once already.
+
+    The `updated_at` timestamp is what the "is my local card DB out of
+    date?" check compares against — Scryfall regenerates the bulk file
+    whenever new cards are added to their Oracle, which is typically once
+    per set release but can happen between sets for errata.
 
     30-second timeout so a hung Scryfall API doesn't stall an ingest
     thread forever.
@@ -187,22 +225,67 @@ def _parse_price(prices: dict) -> float | None:
     return None
 
 
+def _open_bulk(path: Path) -> IO[str]:
+    """Open a bulk file as text, transparently decompressing gzip.
+
+    Sniffed from the magic bytes rather than the filename so a Scryfall
+    change to either the extension or the encoding keeps working.
+    """
+    with open(path, "rb") as probe:
+        magic = probe.read(2)
+    if magic == b"\x1f\x8b":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return open(path, "r", encoding="utf-8")
+
+
+def _first_significant_char(path: Path) -> str:
+    """First non-whitespace character of the bulk file ('[' => JSON array)."""
+    with _open_bulk(path) as f:
+        while True:
+            ch = f.read(1)
+            if not ch:
+                return ""
+            if not ch.isspace():
+                return ch
+
+
+def iter_raw_cards(path: Path) -> Iterator[dict]:
+    """Yield raw Scryfall card dicts from a bulk file.
+
+    Handles both payload shapes Scryfall has shipped — a single JSON array
+    and JSON Lines (one object per line) — gzipped or plain, detected by
+    sniffing rather than assumed. JSON Lines is streamed a line at a time,
+    which also keeps the ~500 MB oracle dump off the heap.
+    """
+    if _first_significant_char(path) == "[":
+        with _open_bulk(path) as f:
+            for raw in json.load(f):
+                yield raw
+        return
+
+    with _open_bulk(path) as f:
+        for line in f:
+            line = line.strip().rstrip(",")
+            if not line or line in ("[", "]"):
+                continue
+            yield json.loads(line)
+
+
 def load_bulk_file(path: Path) -> list[Card]:
-    """Parse the downloaded JSON bulk file into Card objects."""
+    """Parse the downloaded bulk file into Card objects."""
     cards: list[Card] = []
     console.print(f"[cyan]Parsing {path.name}...[/cyan]")
-    with open(path, "r", encoding="utf-8") as f:
-        raw_cards = json.load(f)
-    total = len(raw_cards)
     skipped = 0
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+        TextColumn("{task.completed}"),
     ) as progress:
-        task = progress.add_task("Parsing cards...", total=total)
-        for raw in raw_cards:
+        # Total is unknown up front when streaming JSON Lines, so the bar
+        # runs indeterminate and reports a running count instead.
+        task = progress.add_task("Parsing cards...", total=None)
+        for raw in iter_raw_cards(path):
             card = parse_scryfall_card(raw)
             if card:
                 cards.append(card)
@@ -229,7 +312,9 @@ async def ingest(db: CardDatabase | None = None, force: bool = False):
 
     cache_dir = db.db_path.parent / "bulk"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    dest = cache_dir / "oracle_cards.json"
+    # Bound before the try: the filename depends on what Scryfall serves,
+    # but the finally-block cleanup must not NameError if we fail earlier.
+    dest: Path | None = None
 
     try:
         # Get the full manifest (not just the URL) so we can record the
@@ -240,9 +325,14 @@ async def ingest(db: CardDatabase | None = None, force: bool = False):
         # writing it here, every CLI-ingested user would see a phantom
         # update banner the next time they opened the app.
         manifest = await fetch_bulk_data_manifest()
-        url = manifest["download_uri"]
+        url = bulk_download_url(manifest)
         remote_updated_at = manifest.get("updated_at", "")
         console.print(f"[dim]Bulk data URL: {url}[/dim]")
+
+        # Name the cache file after what Scryfall actually served so the
+        # gzip/JSONL sniffing has a sane filename to report in errors.
+        suffix = ".jsonl.gz" if url.endswith(".gz") else ".json"
+        dest = cache_dir / f"oracle_cards{suffix}"
 
         # Download
         await download_bulk_file(url, dest)
@@ -272,5 +362,7 @@ async def ingest(db: CardDatabase | None = None, force: bool = False):
         console.print(f"[bold red]Failed to parse card data: {e}[/bold red]")
         raise SystemExit(1)
     finally:
-        # Always clean up bulk file
-        dest.unlink(missing_ok=True)
+        # Always clean up bulk file (may be unset if we failed before the
+        # manifest told us what filename Scryfall was serving).
+        if dest is not None:
+            dest.unlink(missing_ok=True)
