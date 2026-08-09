@@ -38,7 +38,12 @@ mcp = [
     # `densa-deck mcp serve`. The desktop bundle includes it (so paying
     # customers get the MCP server by default); CLI-only installs can
     # skip it.
-    "mcp>=1.0",
+    #
+    # Upper bound is deliberate: mcp 2.0 removed `mcp.server.fastmcp`, which
+    # `mcp/server.py` imports, so an unbounded `>=1.0` resolves to a version
+    # where the MCP server cannot start. Raise this only after porting to
+    # the 2.x API.
+    "mcp>=1.0,<2.0",
 ]
 
 [project.scripts]
