@@ -1274,10 +1274,12 @@ class TestCardDbUpdate:
         db.set_metadata("scryfall_bulk_updated_at", "2025-01-01T00:00:00+00:00")
 
         async def fake_manifest():
+            # Current Scryfall shape: jsonl_download_uri + compressed_size.
+            # See tests/test_scryfall_manifest.py for both shapes pinned.
             return {
-                "download_uri": "https://example.com/oracle_cards.json",
+                "jsonl_download_uri": "https://example.com/oracle_cards.jsonl.gz",
                 "updated_at": "2026-04-01T00:00:00+00:00",
-                "size": 350 * 1024 * 1024,
+                "compressed_size": 350 * 1024 * 1024,
             }
         monkeypatch.setattr(
             "densa_deck.data.scryfall.fetch_bulk_data_manifest", fake_manifest,
@@ -1298,9 +1300,9 @@ class TestCardDbUpdate:
 
         async def fake_manifest():
             return {
-                "download_uri": "https://example.com/oracle_cards.json",
+                "jsonl_download_uri": "https://example.com/oracle_cards.jsonl.gz",
                 "updated_at": "2026-04-01T00:00:00+00:00",
-                "size": 0,
+                "compressed_size": 0,
             }
         monkeypatch.setattr(
             "densa_deck.data.scryfall.fetch_bulk_data_manifest", fake_manifest,
