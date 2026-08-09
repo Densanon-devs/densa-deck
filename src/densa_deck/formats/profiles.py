@@ -46,6 +46,7 @@ class FormatTargets:
     min_deck_size: int = 100
     max_copies: int = 1
     singleton: bool = True
+    starting_life: int = 20
 
 
 @dataclass
@@ -69,7 +70,7 @@ COMMANDER = FormatProfile(
     targets=FormatTargets(
         lands=(35, 38), ramp=(10, 15), draw=(8, 12), removal=(8, 12),
         wipes=(2, 4), average_cmc=(2.5, 3.5), threats=(8, 15),
-        min_deck_size=100, max_copies=1, singleton=True,
+        min_deck_size=100, max_copies=1, singleton=True, starting_life=40,
     ),
     archetype_hints={
         DeckArchetype.VOLTRON: ["equipment", "aura", "buff"],
@@ -166,7 +167,7 @@ BRAWL = FormatProfile(
     targets=FormatTargets(
         lands=(22, 25), ramp=(6, 10), draw=(6, 10), removal=(5, 8),
         wipes=(1, 3), average_cmc=(2.5, 3.5), threats=(6, 12),
-        min_deck_size=60, max_copies=1, singleton=True,
+        min_deck_size=60, max_copies=1, singleton=True, starting_life=25,
     ),
     archetype_hints=COMMANDER.archetype_hints,
 )
@@ -180,6 +181,50 @@ FORMAT_PROFILES: dict[Format, FormatProfile] = {
     Format.PAUPER: PAUPER,
     Format.BRAWL: BRAWL,
 }
+
+
+# Starting life by format, including the ones with no full analysis profile.
+# The simulators used to inline "40 if the format looks like Commander else
+# 20", which handed Brawl, Oathbreaker and Duel Commander 40 life and so
+# overstated how long those decks survive and understated their kill turn.
+#
+# Duel Commander life totals vary by variant — the French-banlist format
+# (what Scryfall's `duel` legality tracks) uses 20; some 1v1 Commander
+# variants use 30. We take 20 and say so rather than silently picking one.
+DEFAULT_STARTING_LIFE = 20
+
+STARTING_LIFE: dict[Format, int] = {
+    Format.COMMANDER: 40,
+    Format.BRAWL: 25,
+    Format.OATHBREAKER: 20,
+    Format.DUEL: 20,
+    Format.STANDARD: 20,
+    Format.PIONEER: 20,
+    Format.MODERN: 20,
+    Format.LEGACY: 20,
+    Format.VINTAGE: 20,
+    Format.PAUPER: 20,
+    Format.HISTORIC: 20,
+    Format.EXPLORER: 20,
+    Format.ALCHEMY: 20,
+    Format.PENNY: 20,
+    Format.PREMODERN: 20,
+}
+
+
+def starting_life_for(fmt: Format | None) -> int:
+    """Starting life total for a format.
+
+    Single source of truth for both simulators. A format with a full
+    profile takes the value from its targets; everything else comes from
+    STARTING_LIFE; an unknown or missing format falls back to 20.
+    """
+    if fmt is None:
+        return DEFAULT_STARTING_LIFE
+    profile = FORMAT_PROFILES.get(fmt)
+    if profile is not None:
+        return profile.targets.starting_life
+    return STARTING_LIFE.get(fmt, DEFAULT_STARTING_LIFE)
 
 
 def get_format_profile(fmt: Format | None) -> FormatProfile | None:

@@ -84,6 +84,7 @@ def build_deck_sheet(
     reasons_up: list[str] | None = None,
     reasons_down: list[str] | None = None,
     combo_lines: list[str] | None = None,
+    mana_reliability=None,
 ) -> str:
     """Assemble a PIE-style knowledge sheet for the coach.
 
@@ -91,6 +92,12 @@ def build_deck_sheet(
     (from the Commander Spellbook detector). When supplied, the sheet
     surfaces them in a [COMBOS] block so the coach can answer "how does
     this deck win?" with the actual combo plan instead of guessing.
+
+    `mana_reliability` (optional): a ManaReliabilityReport from the
+    goldfish batch. Without it the coach can see the land count but not
+    whether those lands make the right colours, so it would answer "is my
+    mana good?" from card counts alone — which is exactly the question
+    counting gets wrong.
     """
     colors = "".join(color_identity) or "colorless"
     up = "; ".join((reasons_up or [])[:4]) or "none surfaced"
@@ -102,6 +109,29 @@ def build_deck_sheet(
     if combo_lines:
         rendered = "\n".join(f"  - {c}" for c in combo_lines[:8])
         combos_block = f"\n[COMBOS]\n{rendered}\n"
+
+    # Mana block — measured colour reliability, so the coach can answer
+    # "is my mana base good enough?" with per-colour on-curve rates instead
+    # of inferring from the land count.
+    mana_block = ""
+    if mana_reliability is not None and getattr(mana_reliability, "colors", None):
+        lines = [f"  summary: {mana_reliability.summary_line()}"]
+        lines.append(
+            f"  on_curve_castability: {mana_reliability.overall_on_curve_rate:.0%}"
+            f"; colour_screw: {mana_reliability.color_screw_rate:.0%}"
+        )
+        for c in mana_reliability.colors:
+            detail = f" — {c.recommendation}" if c.recommendation else ""
+            lines.append(
+                f"  - {c.name}: {c.sources_in_deck} sources, deepest demand "
+                f"{c.peak_requirement} pip(s), castable on curve "
+                f"{c.on_curve_hit_rate:.0%} ({c.verdict}){detail}"
+            )
+        worst = getattr(mana_reliability, "unreliable_cards", [])[:5]
+        if worst:
+            rendered = "; ".join(f"{n} ({r:.0%})" for n, _cmc, r in worst)
+            lines.append(f"  hardest_to_cast: {rendered}")
+        mana_block = "\n[MANA]\n" + "\n".join(lines) + "\n"
     # Deck card list is truncated in the sheet if huge, but kept authoritative
     # by placing it at the end so the model always sees the full allowlist.
     cards_block = "\n".join(f"  - {n}" for n in deck_cards)
@@ -117,7 +147,7 @@ def build_deck_sheet(
 [AVG_CMC: {avg_mana_value:.2f}]
 [REASONS_UP: {up}]
 [REASONS_DOWN: {down}]
-{combos_block}
+{combos_block}{mana_block}
 [CARDS]
 {cards_block}"""
 

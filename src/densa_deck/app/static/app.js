@@ -1743,6 +1743,78 @@ async function runGoldfish() {
   }
 }
 
+// Colour-weighted mana curve. Answers "do we have the colours when we need
+// them", measured across the simulated games rather than approximated —
+// null when reliability sampling was turned off.
+function renderManaReliability(m) {
+  if (!m || !(m.colors || []).length) return "";
+
+  const verdictClass = v => `verdict-${v}`;
+
+  const colorRows = m.colors.map(c => `
+    <tr>
+      <td>${escape(c.name)}</td>
+      <td class="num">${c.sources_in_deck}</td>
+      <td class="num">${c.peak_requirement}</td>
+      <td class="num">${(c.on_curve_hit_rate * 100).toFixed(1)}%</td>
+      <td class="${verdictClass(c.verdict)}">${escape(c.verdict)}</td>
+      <td>${escape(c.recommendation || "—")}</td>
+    </tr>`).join("");
+
+  const curveRows = (m.curve || []).map(p => {
+    const needs = Object.entries(p.requirement || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([c, n]) => `${c}&times;${n}`).join(" ") || "colourless";
+    const sources = Object.entries(p.avg_sources || {})
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([c, v]) => `${c}:${v.toFixed(1)}`).join(" ") || "—";
+    return `
+      <tr>
+        <td class="num">${p.turn}</td>
+        <td class="num">${p.cards_at_cost}</td>
+        <td>${needs}</td>
+        <td>${sources}</td>
+        <td class="num">${(p.castable_rate * 100).toFixed(1)}%</td>
+        <td class="${verdictClass(p.verdict)}">${escape(p.verdict)}</td>
+      </tr>`;
+  }).join("");
+
+  const worst = (m.unreliable_cards || []).slice(0, 8).map(([name, cmc, rate]) =>
+    `<li>${escape(name)} <span class="status-text">cost ${cmc} &middot; castable on curve ${(rate * 100).toFixed(0)}%</span></li>`
+  ).join("");
+
+  return `
+    <div class="result-section">
+      <h3>Colour-weighted mana curve</h3>
+      <p class="panel-hint">
+        <strong>${escape(m.summary)}</strong><br>
+        On-curve castability ${(m.overall_on_curve_rate * 100).toFixed(1)}% &middot;
+        colour screw ${(m.color_screw_rate * 100).toFixed(1)}% of checks &middot;
+        sampled ${m.games_analyzed} games. "Castable" asks whether the board
+        could have paid for the card that turn, whether or not you drew it —
+        that separates the mana base from draw luck.
+      </p>
+      <table class="mana-table">
+        <thead><tr>
+          <th>Colour</th><th class="num">Sources</th><th class="num">Deepest</th>
+          <th class="num">On curve</th><th>Verdict</th><th>What to do</th>
+        </tr></thead>
+        <tbody>${colorRows}</tbody>
+      </table>
+      ${curveRows ? `
+        <h4>Do we have the colours when we need them?</h4>
+        <table class="mana-table">
+          <thead><tr>
+            <th class="num">Turn</th><th class="num">Cards</th><th>Needs</th>
+            <th>Sources in play</th><th class="num">Castable</th><th></th>
+          </tr></thead>
+          <tbody>${curveRows}</tbody>
+        </table>` : ""}
+      ${worst ? `<h4>Hardest to cast on curve</h4><ul class="rec-list">${worst}</ul>` : ""}
+    </div>
+  `;
+}
+
 function renderGoldfish(r) {
   els.goldfish_result.classList.remove("hidden");
   // Kill-turn distribution as inline SVG-esque bars. `r.kill_turn_distribution`
@@ -1813,6 +1885,8 @@ function renderGoldfish(r) {
     `;
   }
 
+  const manaSection = renderManaReliability(r.mana_reliability);
+
   els.goldfish_result.innerHTML = `
     <div class="panel">
       <h2>Goldfish simulation — ${r.simulations} games</h2>
@@ -1847,6 +1921,8 @@ function renderGoldfish(r) {
             ).join("")}
           </ul>
         </div>` : ""}
+
+      ${manaSection}
     </div>
   `;
   // Scroll results into view so the user sees them on click
@@ -1956,6 +2032,8 @@ function renderGauntlet(r) {
       </div>
 
       ${comboTopSection}
+
+      ${renderManaReliability(r.mana_reliability)}
     </div>
   `;
   els.gauntlet_result.scrollIntoView({ behavior: "smooth", block: "start" });

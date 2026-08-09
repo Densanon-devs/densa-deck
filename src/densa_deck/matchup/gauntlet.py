@@ -42,6 +42,10 @@ class GauntletReport:
     worst_matchup: str = ""
     worst_win_rate: float = 1.0
 
+    # Colour-weighted mana curve — measured separately from the matchups,
+    # since the mana base doesn't care who's on the other side of the table.
+    mana_reliability: object | None = None
+
     # Category scores (0-100)
     speed_score: float = 0.0        # How fast we close games
     resilience_score: float = 0.0    # How well we handle disruption
@@ -63,8 +67,16 @@ def run_gauntlet(
     max_turns: int = 12,
     seed: int | None = None,
     combos: list[Combo] | None = None,
+    reliability: bool = True,
 ) -> GauntletReport:
     """Run a deck against a gauntlet of archetypes.
+
+    `reliability` (default True): also attach the colour-weighted mana
+    curve. It comes from a short goldfish pass rather than from the
+    gauntlet games themselves — an opponent can disrupt what you cast but
+    not which lands you drew, so the mana-base question is
+    opponent-independent and measuring it once is both cheaper and
+    cleaner than threading the collector through every matchup.
 
     When `combos` is non-empty, each archetype matchup also tracks
     combo-as-win-condition: turns where the deck assembles a combo
@@ -80,6 +92,16 @@ def run_gauntlet(
         deck_name=deck.name,
         simulations_per_matchup=simulations,
     )
+
+    if reliability:
+        try:
+            from densa_deck.goldfish.runner import run_goldfish_batch
+            report.mana_reliability = run_goldfish_batch(
+                deck, simulations=200, max_turns=max_turns, seed=seed,
+            ).mana_reliability
+        except Exception:
+            # Never let the mana add-on take down a gauntlet run.
+            report.mana_reliability = None
 
     console.print(f"[dim]Running gauntlet: {len(archetypes)} archetypes x {simulations} games each...[/dim]")
 

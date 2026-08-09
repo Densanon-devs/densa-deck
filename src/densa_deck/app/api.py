@@ -2638,6 +2638,20 @@ class AppApi:
         })
         deck_cards = [e.card.name for e in deck.entries if e.card]
 
+        # A short goldfish batch purely to measure colour reliability, so the
+        # coach can answer "is my mana good?" from what actually happened
+        # rather than from the land count. Kept small — this runs while the
+        # user waits for the coach session to open.
+        mana_reliability = None
+        try:
+            from densa_deck.goldfish.runner import run_goldfish_batch
+            mana_reliability = run_goldfish_batch(
+                deck, simulations=120, seed=0, reliability_games=120
+            ).mana_reliability
+        except Exception:
+            # The coach is still useful without it; never block on this.
+            mana_reliability = None
+
         sheet = build_deck_sheet(
             deck_name=deck.name,
             archetype=archetype.value if hasattr(archetype, "value") else str(archetype),
@@ -2651,6 +2665,7 @@ class AppApi:
             reasons_up=list(power.reasons_up),
             reasons_down=list(power.reasons_down),
             combo_lines=combo_lines,
+            mana_reliability=mana_reliability,
         )
         session = CoachSession(deck_sheet=sheet, allowed_cards=set(deck_cards))
 
@@ -3815,12 +3830,59 @@ def _goldfish_to_dict(report) -> dict:
             str(k): v for k, v in getattr(report, "combo_win_turn_distribution", {}).items()
         },
         "top_combo_lines": [list(pair) for pair in getattr(report, "top_combo_lines", [])],
+        # Colour-weighted mana curve. None when reliability sampling was
+        # disabled; the frontend should skip the section in that case.
+        "mana_reliability": _mana_reliability_to_dict(
+            getattr(report, "mana_reliability", None)
+        ),
+    }
+
+
+def _mana_reliability_to_dict(m) -> dict | None:
+    """Flatten ManaReliabilityReport for the frontend."""
+    if m is None:
+        return None
+    return {
+        "games_analyzed": m.games_analyzed,
+        "summary": m.summary_line(),
+        "over_extended": m.over_extended,
+        "overall_on_curve_rate": m.overall_on_curve_rate,
+        "color_screw_rate": m.color_screw_rate,
+        "colors": [
+            {
+                "color": c.color,
+                "name": c.name,
+                "sources_in_deck": c.sources_in_deck,
+                "peak_requirement": c.peak_requirement,
+                "avg_sources_by_turn": {str(k): v for k, v in c.avg_sources_by_turn.items()},
+                "on_curve_hit_rate": c.on_curve_hit_rate,
+                "verdict": c.verdict,
+                "recommendation": c.recommendation,
+            }
+            for c in m.colors
+        ],
+        "curve": [
+            {
+                "turn": p.turn,
+                "cards_at_cost": p.cards_at_cost,
+                "requirement": dict(p.requirement),
+                "avg_sources": dict(p.avg_sources),
+                "castable_rate": p.castable_rate,
+                "verdict": p.verdict,
+            }
+            for p in m.curve
+        ],
+        "card_on_curve": [list(row) for row in m.card_on_curve],
+        "unreliable_cards": [list(row) for row in m.unreliable_cards],
     }
 
 
 def _gauntlet_to_dict(report) -> dict:
     """Flatten GauntletReport for the frontend table renderer."""
     return {
+        "mana_reliability": _mana_reliability_to_dict(
+            getattr(report, "mana_reliability", None)
+        ),
         "simulations_per_matchup": report.simulations_per_matchup,
         "total_games": report.total_games,
         "overall_win_rate": report.overall_win_rate,
