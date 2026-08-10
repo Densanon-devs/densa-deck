@@ -8,6 +8,7 @@ The goal is to approximate how the deck functions, not to be rules-complete.
 from __future__ import annotations
 
 import random
+import re as _re
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
@@ -214,6 +215,10 @@ class GameState:
     pending_extra_turns: int = 0
     # Guards against a cascade chain recursing without end.
     _cascade_depth: int = 0
+    # Extra generic mana an opponent's stax effects add to each of our
+    # spells. Set by the matchup simulator; zero in a goldfish, which has
+    # no opponent.
+    cost_increase: int = 0
 
     # Per-turn history
     turn_history: list[TurnMetrics] = field(default_factory=list)
@@ -256,8 +261,14 @@ class GameState:
 
     @property
     def cost_reduction(self) -> int:
-        """Generic cost reduction from permanents in play (Goblin Electromancer)."""
-        return sum(p.effects.cost_reduction for p in self.battlefield)
+        """Net generic cost change from permanents in play.
+
+        Reductions (Goblin Electromancer) net against any tax an opponent is
+        applying (Sphere of Resistance), so a stax opponent genuinely makes
+        our spells more expensive rather than being tracked and ignored.
+        """
+        reduction = sum(p.effects.cost_reduction for p in self.battlefield)
+        return reduction - self.cost_increase
 
     @property
     def extra_land_drops(self) -> int:
@@ -778,8 +789,6 @@ class GameState:
         """Draw an opening hand."""
         return self.draw(size)
 
-
-import re as _re
 
 # Grab the whole condition clause, then scan it — "a Plains or an Island"
 # names two types and a single non-greedy match would only ever see the first.

@@ -40,7 +40,10 @@ class ArchetypeProfile:
     display_name: str
     description: str
 
-    # Clock: how many turns until the opponent would kill us (unimpeded)
+    # Clock: how many turns until the opponent would kill us (unimpeded).
+    # NOT read by the simulator — it derives the clock from damage_per_turn
+    # across pressure_start_turn..max_pressure_turn instead. Kept because
+    # deck_as_opponent computes it and it reads well in profile summaries.
     clock_turns: int = 8
     # Damage dealt per turn once clock starts (approximate)
     damage_per_turn: int = 5
@@ -57,9 +60,14 @@ class ArchetypeProfile:
 
     # Stax effects (reduce our available mana / options)
     mana_tax: int = 0              # Extra mana cost on our spells
+    # NOT modelled: no archetype or deck_as_opponent profile sets this to
+    # anything but 0, so wiring it up would be inventing behaviour for a
+    # knob nothing turns. Implement alongside a profile that uses it.
     cards_taxed_per_turn: int = 0  # Cards we can't draw
 
-    # Resilience: how fast they rebuild after interaction (0-1)
+    # Resilience: how fast they rebuild after interaction (0-1).
+    # NOT modelled: the simulator gives us no way to interact with the
+    # opponent's board, so there is nothing for them to rebuild from.
     resilience: float = 0.5
 
     # Weight in default gauntlet (meta share)

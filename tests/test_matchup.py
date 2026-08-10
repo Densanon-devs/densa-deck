@@ -176,3 +176,81 @@ class TestGauntlet:
         r1 = run_gauntlet(deck, archetypes=archetypes, simulations=50, seed=99)
         r2 = run_gauntlet(deck, archetypes=archetypes, simulations=50, seed=99)
         assert r1.overall_win_rate == r2.overall_win_rate
+
+
+class TestStaxManaTax:
+    """A taxing opponent has to actually tax.
+
+    `mana_tax` was computed into a local that nothing read, so the Stax
+    archetype's defining characteristic did nothing for the whole life of
+    the gauntlet feature. These pin the behaviour so it can't silently
+    revert to being decorative.
+    """
+
+    def test_state_nets_tax_against_reduction(self):
+        from densa_deck.goldfish.state import GameState
+        state = GameState()
+        assert state.cost_reduction == 0
+        state.cost_increase = 2
+        assert state.cost_reduction == -2
+
+    def test_tax_makes_a_spell_cost_more(self):
+        from densa_deck.goldfish.heuristics import effective_mana_cost
+        from densa_deck.goldfish.state import GameState
+        from densa_deck.models import Card, CardLayout
+        card = Card(
+            scryfall_id="i", oracle_id="o", name="Taxed Spell",
+            layout=CardLayout.NORMAL, mana_cost="{2}{U}", cmc=3.0,
+        )
+        state = GameState()
+        assert effective_mana_cost(card, state).generic == 2
+        state.cost_increase = 1
+        assert effective_mana_cost(card, state).generic == 3
+        # The tax is generic — it must never inflate coloured pips.
+        assert effective_mana_cost(card, state).pips["U"] == 1
+
+    def test_tax_reaches_the_game_state_during_a_matchup(self):
+        """Deterministic check on the wiring.
+
+        Comparing win rates is too noisy to assert on: the tax changes which
+        spells get cast, which diverges the RNG stream, so two runs at the
+        same seed aren't comparable. Observing the value the simulator hands
+        the game state tests the thing that actually broke.
+        """
+        import copy
+
+        from densa_deck.goldfish import heuristics
+        from densa_deck.matchup.archetypes import get_default_gauntlet
+        from densa_deck.matchup.simulator import simulate_matchup
+
+        taxing = [a for a in get_default_gauntlet() if a.mana_tax > 0]
+        assert taxing, "expected at least one taxing archetype"
+        stax = taxing[0]
+
+        seen = []
+        real_play_turn = heuristics.play_turn
+
+        def spy(state):
+            seen.append(state.cost_increase)
+            return real_play_turn(state)
+
+        import densa_deck.matchup.simulator as sim_mod
+        sim_mod.play_turn = spy
+        try:
+            simulate_matchup(_make_test_deck(), stax, simulations=5, seed=11)
+            taxed_turns = [v for v in seen if v > 0]
+            assert taxed_turns, "stax archetype never taxed the game state"
+            assert max(seen) == stax.mana_tax
+
+            seen.clear()
+            free = copy.deepcopy(stax)
+            free.mana_tax = 0
+            simulate_matchup(_make_test_deck(), free, simulations=5, seed=11)
+            assert seen and max(seen) == 0
+        finally:
+            sim_mod.play_turn = real_play_turn
+
+    def test_goldfish_is_never_taxed(self):
+        # No opponent means no tax; the goldfish must be unaffected.
+        from densa_deck.goldfish.state import GameState
+        assert GameState().cost_increase == 0
