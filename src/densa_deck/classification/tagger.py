@@ -15,9 +15,8 @@ def classify_card(card: Card) -> list[CardTag]:
     """Apply all classification rules and return functional tags."""
     tags: list[CardTag] = []
     tl = card.type_line.lower()
-    ot = card.oracle_text.lower()
-    kw = {k.lower() for k in card.keywords}
-    mc = card.mana_cost.lower()
+    # Each _is_* helper re-derives what it needs from the card; these
+    # module-level locals had no readers.
 
     # --- Land classification ---
     if card.is_land:

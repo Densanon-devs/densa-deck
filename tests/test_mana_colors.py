@@ -9,11 +9,9 @@ import pytest
 
 from densa_deck.goldfish import effects as fx_mod
 from densa_deck.goldfish.mana import (
-    ManaCost,
     can_pay,
-    card_mana_cost,
-    describe_dispersion,
     clear_mana_caches,
+    describe_dispersion,
     parse_mana_cost,
     pay_cost,
     produces_mana,
@@ -533,6 +531,7 @@ class TestExportsCarryColour:
 
     def test_json_export_includes_the_report_and_source_label(self):
         import json
+
         from densa_deck.analysis.castability import analyze_castability
         from densa_deck.analysis.static import analyze_deck as _analyze
         from densa_deck.export.exporter import export_json
@@ -558,8 +557,8 @@ class TestExportsCarryColour:
 
 class TestGauntletCarriesColour:
     def test_gauntlet_attaches_the_report(self):
-        from densa_deck.matchup.gauntlet import run_gauntlet
         from densa_deck.matchup.archetypes import get_default_gauntlet
+        from densa_deck.matchup.gauntlet import run_gauntlet
         report = run_gauntlet(
             _off_color_deck(), archetypes=get_default_gauntlet()[:1],
             simulations=10, seed=1)
@@ -567,8 +566,8 @@ class TestGauntletCarriesColour:
         assert report.mana_reliability.colors
 
     def test_gauntlet_reliability_can_be_disabled(self):
-        from densa_deck.matchup.gauntlet import run_gauntlet
         from densa_deck.matchup.archetypes import get_default_gauntlet
+        from densa_deck.matchup.gauntlet import run_gauntlet
         report = run_gauntlet(
             _off_color_deck(), archetypes=get_default_gauntlet()[:1],
             simulations=10, seed=1, reliability=False)

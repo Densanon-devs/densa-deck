@@ -4,13 +4,9 @@ TCGPlayer URL shape, and the JSON shape exposed by value_to_dict.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 
 from densa_deck.analysis.pricing import (
-    CardPriceLine,
-    DeckValue,
     compute_deck_value,
     tcgplayer_search_url,
     value_to_dict,
@@ -93,7 +89,7 @@ def test_priciest_sorted_descending():
         DeckEntry(card_name="C", quantity=1, zone=Zone.MAINBOARD, card=_card("C", 10.0)),
     )
     v = compute_deck_value(deck, top_n=2)
-    assert [l.name for l in v.priciest] == ["B", "C"]
+    assert [entry.name for entry in v.priciest] == ["B", "C"]
 
 
 def test_priciest_uses_line_total_not_unit_price():
@@ -113,7 +109,7 @@ def test_over_budget_flags_per_card():
         DeckEntry(card_name="Spicy", quantity=1, zone=Zone.MAINBOARD, card=_card("Spicy", 80.0)),
     )
     v = compute_deck_value(deck, budget_per_card_usd=10.0)
-    names = [l.name for l in v.over_budget]
+    names = [entry.name for entry in v.over_budget]
     assert "Spicy" in names
     assert "Mid" in names
     assert "Cheap" not in names

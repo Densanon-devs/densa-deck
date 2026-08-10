@@ -14,7 +14,6 @@ from densa_deck.tiers import (
     check_access,
     get_user_tier,
     require_pro,
-    set_tier,
 )
 
 PYTHON = sys.executable

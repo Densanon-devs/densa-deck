@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from densa_deck.analyst.candidates import rank_cut_candidates
 from densa_deck.app.api import AppApi
 from densa_deck.combos import Combo, ComboStore
 from densa_deck.data.database import CardDatabase
-from densa_deck.export.exporter import export_markdown, export_html
+from densa_deck.export.exporter import export_html, export_markdown
 from densa_deck.models import (
     AnalysisResult,
     Card,

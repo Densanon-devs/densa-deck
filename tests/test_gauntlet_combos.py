@@ -7,12 +7,10 @@ before the opponent closes, and that the report aggregates correctly.
 
 from __future__ import annotations
 
-import pytest
-
 from densa_deck.combos.models import Combo
-from densa_deck.matchup.archetypes import ArchetypeProfile, get_default_gauntlet
+from densa_deck.matchup.archetypes import ArchetypeProfile
 from densa_deck.matchup.gauntlet import run_gauntlet
-from densa_deck.matchup.simulator import MatchupResult, simulate_matchup
+from densa_deck.matchup.simulator import simulate_matchup
 from densa_deck.models import (
     Card,
     CardLayout,

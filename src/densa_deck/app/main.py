@@ -16,7 +16,6 @@ from pathlib import Path
 
 from densa_deck.app.api import AppApi
 
-
 STATIC_DIR = Path(__file__).parent / "static"
 
 

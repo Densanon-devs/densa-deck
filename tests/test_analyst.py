@@ -15,8 +15,9 @@ Covers:
 
 import pytest
 
+from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.analyst import AnalystRunner, MockBackend
-from densa_deck.analyst.candidates import rank_cut_candidates, render_cut_table
+from densa_deck.analyst.candidates import rank_cut_candidates
 from densa_deck.analyst.pipeline import generate_with_verify
 from densa_deck.analyst.prompts import (
     cut_suggestions_prompt,
@@ -30,7 +31,6 @@ from densa_deck.analyst.verifiers import (
     verify_prose_output,
     verify_tags_in_table,
 )
-from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.models import (
     AnalysisResult,
     Card,
@@ -498,6 +498,7 @@ class TestPlaygroupPowerValidator:
 
     def test_out_of_range_rejected(self):
         import argparse
+
         from densa_deck.cli import _playgroup_power_type
         with pytest.raises(argparse.ArgumentTypeError):
             _playgroup_power_type("0")
@@ -508,6 +509,7 @@ class TestPlaygroupPowerValidator:
 
     def test_non_numeric_rejected(self):
         import argparse
+
         from densa_deck.cli import _playgroup_power_type
         with pytest.raises(argparse.ArgumentTypeError):
             _playgroup_power_type("high")

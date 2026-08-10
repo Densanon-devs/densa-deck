@@ -1,14 +1,11 @@
 """Tests for the hash-based license key system."""
 
-import json
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 from densa_deck.licensing import (
-    LICENSE_PATH,
     MASTER_KEY,
-    License,
     _hash_key,
     generate_license_key,
     validate_key,
@@ -196,7 +193,7 @@ class TestAtomicLicenseWrite:
             # Now simulate a crash during the NEXT save: os.replace raises.
             # With atomic writes, the original file is still intact because
             # os.replace runs last; the temp file is cleaned up and re-raised.
-            real_replace = _os.replace
+            _real_replace = _os.replace
             calls = {"n": 0}
             def flaky_replace(src, dst):
                 calls["n"] += 1
@@ -213,7 +210,6 @@ class TestAtomicLicenseWrite:
             assert loaded is not None and loaded.valid is True
 
     def test_save_does_not_leak_temp_files_on_failure(self):
-        import os as _os
         tmp_dir = Path(tempfile.mkdtemp())
         tmp_path = tmp_dir / "license.key"
         with patch("densa_deck.licensing.LICENSE_PATH", tmp_path):

@@ -14,7 +14,6 @@ Key invariants locked down:
 
 from __future__ import annotations
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -697,14 +696,14 @@ class TestAutoUpdater:
 
 class TestDeepLinkParser:
     def test_valid_activate_url(self):
-        from densa_deck.cli import _handle_activation_url
-        from densa_deck.licensing import load_saved_license, remove_license
         # This test will attempt to save an invalid license (the handler
         # passes whatever key is in the URL to save_license, which validates
         # format before persisting). A clearly-bad key should NOT persist.
         import tempfile
+
         # Isolate license file so the test doesn't mutate the real user config
         import densa_deck.licensing as licensing_mod
+        from densa_deck.cli import _handle_activation_url
         orig = licensing_mod.LICENSE_PATH
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -733,7 +732,6 @@ class TestSessionPersistence:
     def test_sessions_persist_across_api_instances(self, temp_dbs):
         """Round-trip: start a session, write to disk on close, reload a
         fresh API instance, session is restored with its full history."""
-        import tempfile
         card_db, version_db = temp_dbs
         session_path = Path(card_db).parent / "coach_sessions.json"
 
@@ -978,7 +976,6 @@ class TestConcurrencyLocks:
         """Lock-regression test: two rapid ingest_start calls must yield only
         one running task. Previously the check-then-set race could spawn two
         threads both trying to download + upsert concurrently."""
-        import threading
         # Preload the progress dict as running to simulate a racing thread
         # that already claimed the slot. (Testing the real race is flaky;
         # this locks down the guard behavior via the state check path.)
@@ -1021,6 +1018,7 @@ class TestConcurrencyLocks:
         calls connect() gets its own handle, and concurrent use is safe
         under WAL mode."""
         import threading
+
         from densa_deck.data.database import CardDatabase
 
         db = CardDatabase(db_path=tmp_path / "cards.db")
@@ -1051,6 +1049,7 @@ class TestConcurrencyLocks:
         """Same threading guarantee for VersionStore — deck saves happen
         from background operations too."""
         import threading
+
         from densa_deck.versioning.storage import VersionStore
 
         store = VersionStore(db_path=tmp_path / "versions.db")
@@ -1087,7 +1086,8 @@ class TestConcurrencyLocks:
         changed size during iteration"). After the _update_progress /
         _read_progress helper switch, both sides hold _progress_lock so
         snapshots are always coherent."""
-        import threading, time
+        import threading
+        import time
         stop = threading.Event()
         errors = []
 
@@ -1120,7 +1120,8 @@ class TestConcurrencyLocks:
         which could yank SQLite mid-write. It now signals _shutdown_event
         and joins each live thread with a bounded timeout, so a close()
         during a quick no-op ingest lets it finish cleanly."""
-        import threading, time
+        import threading
+        import time
         # Register a fake "ingest" thread that takes ~0.2s to finish.
         api._progress["ingest"].update(running=True, done=False)
         finished = threading.Event()
@@ -1151,7 +1152,10 @@ class TestConcurrencyLocks:
         and cleared the list. Under rapid interleaving, the list ended up
         in a torn state. The per-session turn_lock now serializes any ask
         with any reset on the same session."""
-        import threading, time, uuid
+        import threading
+        import time
+        import uuid
+
         # Seed a session directly without going through coach_start (avoids
         # needing a full deck + ingest fixture).
         from densa_deck.analyst.coach import CoachSession

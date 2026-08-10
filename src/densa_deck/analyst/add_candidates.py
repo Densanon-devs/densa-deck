@@ -23,10 +23,7 @@ role gap we can add a tags column + index in a follow-up.
 
 from __future__ import annotations
 
-import json
-import sqlite3
 from dataclasses import dataclass
-from typing import Iterable
 
 from densa_deck.classification.tagger import classify_card
 from densa_deck.models import (

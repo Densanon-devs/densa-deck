@@ -12,15 +12,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
 
 from densa_deck.combos import Combo, ComboStore
-from densa_deck.data.database import CardDatabase
 from densa_deck.models import (
     Card,
     CardLayout,
-    CardTag,
     Color,
     Deck,
     DeckEntry,
@@ -28,8 +24,6 @@ from densa_deck.models import (
     Legality,
     Zone,
 )
-from densa_deck.analyst.backends import MockBackend
-
 
 PYTHON = sys.executable
 
@@ -145,6 +139,7 @@ class TestRunSwapsAcceptsProtection:
 
     def test_run_swaps_signature_accepts_protection(self):
         import inspect
+
         from densa_deck.analyst.runner import AnalystRunner
         sig = inspect.signature(AnalystRunner.run_swaps)
         assert "protected_card_names" in sig.parameters

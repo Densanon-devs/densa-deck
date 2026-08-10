@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from densa_deck.analyst.backends import LLMBackend
 from densa_deck.analyst.pipeline import generate_with_verify
-from densa_deck.analyst.verifiers import VerificationError, verify_prose_output
+from densa_deck.analyst.verifiers import verify_prose_output
 
 
 @dataclass

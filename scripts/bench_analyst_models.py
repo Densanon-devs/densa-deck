@@ -34,7 +34,6 @@ from densa_deck.benchmarks.analyst_gauntlet import (  # noqa: E402
     run_gauntlet,
 )
 
-
 MODELS = [
     (
         "Qwen2.5-0.5B-Instruct (Q4_K_M)",

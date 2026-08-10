@@ -11,12 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from densa_deck.models import CardTag, Deck, Format, Zone
+from densa_deck.models import CardTag, Deck, Zone
 from densa_deck.probability.hypergeometric import (
+    cards_seen_by_turn,
     expected_copies,
     prob_at_least,
-    prob_land_by_turn,
-    cards_seen_by_turn,
 )
 
 
@@ -50,7 +49,6 @@ class ManaDevelopmentReport:
 def analyze_mana_development(deck: Deck, on_play: bool = True) -> ManaDevelopmentReport:
     """Calculate mana development probabilities for a deck."""
     report = ManaDevelopmentReport()
-    is_commander = deck.format in (Format.COMMANDER, Format.BRAWL, Format.OATHBREAKER, Format.DUEL)
 
     # Count lands and mana sources
     active = [e for e in deck.entries if e.zone not in (Zone.MAYBEBOARD, Zone.SIDEBOARD)]

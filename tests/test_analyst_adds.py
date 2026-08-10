@@ -19,15 +19,15 @@ import tempfile
 
 import pytest
 
+from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.analyst import AnalystRunner, MockBackend
-from densa_deck.analyst.add_candidates import find_add_candidates, render_add_table
+from densa_deck.analyst.add_candidates import find_add_candidates
 from densa_deck.analyst.prompts import add_suggestions_prompt
 from densa_deck.analyst.verifiers import (
     TagPick,
     VerificationError,
     verify_add_picks_constraints,
 )
-from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.data.database import CardDatabase
 from densa_deck.models import (
     AnalysisResult,

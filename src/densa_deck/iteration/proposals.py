@@ -16,15 +16,14 @@ so latency per proposal matters more than narration quality.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
+from densa_deck.analysis.static import analyze_deck as run_static_analysis
 from densa_deck.analyst.add_candidates import find_add_candidates
 from densa_deck.analyst.candidates import rank_cut_candidates
 from densa_deck.analyst.runner import _detect_role_gaps
-from densa_deck.analysis.static import analyze_deck as run_static_analysis
-from densa_deck.models import CardTag, Deck, Format
-
+from densa_deck.models import Deck, Format
 
 ProposalKind = Literal["cut", "add"]
 
@@ -111,7 +110,8 @@ def propose_changes(
 
     # ---- adds: role-gap ----
     gaps = _detect_role_gaps(analysis)
-    completers_lower = {n.lower() for n in (combo_completers or set())}
+    # combo completion is flagged by find_add_candidates on each candidate
+    # (cand.completes_combo); a local lowercased set had no consumer.
     seen_add: set[str] = set()
     per_role = max(1, add_limit // max(1, len(gaps) or 1))
     for role in gaps:

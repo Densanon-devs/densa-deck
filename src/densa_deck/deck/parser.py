@@ -6,7 +6,6 @@ import re
 
 from densa_deck.models import DeckEntry, Zone
 
-
 # Regex patterns for decklist parsing
 # Matches: "1 Lightning Bolt", "1x Lightning Bolt", "Lightning Bolt"
 _QTY_NAME = re.compile(r"^\s*(\d+)\s*[xX]?\s+(.+?)\s*$")
@@ -107,9 +106,9 @@ def parse_decklist(text: str) -> list[DeckEntry]:
         if seen_blank and current_zone == Zone.MAINBOARD and zone_override == Zone.MAINBOARD:
             # Only apply blank-line sideboard heuristic if no explicit sections used
             if not any(
-                any(p.search(l) for p in _SECTION_PATTERNS.values())
-                for l in text.strip().splitlines()
-                if l.strip()
+                any(p.search(line) for p in _SECTION_PATTERNS.values())
+                for line in text.strip().splitlines()
+                if line.strip()
             ):
                 zone_override = Zone.SIDEBOARD
 
@@ -165,8 +164,8 @@ def parse_csv(text: str) -> list[DeckEntry]:
 
 def detect_format(text: str) -> str:
     """Detect if input is plain text or CSV."""
-    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
-    csv_score = sum(1 for l in lines[:10] if "," in l)
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    csv_score = sum(1 for line in lines[:10] if "," in line)
     if csv_score > len(lines[:10]) * 0.5:
         return "csv"
     return "text"

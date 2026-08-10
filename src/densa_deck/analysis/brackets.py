@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 
 from densa_deck.models import Deck, Zone
 
-
 # Bracket label → human-readable name + power-score window
 BRACKETS: list[tuple[str, str, float, float]] = [
     # (label, display_name, power_min_inclusive, power_max_inclusive)

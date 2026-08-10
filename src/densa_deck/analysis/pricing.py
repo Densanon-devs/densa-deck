@@ -21,7 +21,6 @@ from urllib.parse import quote_plus
 
 from densa_deck.models import Deck, Zone
 
-
 TCGPLAYER_SEARCH_BASE = "https://www.tcgplayer.com/search/magic/product"
 
 # Optional partner / affiliate parameter, sourced from env so the binary
@@ -100,12 +99,12 @@ def compute_deck_value(
             over.append(line)
 
     priciest = sorted(
-        (l for l in lines if l.line_total is not None),
-        key=lambda l: l.line_total or 0.0,
+        (entry for entry in lines if entry.line_total is not None),
+        key=lambda entry: entry.line_total or 0.0,
         reverse=True,
     )[:top_n]
     # Stable, deterministic ordering for over-budget callouts.
-    over.sort(key=lambda l: (-(l.unit_price_usd or 0.0), l.name))
+    over.sort(key=lambda entry: (-(entry.unit_price_usd or 0.0), entry.name))
 
     return DeckValue(
         total_known_usd=round(total_known, 2),
@@ -146,21 +145,21 @@ def value_to_dict(value: DeckValue) -> dict:
         "zones_included": list(value.zones_included),
         "priciest": [
             {
-                "name": l.name,
-                "quantity": l.quantity,
-                "unit_price_usd": l.unit_price_usd,
-                "line_total": l.line_total,
-                "tcgplayer_url": tcgplayer_search_url(l.name),
+                "name": entry.name,
+                "quantity": entry.quantity,
+                "unit_price_usd": entry.unit_price_usd,
+                "line_total": entry.line_total,
+                "tcgplayer_url": tcgplayer_search_url(entry.name),
             }
-            for l in value.priciest
+            for entry in value.priciest
         ],
         "over_budget": [
             {
-                "name": l.name,
-                "quantity": l.quantity,
-                "unit_price_usd": l.unit_price_usd,
-                "tcgplayer_url": tcgplayer_search_url(l.name),
+                "name": entry.name,
+                "quantity": entry.quantity,
+                "unit_price_usd": entry.unit_price_usd,
+                "tcgplayer_url": tcgplayer_search_url(entry.name),
             }
-            for l in value.over_budget
+            for entry in value.over_budget
         ],
     }

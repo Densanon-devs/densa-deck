@@ -69,7 +69,7 @@ def mcp_enabled() -> tuple[bool, str]:
         try:
             data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict) and data.get("mcp_enabled") is False:
-                return False, f"~/.densa-deck/config.json: mcp_enabled=false"
+                return False, "~/.densa-deck/config.json: mcp_enabled=false"
         except (json.JSONDecodeError, OSError):
             # Don't fail closed on a corrupt config — that would lock the
             # user out for a stray edit. Treat as no opinion.

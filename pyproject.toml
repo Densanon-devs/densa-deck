@@ -65,6 +65,27 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 
+# Everything that flags a probable defect — F (pyflakes), I (imports),
+# W (warnings) and the rest of E — is enforced and currently clean. The
+# three rules below are style preferences this codebase has never followed,
+# and enforcing them now would mean ~350 lines of reformatting across files
+# with no behaviour change, which buries `git blame` for no benefit.
+ignore = [
+    # 326 pre-existing violations, median 8 characters over the limit. To
+    # take this on, run `ruff format` as its own commit rather than
+    # hand-wrapping — then drop this ignore.
+    "E501",   # line-too-long
+    # `if name: query["name"] = name` — a compact, readable idiom used
+    # deliberately when building option dicts.
+    "E701",   # multiple-statements-on-one-line (colon)
+    "E702",   # multiple-statements-on-one-line (semicolon)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Benchmark decklists are data, not code: long lines are inherent to the
+# card names and this file accounts for 96 of the E501 violations alone.
+"src/densa_deck/benchmarks/analyst_gauntlet_decks.py" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

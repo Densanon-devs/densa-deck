@@ -22,8 +22,6 @@ will surface (high-CMC non-finisher) + (redundant role) + (no-tag) combos.
 
 from __future__ import annotations
 
-from typing import Callable
-
 from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.models import (
     AnalysisResult,
@@ -36,7 +34,6 @@ from densa_deck.models import (
     Format,
     Zone,
 )
-
 
 # =============================================================================
 # Shared card library

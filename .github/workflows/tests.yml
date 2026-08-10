@@ -31,6 +31,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mcp]"
 
+      - name: Lint
+        # Enforced rule set is clean; see [tool.ruff.lint] in pyproject for
+        # the three style rules this codebase deliberately doesn't enforce.
+        run: python -m ruff check src/ tests/ scripts/
+
       - name: Run tests
         # The suite is offline by design; anything needing the network is
         # marked `network` and skipped here so CI can't fail on Scryfall

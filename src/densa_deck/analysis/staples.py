@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from densa_deck.models import Color, Deck, Format, Zone
+from densa_deck.models import Deck, Format, Zone
 
 
 @dataclass

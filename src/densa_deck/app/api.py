@@ -24,9 +24,7 @@ import sys
 import threading
 import traceback
 import uuid
-from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
 from densa_deck.analysis.advanced import run_advanced_analysis
 from densa_deck.analysis.castability import analyze_castability
@@ -858,6 +856,7 @@ class AppApi:
         decklist in our pasteable text format so the frontend can drop it
         into the textarea."""
         import asyncio
+
         from densa_deck.deck.url_import import detect_url, fetch_from_url
         if not url or not url.strip():
             return {"ok": False, "error": "URL is empty."}
@@ -918,6 +917,7 @@ class AppApi:
         the whole launch.
         """
         import urllib.request
+
         from densa_deck import __version__ as current
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
@@ -957,6 +957,7 @@ class AppApi:
         — the Settings panel shows Setup instead of Update.
         """
         import asyncio
+
         from densa_deck.data.scryfall import fetch_bulk_data_manifest
 
         db = self._get_db()
@@ -1378,7 +1379,6 @@ class AppApi:
         Empty cache = "Refresh combos" button surfaced. Non-empty =
         show the combo count and last-refresh timestamp.
         """
-        from densa_deck.combos import ComboStore
         store = self._get_combo_store()
         return {
             "combo_count": store.combo_count(),
@@ -2022,7 +2022,7 @@ class AppApi:
         if isinstance(deck, dict):
             return deck
 
-        from densa_deck.analysis.brackets import bracket_fit, BRACKETS
+        from densa_deck.analysis.brackets import BRACKETS, bracket_fit
         from densa_deck.analysis.power_level import estimate_power_level
 
         analysis = run_static_analysis(deck)
@@ -2282,7 +2282,7 @@ class AppApi:
         Stored next to the card DB so all per-user state stays under
         a single ~/.densa-deck/ directory.
         """
-        from densa_deck.combos import ComboStore, DEFAULT_COMBO_DB_PATH
+        from densa_deck.combos import DEFAULT_COMBO_DB_PATH, ComboStore
         if getattr(self, "_combo_store", None) is None:
             if self._db_path:
                 path = Path(self._db_path).parent / "combos.db"
@@ -2317,7 +2317,7 @@ class AppApi:
 
             written = refresh_combo_snapshot(
                 store=store,
-                user_agent=f"DensaDeck/0.5.0 (combo-fetch)",
+                user_agent="DensaDeck/0.5.0 (combo-fetch)",
                 progress_cb=_on_page,
             )
             self._update_progress(
@@ -2357,8 +2357,8 @@ class AppApi:
         if snap_b is None:
             return {"ok": False, "error": f"No saved versions for deck '{deck_b_id}'."}
 
-        from densa_deck.analyst.phase6 import compare_decks
         from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.analyst.phase6 import compare_decks
         from densa_deck.formats.profiles import detect_archetype
         from densa_deck.versioning.storage import diff_versions
 
@@ -2583,7 +2583,8 @@ class AppApi:
             return deck
 
         from densa_deck.analysis.power_level import estimate_power_level
-        from densa_deck.analyst.phase6 import build_rule0_worksheet as _build, render_rule0_text
+        from densa_deck.analyst.phase6 import build_rule0_worksheet as _build
+        from densa_deck.analyst.phase6 import render_rule0_text
         from densa_deck.formats.profiles import detect_archetype
 
         analysis = run_static_analysis(deck)
@@ -3067,8 +3068,10 @@ class AppApi:
                 return
 
             from densa_deck.data.scryfall import (
-                bulk_download_url, download_bulk_file,
-                fetch_bulk_data_manifest, load_bulk_file,
+                bulk_download_url,
+                download_bulk_file,
+                fetch_bulk_data_manifest,
+                load_bulk_file,
             )
 
             cache_dir = db.db_path.parent / "bulk"
@@ -3195,8 +3198,8 @@ class AppApi:
         try:
             # Pull the model catalog from the CLI module so the single source
             # of truth for URLs + sizes lives there.
-            from densa_deck.cli import _ANALYST_MODELS
             from densa_deck.analyst.backends.llama_cpp import DEFAULT_MODEL_PATH
+            from densa_deck.cli import _ANALYST_MODELS
 
             spec = _ANALYST_MODELS.get(model_key)
             if spec is None:
@@ -3355,8 +3358,8 @@ class AppApi:
         turn, and per-axis deltas so the user can see "deck A wins on
         speed, deck B wins on interaction" at a glance.
         """
-        from densa_deck.analysis.static import analyze_deck as static_analyze
         from densa_deck.analysis.power_level import estimate_power_level
+        from densa_deck.analysis.static import analyze_deck as static_analyze
         from densa_deck.formats.profiles import detect_archetype
         from densa_deck.matchup.deck_as_opponent import deck_to_profile
         from densa_deck.matchup.simulator import simulate_matchup
@@ -3594,7 +3597,6 @@ def _export_mtga(deck) -> tuple[str, str]:
     is emitted as a leading "Commander" section if present, mirroring
     MTGA's import expectations.
     """
-    from densa_deck.models import Zone
     lines: list[str] = []
     zones_in_order = [
         ("Commander", Zone.COMMANDER),
@@ -3632,10 +3634,9 @@ def _export_mtgo(deck) -> tuple[str, str]:
     names.
     """
     import xml.sax.saxutils as _sax
-    from densa_deck.models import Zone
     lines: list[str] = ['<?xml version="1.0" encoding="UTF-8"?>', "<Deck>"]
-    lines.append(f"  <NetDeckID>0</NetDeckID>")
-    lines.append(f"  <PreconstructedDeckID>0</PreconstructedDeckID>")
+    lines.append("  <NetDeckID>0</NetDeckID>")
+    lines.append("  <PreconstructedDeckID>0</PreconstructedDeckID>")
 
     def _emit(zone, sideboard_flag: str):
         agg: dict[str, int] = {}

@@ -36,9 +36,9 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable
 
+from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.analyst import AnalystRunner, MockBackend
 from densa_deck.analyst.runner import AnalystResult
-from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.models import (
     AnalysisResult,
     Card,
@@ -50,7 +50,6 @@ from densa_deck.models import (
     Format,
     Zone,
 )
-
 
 # =============================================================================
 # Case definitions

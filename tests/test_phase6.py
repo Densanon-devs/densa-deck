@@ -13,7 +13,6 @@ from densa_deck.analysis.advanced import (
     run_advanced_analysis,
 )
 from densa_deck.benchmarks.suites import (
-    BUILTIN_SUITES,
     get_suite,
     list_suites,
     load_suite,

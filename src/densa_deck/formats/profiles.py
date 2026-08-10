@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from densa_deck.models import CardTag, Deck, DeckEntry, Format, Zone
+from densa_deck.models import Deck, Format, Zone
 
 
 class DeckArchetype(str, Enum):

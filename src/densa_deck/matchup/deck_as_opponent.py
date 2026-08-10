@@ -23,10 +23,11 @@ from dataclasses import replace
 
 from densa_deck.analysis.power_level import PowerBreakdown
 from densa_deck.matchup.archetypes import (
-    ARCHETYPES, ArchetypeName, ArchetypeProfile,
+    ARCHETYPES,
+    ArchetypeName,
+    ArchetypeProfile,
 )
 from densa_deck.models import AnalysisResult, Deck
-
 
 _ARCHETYPE_STRING_MAP: dict[str, ArchetypeName] = {
     "aggro": ArchetypeName.AGGRO,

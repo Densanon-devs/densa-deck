@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
-from densa_deck.goldfish.mana import ManaCost, card_mana_cost, can_pay, source_colors
+from densa_deck.goldfish.mana import ManaCost, can_pay, card_mana_cost, source_colors
 from densa_deck.models import Deck, Zone
 
 # On-curve hit rates above/below which a colour is called solid or short.

@@ -6,7 +6,6 @@ from collections import Counter
 
 from densa_deck.playgroup.models import Pod, PodContext
 
-
 _COMBO_ARCHETYPES = {"combo", "aristocrats", "reanimator"}
 _CONTROL_ARCHETYPES = {"control", "stax"}
 _AGGRO_ARCHETYPES = {"aggro", "voltron", "tribal"}
