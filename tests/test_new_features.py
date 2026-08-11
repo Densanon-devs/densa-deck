@@ -230,7 +230,11 @@ class TestURLImport:
 
         with patch("densa_deck.deck.url_import._get_with_backoff", side_effect=raising):
             try:
-                asyncio.get_event_loop().run_until_complete(_fetch_moxfield("deckid"))
+                # asyncio.run rather than get_event_loop(): from Python 3.12
+                # there is no implicit loop in the main thread, so the old
+                # form raises RuntimeError before the code under test runs —
+                # which made this assert on the wrong error entirely.
+                asyncio.run(_fetch_moxfield("deckid"))
             except RuntimeError as e:
                 msg = str(e).lower()
                 assert "moxfield" in msg

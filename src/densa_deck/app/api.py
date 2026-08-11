@@ -977,11 +977,11 @@ class AppApi:
             loop.close()
 
         remote_ts = str(manifest.get("updated_at", ""))
-        size_bytes = manifest.get("size") or 0
-        try:
-            size_mb = round(int(size_bytes) / (1024 * 1024), 1)
-        except (TypeError, ValueError):
-            size_mb = 0.0
+        # Scryfall renamed `size` -> `compressed_size`; bulk_size_bytes
+        # accepts either so the banner keeps reporting a real download size.
+        from densa_deck.data.scryfall import bulk_size_bytes
+
+        size_mb = round(bulk_size_bytes(manifest) / (1024 * 1024), 1)
 
         # String comparison works for Scryfall's ISO-8601 timestamps (they
         # all use the same offset), but guard against a blank remote to
@@ -2931,11 +2931,14 @@ class AppApi:
                 return
 
             from densa_deck.data.scryfall import (
-                download_bulk_file, fetch_bulk_data_manifest, load_bulk_file,
+                bulk_download_url, download_bulk_file,
+                fetch_bulk_data_manifest, load_bulk_file,
             )
 
             cache_dir = db.db_path.parent / "bulk"
             cache_dir.mkdir(parents=True, exist_ok=True)
+            # Real filename is decided once the manifest tells us what
+            # Scryfall is serving (plain JSON vs gzipped JSON Lines).
             dest = cache_dir / "oracle_cards.json"
 
             loop = asyncio.new_event_loop()
@@ -2954,8 +2957,12 @@ class AppApi:
                 # can record the Scryfall `updated_at` timestamp in metadata
                 # — that's what future update-check comparisons key off.
                 manifest = loop.run_until_complete(fetch_bulk_data_manifest())
-                url = manifest["download_uri"]
+                url = bulk_download_url(manifest)
                 remote_updated_at = manifest.get("updated_at", "")
+                # Scryfall now serves gzipped JSON Lines; keep the cache
+                # filename honest so load_bulk_file's sniffing reports well.
+                if url.endswith(".gz"):
+                    dest = dest.with_name("oracle_cards.jsonl.gz")
                 if self._shutdown_event.is_set():
                     self._update_progress("ingest", message="Ingest cancelled (app closing)", done=True, running=False)
                     return
