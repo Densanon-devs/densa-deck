@@ -1,7 +1,7 @@
 """Tests for card classification."""
 
 from densa_deck.classification.tagger import classify_card
-from densa_deck.models import Card, CardLayout, CardTag, Color
+from densa_deck.models import Card, CardLayout, CardTag
 
 
 def _make_card(**kwargs) -> Card:

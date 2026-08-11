@@ -134,7 +134,7 @@ class TestBracketComboLines:
         # Stub deck — bracket_fit only uses deck for entries enumeration
         # via detect_deck_brackets. We pass it a minimal Deck via the
         # helper used in the existing brackets test file.
-        from densa_deck.models import Deck, DeckEntry, Zone
+        from densa_deck.models import Deck
         deck = Deck(name="t", format=Format.COMMANDER, entries=[])
         fit = bracket_fit(
             deck=deck, target_label="2-upgraded",

@@ -14,10 +14,12 @@ from dataclasses import dataclass, field
 from rich.console import Console
 
 from densa_deck.classification.tagger import classify_card
+
 # Combo import goes through .models (not the package root) so we don't
 # pull in httpx and the refresh-snapshot walker — goldfish should stay
 # importable without network deps.
 from densa_deck.combos.models import Combo
+from densa_deck.formats.profiles import starting_life_for
 from densa_deck.goldfish.heuristics import play_turn
 from densa_deck.goldfish.mulligan import mulligan_phase
 from densa_deck.goldfish.objectives import (
@@ -31,7 +33,6 @@ from densa_deck.goldfish.reliability import (
     ReliabilityCollector,
 )
 from densa_deck.goldfish.state import GameState, TurnMetrics
-from densa_deck.formats.profiles import starting_life_for
 from densa_deck.models import Deck
 
 console = Console()
@@ -261,7 +262,7 @@ def _run_single_game(
         play_turn(state)
         if collector is not None:
             collector.observe(state, state.turn)
-        metrics = state.end_turn()
+        state.end_turn()
         if state.pending_extra_turns > 0:
             state.pending_extra_turns -= 1
             turns_remaining += 1

@@ -24,7 +24,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from densa_deck.models import Deck, DeckEntry, Zone
+from densa_deck.models import Deck, Zone
 from densa_deck.probability.hypergeometric import cards_seen_by_turn, prob_at_least
 
 _PIP_PATTERN = re.compile(r"\{([WUBRG])\}")

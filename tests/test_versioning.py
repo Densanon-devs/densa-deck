@@ -3,9 +3,9 @@
 import tempfile
 from pathlib import Path
 
-from densa_deck.versioning.impact import ImpactReport, analyze_impact
-from densa_deck.versioning.storage import DeckDiff, DeckSnapshot, VersionStore, diff_versions
-from densa_deck.versioning.trends import TrendReport, analyze_trends
+from densa_deck.versioning.impact import analyze_impact
+from densa_deck.versioning.storage import DeckSnapshot, VersionStore, diff_versions
+from densa_deck.versioning.trends import analyze_trends
 
 
 def _tmp_store() -> VersionStore:

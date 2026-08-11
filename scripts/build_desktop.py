@@ -18,7 +18,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SPEC_FILE = REPO_ROOT / "densa-deck.spec"
 BUILD_DIR = REPO_ROOT / "build"

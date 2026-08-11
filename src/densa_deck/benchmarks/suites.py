@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from densa_deck.matchup.archetypes import (
-    ARCHETYPES,
-    ArchetypeName,
     ArchetypeProfile,
     get_archetype,
 )

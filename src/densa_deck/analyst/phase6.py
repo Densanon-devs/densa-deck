@@ -23,7 +23,6 @@ from densa_deck.analyst.prompts import (
 )
 from densa_deck.analyst.verifiers import verify_prose_output
 
-
 # =============================================================================
 # Compare deck A vs B
 # =============================================================================

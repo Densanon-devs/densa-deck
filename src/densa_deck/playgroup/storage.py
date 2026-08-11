@@ -21,7 +21,6 @@ from pathlib import Path
 
 from densa_deck.playgroup.models import Pod, PodMember
 
-
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS pod_meta (
         name TEXT PRIMARY KEY,

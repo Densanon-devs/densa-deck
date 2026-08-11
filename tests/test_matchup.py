@@ -1,6 +1,5 @@
 """Tests for matchup simulation and gauntlet."""
 
-import random
 
 from densa_deck.matchup.archetypes import (
     ARCHETYPES,

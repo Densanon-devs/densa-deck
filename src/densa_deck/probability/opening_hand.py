@@ -131,7 +131,6 @@ def simulate_opening_hands(
         random.shuffle(shuffled)
 
         # London mulligan: draw 7 each time, evaluate the effective hand size
-        kept = False
         for mulls in range(4):  # 0, 1, 2, 3 mulligans
             hand_size = 7 - mulls
             hand = shuffled[:7]  # See 7, but evaluate keepability for effective hand_size
@@ -150,7 +149,6 @@ def simulate_opening_hands(
                 scores.append(ev.score)
                 land_totals.append(ev.land_count)
                 keep_count += 1
-                kept = True
 
                 # Track best/worst
                 if len(best) < 5 or ev.score > min(h.score for h in best):

@@ -5,13 +5,10 @@ import random
 from densa_deck.goldfish.heuristics import play_turn
 from densa_deck.goldfish.mulligan import mulligan_phase
 from densa_deck.goldfish.objectives import (
-    Objective,
-    ObjectiveType,
     check_objectives,
     commander_on_curve,
     damage_by_turn,
     default_objectives,
-    ramp_by_turn,
 )
 from densa_deck.goldfish.runner import run_goldfish_batch
 from densa_deck.goldfish.state import GameState, Permanent

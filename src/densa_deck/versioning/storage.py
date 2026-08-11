@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from densa_deck.data.database import DEFAULT_DB_PATH

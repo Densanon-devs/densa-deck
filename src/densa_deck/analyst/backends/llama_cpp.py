@@ -26,7 +26,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 DEFAULT_MODEL_PATH = Path.home() / ".densa-deck" / "models" / "analyst.gguf"
 
 

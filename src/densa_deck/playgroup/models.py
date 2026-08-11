@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 # Coarse archetype tags used to bucket pod members. Free-form text is
 # accepted on the CLI for forward-compat; these are the canonical labels
 # the bracket logic and prompts speak.

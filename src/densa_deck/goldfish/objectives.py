@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 from densa_deck.goldfish.state import GameState
 from densa_deck.models import CardTag

@@ -18,13 +18,13 @@ Three stages, each independently useful:
         "you cut 8 cards over the last week, power went 7.2 → 6.8."
 """
 
-from densa_deck.iteration.proposals import Proposal, propose_changes
 from densa_deck.iteration.preview import (
     ChangePreview,
     apply_proposal,
     preview_change,
 )
-from densa_deck.iteration.storage import IterationStore, IterationRecord
+from densa_deck.iteration.proposals import Proposal, propose_changes
+from densa_deck.iteration.storage import IterationRecord, IterationStore
 
 __all__ = [
     "Proposal",

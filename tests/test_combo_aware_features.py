@@ -113,7 +113,7 @@ class TestComboAwareArchetype:
             _mk("Z", cmc=4, is_creature=True, tl="Creature"),
         ])
         # No combos: should NOT be COMBO archetype (only creatures)
-        baseline = detect_archetype(deck)
+        _baseline = detect_archetype(deck)
         from densa_deck.formats.profiles import DeckArchetype
         # With 2+ combos: explicit override
         with_combos = detect_archetype(deck, detected_combo_count=2)

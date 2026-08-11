@@ -5,7 +5,7 @@ import sys
 
 from densa_deck.analysis.castability import analyze_castability
 from densa_deck.analysis.deck_diff import compare_decks
-from densa_deck.analysis.power_level import PowerBreakdown, estimate_power_level
+from densa_deck.analysis.power_level import estimate_power_level
 from densa_deck.analysis.staples import check_staples
 from densa_deck.deck.url_import import detect_url
 from densa_deck.models import Card, CardLayout, CardTag, Color, Deck, DeckEntry, Format, Zone
@@ -214,8 +214,10 @@ class TestURLImport:
         403 and raise a RuntimeError with instructions pointing the user
         at Moxfield's Export->Text feature + the paste box instead."""
         import asyncio
+        from unittest.mock import patch
+
         import httpx
-        from unittest.mock import AsyncMock, patch
+
         from densa_deck.deck.url_import import _fetch_moxfield
 
         # Build a fake 403 HTTPStatusError like httpx raises for cloudflare.

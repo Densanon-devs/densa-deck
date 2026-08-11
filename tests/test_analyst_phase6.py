@@ -18,7 +18,6 @@ from densa_deck.analyst import MockBackend
 from densa_deck.analyst.phase6 import (
     CompareResult,
     ExplainResult,
-    Rule0Worksheet,
     build_rule0_worksheet,
     compare_decks,
     explain_card,
@@ -27,11 +26,9 @@ from densa_deck.analyst.phase6 import (
 from densa_deck.combos import (
     Combo,
     ComboStore,
-    MatchedCombo,
     detect_combos,
 )
 from densa_deck.combos.data import _parse_variant
-
 
 # ---------------------------------------------------------------- compare
 

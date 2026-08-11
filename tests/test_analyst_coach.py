@@ -8,7 +8,6 @@ Coverage:
   - History window caps so the prompt doesn't grow unbounded
 """
 
-import pytest
 
 from densa_deck.analyst import MockBackend
 from densa_deck.analyst.coach import (

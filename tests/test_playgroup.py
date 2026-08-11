@@ -15,16 +15,15 @@ from pathlib import Path
 
 import pytest
 
+from densa_deck.analyst.prompts import executive_summary_prompt
 from densa_deck.playgroup import (
     PlaygroupStore,
     Pod,
-    PodMember,
     PodContext,
+    PodMember,
     build_pod_context,
 )
 from densa_deck.playgroup.context import render_pod_block
-from densa_deck.analyst.prompts import executive_summary_prompt
-
 
 # ----------------------------------------------------------------- store
 

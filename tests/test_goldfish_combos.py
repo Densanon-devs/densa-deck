@@ -7,8 +7,6 @@ and that the report's combo_* fields aggregate correctly.
 
 from __future__ import annotations
 
-import pytest
-
 from densa_deck.combos.models import Combo
 from densa_deck.goldfish.runner import run_goldfish_batch
 from densa_deck.models import (

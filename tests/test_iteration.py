@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 
 from densa_deck.iteration import (
-    ChangePreview,
     IterationRecord,
     IterationStore,
     Proposal,
@@ -35,7 +34,6 @@ from densa_deck.models import (
     Legality,
     Zone,
 )
-
 
 # ---------------------------------------------------------------- fixtures
 

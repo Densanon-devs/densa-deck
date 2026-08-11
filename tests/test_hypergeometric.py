@@ -1,6 +1,5 @@
 """Tests for hypergeometric probability calculator."""
 
-import pytest
 
 from densa_deck.probability.hypergeometric import (
     cards_seen_by_turn,

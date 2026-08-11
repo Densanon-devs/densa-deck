@@ -20,9 +20,8 @@ from __future__ import annotations
 
 from densa_deck.analyst.add_candidates import AddCandidate, render_add_table
 from densa_deck.analyst.candidates import CutCandidate, render_cut_table
-from densa_deck.playgroup.models import PodContext
 from densa_deck.playgroup.context import render_pod_block
-
+from densa_deck.playgroup.models import PodContext
 
 # =============================================================================
 # Executive summary — prose only, no card emission

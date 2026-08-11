@@ -18,7 +18,7 @@ Phase 4: gauntlet benchmark in the style of the tax-compliance-engine IRS
 200-problem suite.
 """
 
-from densa_deck.analyst.runner import AnalystRunner, AnalystResult
 from densa_deck.analyst.backends import LLMBackend, MockBackend
+from densa_deck.analyst.runner import AnalystResult, AnalystRunner
 
 __all__ = ["AnalystRunner", "AnalystResult", "LLMBackend", "MockBackend"]

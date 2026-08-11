@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from densa_deck.models import (
     Deck,
-    DeckEntry,
     Format,
     Legality,
     ValidationIssue,

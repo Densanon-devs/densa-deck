@@ -23,10 +23,8 @@ from densa_deck.analyst.prompts import (
     executive_summary_prompt,
 )
 from densa_deck.analyst.verifiers import (
-    TagPick,
     parse_tag_picks,
     verify_add_picks_constraints,
-    verify_no_free_form_card_names,
     verify_prose_output,
     verify_tags_in_table,
 )
@@ -485,7 +483,6 @@ class AnalystRunner:
 
         by_tag: dict[str, AddCandidate] = {c.tag: c for c in candidates}
         valid_tags = set(by_tag.keys())
-        candidate_names = {c.card.name for c in candidates}
 
         prompt = add_suggestions_prompt(
             role_name=role.value,

@@ -17,15 +17,12 @@ where 90% of the bug surface lives.
 from __future__ import annotations
 
 import os
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from densa_deck.mcp.license_gate import (
     ProRequiredError,
     assert_pro,
-    current_tier,
     is_pro,
 )
 from densa_deck.mcp.tools import _unwrap, make_free_tools, make_pro_tools
@@ -246,6 +243,7 @@ class TestKillSwitch:
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         # Force re-import to pick up the patched _CONFIG_PATH base.
         import importlib
+
         import densa_deck.mcp.license_gate as lg
         importlib.reload(lg)
         try:
@@ -329,7 +327,9 @@ class TestMcpConfigCommand:
     installer customers."""
 
     def test_emits_valid_json_block(self):
-        import subprocess, sys, json
+        import json
+        import subprocess
+        import sys
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
             [sys.executable, "-m", "densa_deck.cli", "mcp", "config"],
@@ -350,7 +350,9 @@ class TestMcpConfigCommand:
         assert entry["args"][:2] == ["mcp", "serve"]
 
     def test_read_only_flag_is_passed_through(self):
-        import subprocess, sys, json
+        import json
+        import subprocess
+        import sys
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
             [sys.executable, "-m", "densa_deck.cli", "mcp", "config", "--read-only"],
@@ -365,7 +367,9 @@ class TestMcpConfigCommand:
         assert "--read-only" in args
 
     def test_tools_flag_is_passed_through(self):
-        import subprocess, sys, json
+        import json
+        import subprocess
+        import sys
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         r = subprocess.run(
             [sys.executable, "-m", "densa_deck.cli", "mcp", "config",
@@ -388,7 +392,8 @@ class TestMcpSelftestCommand:
     with a clear summary line."""
 
     def test_selftest_succeeds_in_pro_mode(self, tmp_path):
-        import subprocess, sys
+        import subprocess
+        import sys
         env = {**os.environ, "MTG_ENGINE_TIER": "pro",
                "PYTHONIOENCODING": "utf-8",
                "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
@@ -403,7 +408,8 @@ class TestMcpSelftestCommand:
         assert "tools registered" in r.stdout.lower()
 
     def test_selftest_exits_2_when_kill_switch_active(self, tmp_path):
-        import subprocess, sys
+        import subprocess
+        import sys
         env = {**os.environ, "MTG_ENGINE_MCP": "disabled",
                "PYTHONIOENCODING": "utf-8",
                "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}

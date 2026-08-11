@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+
+# Use safe console that handles piped output and non-UTF-8 terminals
 import sys
+import sys as _sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-
-# Use safe console that handles piped output and non-UTF-8 terminals
-import io as _io, sys as _sys
 
 # Force stdout/stderr to UTF-8 on Windows to avoid cp1252 encoding errors
 # with Rich's box-drawing characters when running the bundled binary
@@ -25,15 +25,34 @@ if _sys.platform == "win32":
 
 _force_terminal = _sys.stdout.isatty() if hasattr(_sys.stdout, "isatty") else False
 
-# Core imports needed by most commands
-from densa_deck.data.database import CardDatabase
-from densa_deck.legal import ATTRIBUTION, DISCLAIMER
-from densa_deck.models import Format
-from densa_deck.tiers import COMMAND_FEATURES, _PRO_UPGRADE_MSG, get_user_tier, require_pro
+# Core imports needed by most commands. These sit below the stdout
+# reconfiguration above, which has to run before anything writes output —
+# hence the E402 exemptions rather than moving them up.
+from typing import TYPE_CHECKING  # noqa: E402
+
+from densa_deck.data.database import CardDatabase  # noqa: E402
+from densa_deck.legal import ATTRIBUTION, DISCLAIMER  # noqa: E402
+from densa_deck.models import Format  # noqa: E402
+from densa_deck.tiers import (  # noqa: E402
+    _PRO_UPGRADE_MSG,
+    COMMAND_FEATURES,
+    get_user_tier,
+    require_pro,
+)
 
 # Heavy imports are lazy-loaded inside command functions to speed up
 # simple commands like `info` and `search`. Each cmd_* function imports
-# only what it needs.
+# only what it needs. The render helpers still annotate those types, so
+# they're imported for type-checking only — `from __future__ import
+# annotations` keeps the annotations as strings at runtime.
+if TYPE_CHECKING:
+    from densa_deck.goldfish.runner import GoldfishReport
+    from densa_deck.matchup.gauntlet import GauntletReport
+    from densa_deck.models import AnalysisResult
+    from densa_deck.probability.mana_development import ManaDevelopmentReport
+    from densa_deck.probability.opening_hand import OpeningHandReport
+    from densa_deck.versioning.impact import ImpactReport
+    from densa_deck.versioning.trends import TrendReport
 
 console = Console(force_terminal=_force_terminal)
 
@@ -618,7 +637,6 @@ def cmd_analyze(args):
     from densa_deck.deck.validator import validate_deck
     from densa_deck.export.exporter import export_html, export_json, export_markdown
     from densa_deck.formats.profiles import detect_archetype, format_recommendations
-    from densa_deck.models import AnalysisResult
 
     db = _get_db(args)
     try:
@@ -730,13 +748,13 @@ def cmd_analyze(args):
         if staples.missing:
             essentials = [s for s in staples.missing if s.priority == "essential"]
             if essentials:
-                console.print(f"\n  [red]Missing essential staples:[/red]")
+                console.print("\n  [red]Missing essential staples:[/red]")
                 for s in essentials:
                     console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
             if is_pro:
                 recommended = [s for s in staples.missing if s.priority == "recommended"]
                 if recommended:
-                    console.print(f"  [yellow]Consider adding:[/yellow]")
+                    console.print("  [yellow]Consider adding:[/yellow]")
                     for s in recommended[:5]:
                         console.print(f"    [dim]- {s.name}: {s.reason}[/dim]")
 
@@ -753,7 +771,7 @@ def cmd_analyze(args):
             console.print(total_line)
             if deck_value.priciest:
                 top = deck_value.priciest[:3]
-                bits = [f"{l.name} ${l.line_total:.0f}" for l in top]
+                bits = [f"{line.name} ${line.line_total:.0f}" for line in top]
                 console.print(f"    [dim]Priciest: {' | '.join(bits)}[/dim]")
             if budget_cap is not None and deck_value.over_budget:
                 console.print(
@@ -1444,6 +1462,7 @@ def cmd_diff(args):
 def cmd_practice(args):
     """Interactive mulligan practice mode."""
     import random
+
     from densa_deck.deck.parser import parse_auto
     from densa_deck.deck.resolver import resolve_deck
     from densa_deck.probability.opening_hand import evaluate_hand
@@ -1585,9 +1604,9 @@ def _handle_activation_url(url: str):
         from densa_deck.licensing import save_license
         result = save_license(key)
         if result.valid:
-            console.print(f"[green]Activated Pro license from deep link.[/green]")
+            console.print("[green]Activated Pro license from deep link.[/green]")
         else:
-            console.print(f"[yellow]Deep-link activation failed — invalid key.[/yellow]")
+            console.print("[yellow]Deep-link activation failed — invalid key.[/yellow]")
     except Exception as e:
         console.print(f"[yellow]Deep-link parse failed ({e}); launching normally.[/yellow]")
 
@@ -1822,7 +1841,7 @@ def _cmd_mcp_selftest():
         if hasattr(result, "isError") and result.isError:
             loop.close()
             console.print(
-                f"[yellow]get_current_version returned an error result[/yellow]"
+                "[yellow]get_current_version returned an error result[/yellow]"
             )
             sys.exit(1)
     except Exception as e:
@@ -1834,9 +1853,9 @@ def _cmd_mcp_selftest():
             loop.close()
 
     console.print(
-        f"[dim]All checks passed. To wire Claude desktop, run "
-        f"[bold]densa-deck mcp config[/bold] and paste the output into your "
-        f"Claude desktop config file.[/dim]"
+        "[dim]All checks passed. To wire Claude desktop, run "
+        "[bold]densa-deck mcp config[/bold] and paste the output into your "
+        "Claude desktop config file.[/dim]"
     )
 
 
@@ -2043,7 +2062,7 @@ def cmd_analyst(args):
       - show: print the model path + whether it's currently available
     """
     from densa_deck.analyst.backends.llama_cpp import (
-        DEFAULT_MODEL_PATH, LlamaCppBackend,
+        LlamaCppBackend,
     )
 
     action = getattr(args, "analyst_action", None)
@@ -2094,9 +2113,10 @@ _ANALYST_MODELS = {
 
 def _pull_analyst_model(model_key: str):
     """Download a model to ~/.densa-deck/models/ and symlink as analyst.gguf."""
-    from densa_deck.analyst.backends.llama_cpp import DEFAULT_MODEL_PATH
     import shutil
     import urllib.request
+
+    from densa_deck.analyst.backends.llama_cpp import DEFAULT_MODEL_PATH
 
     spec = _ANALYST_MODELS.get(model_key)
     if spec is None:
@@ -3273,7 +3293,9 @@ def cmd_rulings(args):
     import asyncio
 
     from densa_deck.data.rulings import (
-        RULINGS_ATTRIBUTION, RulingsStore, download_rulings,
+        RULINGS_ATTRIBUTION,
+        RulingsStore,
+        download_rulings,
         rulings_update_available,
     )
 
@@ -3374,7 +3396,9 @@ def cmd_coverage(args):
     from densa_deck.classification.tagger import classify_card
     from densa_deck.data.database import _card_from_json
     from densa_deck.goldfish.effects import (
-        EFFECT_FAMILIES, UNMODELLED, parse_effects,
+        EFFECT_FAMILIES,
+        UNMODELLED,
+        parse_effects,
     )
 
     db = CardDatabase()
@@ -3459,7 +3483,7 @@ def cmd_coverage(args):
 
 def cmd_combos(args):
     """Subcommands: refresh / status / detect."""
-    from densa_deck.combos import ComboStore, refresh_combo_snapshot, detect_combos
+    from densa_deck.combos import ComboStore, detect_combos, refresh_combo_snapshot
 
     action = getattr(args, "combos_action", None)
     db_path = getattr(args, "db", None)
@@ -4013,7 +4037,9 @@ def cmd_bracket(args):
 def cmd_export(args):
     """Export a deck to MTGA / MTGO / Moxfield format."""
     from densa_deck.app.api import (
-        _export_mtga, _export_mtgo, _export_moxfield_text,
+        _export_moxfield_text,
+        _export_mtga,
+        _export_mtgo,
     )
     from densa_deck.deck.parser import parse_decklist
     from densa_deck.deck.resolver import resolve_deck
@@ -4055,7 +4081,10 @@ def cmd_iterate(args):
     from densa_deck.deck.parser import parse_decklist
     from densa_deck.deck.resolver import resolve_deck
     from densa_deck.iteration import (
-        IterationStore, Proposal, preview_change, propose_changes,
+        IterationStore,
+        Proposal,
+        preview_change,
+        propose_changes,
     )
 
     action = getattr(args, "iterate_action", None)

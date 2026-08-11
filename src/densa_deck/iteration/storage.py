@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-
 
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS iteration_log (

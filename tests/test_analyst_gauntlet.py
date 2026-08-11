@@ -7,7 +7,6 @@ enforces that, by constructing an adversarial mock backend and asserting the
 gauntlet catches its cheating.
 """
 
-import pytest
 
 from densa_deck.analyst import AnalystRunner, MockBackend
 from densa_deck.benchmarks.analyst_gauntlet import (

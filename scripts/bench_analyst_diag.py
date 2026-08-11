@@ -26,7 +26,6 @@ from densa_deck.analyst.backends.llama_cpp import LlamaCppBackend  # noqa: E402
 from densa_deck.analyst.candidates import rank_cut_candidates  # noqa: E402
 from densa_deck.benchmarks.analyst_gauntlet import default_cases  # noqa: E402
 
-
 MODEL_PATHS = {
     "0.5b": Path("D:/LLCWork/plug-in-intelligence-engine/models/qwen2.5-0.5b-instruct-q4_k_m.gguf"),
     "3b":   Path("D:/LLCWork/plug-in-intelligence-engine/models/qwen2.5-3b-instruct-q4_k_m.gguf"),

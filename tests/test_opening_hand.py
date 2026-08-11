@@ -2,7 +2,6 @@
 
 from densa_deck.models import Card, CardLayout, CardTag, Deck, DeckEntry, Format, Zone
 from densa_deck.probability.opening_hand import (
-    HandEvaluation,
     OpenerArchetype,
     evaluate_hand,
     simulate_opening_hands,

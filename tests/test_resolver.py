@@ -17,7 +17,11 @@ import pytest
 from densa_deck.data.database import CardDatabase
 from densa_deck.deck.resolver import resolve_deck
 from densa_deck.models import (
-    Card, CardLayout, DeckEntry, Legality, Zone,
+    Card,
+    CardLayout,
+    DeckEntry,
+    Legality,
+    Zone,
 )
 
 

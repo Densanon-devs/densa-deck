@@ -10,7 +10,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from densa_deck.models import CardTag, Color, Deck, DeckEntry, Zone
+from densa_deck.models import CardTag, Deck, Zone
 
 
 @dataclass
