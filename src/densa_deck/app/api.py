@@ -2317,7 +2317,7 @@ class AppApi:
 
             written = refresh_combo_snapshot(
                 store=store,
-                user_agent="DensaDeck/0.5.0 (combo-fetch)",
+                user_agent="DensaDeck/0.6.0 (combo-fetch)",
                 progress_cb=_on_page,
             )
             self._update_progress(

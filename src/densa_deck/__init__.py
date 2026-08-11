@@ -1,3 +1,3 @@
 """MTG Deck Testing Engine — deck analysis, simulation, and insight platform."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
