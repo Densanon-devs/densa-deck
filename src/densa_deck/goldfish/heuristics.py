@@ -12,6 +12,8 @@ Priority system:
 
 from __future__ import annotations
 
+from densa_deck.goldfish.effects import parse_effects
+from densa_deck.goldfish.mana import ManaCost, card_mana_cost
 from densa_deck.goldfish.state import GameState
 from densa_deck.models import CardTag, DeckEntry
 
@@ -23,17 +25,18 @@ def play_turn(state: GameState):
 
 
 def _play_best_land(state: GameState):
-    """Choose and play the best land from hand."""
-    if state.land_played_this_turn:
-        return
+    """Choose and play every land drop we're entitled to this turn.
 
-    lands = [e for e in state.hand if e.card and e.card.is_land]
-    if not lands:
-        return
-
-    # Prefer untapped lands, then lands that produce needed colors
-    lands.sort(key=lambda e: _land_score(e, state), reverse=True)
-    state.play_land(lands[0])
+    Exploration and Azusa grant additional drops, so this is a loop rather
+    than a single play guarded by a boolean.
+    """
+    while state.land_drops_this_turn < state.land_drops_allowed:
+        lands = [e for e in state.hand if e.card and e.card.is_land]
+        if not lands:
+            return
+        # Prefer untapped lands, then lands that produce needed colors
+        lands.sort(key=lambda e: _land_score(e, state), reverse=True)
+        state.play_land(lands[0])
 
 
 def _land_score(entry: DeckEntry, state: GameState) -> float:
@@ -69,39 +72,138 @@ def _land_score(entry: DeckEntry, state: GameState) -> float:
     return score
 
 
-def _cast_spells(state: GameState):
-    """Cast as many spells as possible, prioritized by game phase."""
-    # Determine available mana
-    total_mana = state.available_mana
-    if total_mana == 0:
-        return
+# Upper bound on casts per turn. Rituals and draw spells feed the loop
+# below more mana and more cards, so it needs a termination guard.
+MAX_CASTS_PER_TURN = 40
 
-    # Tap all available mana sources
-    state.tap_for_mana(total_mana)
+
+def effective_cost(card, state: GameState) -> int:
+    """Total mana cost after cost-reduction permanents (Goblin Electromancer)."""
+    return max(0, int(card.display_cmc()) - state.cost_reduction)
+
+
+def _count_for_descriptor(state: GameState, descriptor: str) -> int:
+    """Count whatever an affinity-style cost scales with.
+
+    Handles the descriptors that actually appear on cards — artifacts,
+    creatures and lands you control, and cards in your graveyard. Anything
+    we can't read counts as zero, which leaves the spell at full price
+    rather than inventing a discount.
+    """
+    d = descriptor.lower()
+    if "graveyard" in d:
+        if "creature" in d:
+            return sum(1 for e in state.graveyard if e.card and e.card.is_creature)
+        if "instant" in d or "sorcery" in d:
+            return sum(
+                1 for e in state.graveyard
+                if e.card and (e.card.is_instant or e.card.is_sorcery)
+            )
+        return len(state.graveyard)
+    if "artifact" in d:
+        return sum(
+            1 for p in state.battlefield if p.card and p.card.is_artifact)
+    if "creature" in d:
+        return len(state.creatures_in_play)
+    if "land" in d:
+        return len(state.lands_in_play)
+    return 0
+
+
+def cost_discount(card, state: GameState) -> int:
+    """Generic mana this card's own cost-reducing keywords can cover.
+
+    Delve, convoke, improvise and affinity all shave the generic portion of
+    a cost using a resource the board already has. The resources are spent
+    for real when the spell is cast — see `GameState.pay_alternative_costs`
+    — so convoking with every creature really does cost you the attack.
+    """
+    fx = parse_effects(card)
+    discount = 0
+    if fx.delve:
+        discount += len(state.graveyard)
+    if fx.convoke:
+        discount += sum(
+            1 for p in state.creatures_in_play if not p.tapped)
+    if fx.improvise:
+        discount += sum(
+            1 for p in state.battlefield
+            if p.card and p.card.is_artifact and not p.tapped)
+    if fx.cost_less_amount and fx.cost_less_per:
+        discount += fx.cost_less_amount * _count_for_descriptor(state, fx.cost_less_per)
+    return discount
+
+
+def effective_mana_cost(card, state: GameState) -> ManaCost:
+    """Colour-aware cost after every reduction that applies.
+
+    Reductions only ever touch the generic portion — {1} less does not make
+    a {B}{B} spell any easier to cast off two Islands, and modelling it
+    otherwise would hide exactly the colour problems this is here to expose.
+    """
+    cost = card_mana_cost(card)
+    reduction = state.cost_reduction + cost_discount(card, state)
+    if not reduction:
+        return cost
+    return ManaCost(
+        generic=max(0, cost.generic - reduction),
+        pips=cost.pips.copy(),
+        hybrid=list(cost.hybrid),
+    )
+
+
+def _castable_now(entry, state: GameState) -> bool:
+    """Can we pay for this card right now, colours included?
+
+    Falls back to the quantity-only check for cards with no recorded mana
+    cost (tokens, tests, malformed data) so missing data never blocks a cast.
+    """
+    card = entry.card
+    if card is None or card.is_land:
+        return False
+    cost = effective_mana_cost(card, state)
+    if cost.total == 0 and not card.mana_cost:
+        return effective_cost(card, state) <= state.mana_pool
+    return state.can_pay_for(cost)
+
+
+def _cast_spells(state: GameState):
+    """Cast as many spells as possible, prioritized by game phase.
+
+    Re-evaluates after every cast rather than working from one snapshot of
+    the hand: a ritual adds mana, a draw spell adds cards, and a mana rock
+    adds a source — all of which can make a previously uncastable spell
+    castable on the same turn.
+    """
+    state.tap_for_mana(state.available_mana)
 
     # Try to cast commander from command zone first (if affordable)
     _try_cast_commander(state)
 
-    # Gather castable nonland cards from hand (split cards use front-face cost)
-    castable = [
-        e for e in state.hand
-        if e.card and not e.card.is_land and e.card.display_cmc() <= state.mana_pool
-    ]
+    for _ in range(MAX_CASTS_PER_TURN):
+        # Pick up any mana source that arrived since the last cast.
+        state.tap_for_mana(state.available_mana)
 
-    if not castable:
-        return
+        castable = [e for e in state.hand if _castable_now(e, state)]
+        if not castable:
+            return
 
-    # Sort by priority
-    castable.sort(key=lambda e: _spell_priority(e, state), reverse=True)
-
-    # Cast in priority order
-    for entry in castable:
+        entry = max(castable, key=lambda e: _spell_priority(e, state))
         if entry.card is None:
-            continue
-        cost = int(entry.card.display_cmc())
-        if cost <= state.mana_pool:
-            state.spend_mana(cost)
-            state.cast_spell(entry)
+            return
+        # How much of the discount we actually leaned on — only the part
+        # that reduced the bill gets charged to the board.
+        printed = card_mana_cost(entry.card)
+        cost = effective_mana_cost(entry.card, state)
+        discount_used = max(0, printed.generic - cost.generic - state.cost_reduction)
+
+        if not state.pay_for(cost):
+            # Colours don't line up after all — pay what we can by quantity so
+            # a cost we failed to parse can't wedge the loop.
+            if not state.spend_mana(effective_cost(entry.card, state)):
+                return
+        state.pay_alternative_costs(entry.card, discount_used)
+        state.cast_spell(entry)
 
 
 def _try_cast_commander(state: GameState):
@@ -113,9 +215,20 @@ def _try_cast_commander(state: GameState):
     if cmd.card is None:
         return
 
-    cost = int(cmd.card.cmc) + state.commander_tax
-    if cost <= state.mana_pool:
-        state.spend_mana(cost)
+    # Commander tax is generic, so it stacks onto the generic portion.
+    cost = effective_mana_cost(cmd.card, state)
+    taxed = ManaCost(
+        generic=cost.generic + state.commander_tax,
+        pips=cost.pips.copy(),
+        hybrid=list(cost.hybrid),
+    )
+    if taxed.total == 0 and not cmd.card.mana_cost:
+        legacy = max(0, int(cmd.card.cmc) - state.cost_reduction) + state.commander_tax
+        if legacy <= state.mana_pool:
+            state.spend_mana(legacy)
+            state.cast_spell(cmd, from_command_zone=True)
+        return
+    if state.pay_for(taxed):
         state.cast_spell(cmd, from_command_zone=True)
 
 

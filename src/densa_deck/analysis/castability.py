@@ -3,6 +3,19 @@
 For each card with colored pip requirements, calculates the turn-by-turn
 probability of having the right colors available. Flags demanding cards
 that are unreliable given the current mana base.
+
+**Two answers exist to this question and they are not the same.** This
+module computes a *hypergeometric estimate*: fast, needs no simulation, and
+assumes each colour's sources are drawn independently of the others. The
+goldfish simulator computes a *measured* rate from real games, which
+accounts for mulligans, ramp spells that fetch lands, lands entering
+tapped, and the actual casting sequence — see `goldfish.reliability`.
+
+The estimate is what `analyze` can afford; the measurement is what
+`goldfish` produces. Where a caller has both, pass the measured rates into
+`analyze_castability(measured_rates=...)` and they win. Every
+`CardCastability` carries a `source` field saying which one it is, so the
+two numbers can never be presented as if they were interchangeable.
 """
 
 from __future__ import annotations
@@ -36,6 +49,9 @@ class CardCastability:
     castable_by_turn: dict[int, float] = field(default_factory=dict)
     bottleneck_color: str = ""  # Which color is hardest to produce
     reliable: bool = True  # >75% on curve
+    # "estimated" (hypergeometric) or "measured" (from simulated games).
+    # Never let these two be read as the same number.
+    source: str = "estimated"
 
 
 @dataclass
@@ -45,6 +61,9 @@ class CastabilityReport:
     cards: list[CardCastability] = field(default_factory=list)
     unreliable_cards: list[CardCastability] = field(default_factory=list)
     color_bottlenecks: dict[str, int] = field(default_factory=dict)  # color -> count of unreliable cards
+    # "estimated" when every number came from the hypergeometric model,
+    # "measured" when they all came from simulation, "mixed" otherwise.
+    source: str = "estimated"
 
 
 def analyze_castability(
@@ -53,8 +72,16 @@ def analyze_castability(
     max_turn: int = 10,
     on_play: bool = True,
     reliability_threshold: float = 0.75,
+    measured_rates: dict[str, float] | None = None,
 ) -> CastabilityReport:
-    """Analyze castability for all cards with colored pip requirements."""
+    """Analyze castability for all cards with colored pip requirements.
+
+    `measured_rates` (optional): card name -> observed on-curve castability
+    from a goldfish batch (`GoldfishReport.mana_reliability.card_on_curve`).
+    Any card present there uses the measured number instead of the
+    hypergeometric estimate, and is marked `source="measured"`. Simulation
+    beats approximation whenever we have paid for it.
+    """
     report = CastabilityReport()
     active = [e for e in deck.entries if e.zone not in (Zone.MAYBEBOARD, Zone.SIDEBOARD) and e.card]
     deck_size = sum(e.quantity for e in active)
@@ -80,11 +107,17 @@ def analyze_castability(
             continue  # Colorless or no cost
 
         pip_counts = Counter(pips)
+        measured = (measured_rates or {}).get(card.name)
 
-        # Only analyze cards with 2+ pips of one color (demanding costs)
-        max_pip = max(pip_counts.values()) if pip_counts else 0
-        if max_pip < 2 and len(pip_counts) < 2:
-            continue  # Single pip of one color is trivial
+        # Only *estimate* demanding costs (2+ pips of a colour, or 2+
+        # colours) — estimating a single pip is noise. A measurement is
+        # never noise, though: a lone {U} that simulation says is castable
+        # 0% of the time is the most severe mana problem a deck can have,
+        # and applying the estimate's filter to it would hide exactly that.
+        if measured is None:
+            max_pip = max(pip_counts.values()) if pip_counts else 0
+            if max_pip < 2 and len(pip_counts) < 2:
+                continue  # Single pip of one color is trivial to estimate
 
         cc = CardCastability(
             name=card.name,
@@ -111,9 +144,16 @@ def analyze_castability(
 
             cc.castable_by_turn[turn] = round(turn_prob, 4)
 
-        # On-curve probability
+        # On-curve probability. A measured rate from simulation supersedes
+        # the estimate — it already accounts for mulligans, ramp and tapped
+        # lands, none of which the hypergeometric model can see.
         on_curve_turn = cc.cmc
-        cc.on_curve_probability = cc.castable_by_turn.get(on_curve_turn, 0.0)
+        if measured is not None:
+            cc.on_curve_probability = measured
+            cc.castable_by_turn[on_curve_turn] = measured
+            cc.source = "measured"
+        else:
+            cc.on_curve_probability = cc.castable_by_turn.get(on_curve_turn, 0.0)
 
         # Find bottleneck color
         worst_ratio = float("inf")
@@ -135,5 +175,8 @@ def analyze_castability(
     # Sort: most demanding (lowest on-curve probability) first
     report.cards.sort(key=lambda c: c.on_curve_probability)
     report.unreliable_cards.sort(key=lambda c: c.on_curve_probability)
+
+    sources = {c.source for c in report.cards}
+    report.source = sources.pop() if len(sources) == 1 else ("mixed" if sources else "estimated")
 
     return report

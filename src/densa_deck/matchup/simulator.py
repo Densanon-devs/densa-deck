@@ -24,6 +24,7 @@ from densa_deck.goldfish.heuristics import play_turn
 from densa_deck.goldfish.mulligan import mulligan_phase
 from densa_deck.goldfish.runner import _possessed_card_names
 from densa_deck.goldfish.state import GameState
+from densa_deck.formats.profiles import starting_life_for
 from densa_deck.matchup.archetypes import ArchetypeProfile
 from densa_deck.models import Deck
 
@@ -112,8 +113,7 @@ def simulate_matchup(
         if entry.card and not entry.card.tags:
             entry.card.tags = list(classify_card(entry.card))
 
-    is_commander = deck.format and deck.format.value in ("commander", "brawl", "oathbreaker", "duel")
-    starting_life = 40 if is_commander else 20
+    starting_life = starting_life_for(deck.format)
 
     # Pre-filter combos to those whose pieces all appear in this deck —
     # nothing else can possibly fire. Same idea as run_goldfish_batch

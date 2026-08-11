@@ -437,6 +437,14 @@ def main():
         "--format", default="commander",
         help="Format profile (default: commander)")
 
+    # coverage command — simulator fidelity canary (free tier)
+    coverage_parser = subparsers.add_parser(
+        "coverage",
+        help="Report how much of the card pool the simulator actually models")
+    coverage_parser.add_argument(
+        "--sample", type=int, default=0,
+        help="Show N example cards the simulator treats as blanks")
+
     # export command — MTGO / MTGA / Moxfield export (free tier)
     export_parser = subparsers.add_parser(
         "export", help="Export a deck to MTGA / MTGO (.dek) / Moxfield format")
@@ -498,6 +506,8 @@ def main():
 
     if command == "ingest":
         cmd_ingest(args)
+    elif command == "coverage":
+        cmd_coverage(args)
     elif command == "analyze":
         cmd_analyze(args)
     elif command == "probability":
@@ -809,10 +819,38 @@ def cmd_analyze(args):
                         }
                         for c in analyst_output.cuts
                     ]
+                # Measure colour reliability for the export. `analyze` is
+                # the fast path and doesn't simulate, but an exported report
+                # is a deliverable — worth the extra second to ship the
+                # measured mana curve rather than only the estimate.
+                mana_reliability = None
+                try:
+                    from densa_deck.goldfish.runner import run_goldfish_batch
+                    mana_reliability = run_goldfish_batch(
+                        deck, simulations=300, seed=0
+                    ).mana_reliability
+                except Exception:
+                    mana_reliability = None
+
+                # Prefer measured castability over the hypergeometric
+                # estimate now that we've actually simulated the deck —
+                # otherwise the export would carry two numbers for the
+                # same question and no way to tell them apart.
+                export_castability = castability
+                if mana_reliability is not None and mana_reliability.card_on_curve:
+                    export_castability = analyze_castability(
+                        deck, result.color_sources,
+                        measured_rates={
+                            name: rate
+                            for name, _cmc, rate in mana_reliability.card_on_curve
+                        },
+                    )
+
                 export_kwargs = {
                     "power": power,
-                    "castability": castability,
+                    "castability": export_castability,
                     "staples": staples,
+                    "mana_reliability": mana_reliability,
                 }
                 if export_path.suffix == ".json":
                     export_json(result, adv_dict, archetype.value, export_path, **export_kwargs)
@@ -2918,7 +2956,78 @@ def _render_goldfish_report(report: GoldfishReport):
 
         console.print(spell_table)
 
+    if report.mana_reliability is not None:
+        _render_mana_reliability(report.mana_reliability)
+
     console.print()
+
+
+_VERDICT_STYLE = {"solid": "green", "thin": "yellow", "short": "red"}
+
+
+def _render_mana_reliability(m):
+    """Render the colour-weighted mana curve."""
+    if not m.colors and not m.curve:
+        return
+
+    console.print(Panel(
+        f"[bold]{m.summary_line()}[/bold]\n"
+        f"On-curve castability: {m.overall_on_curve_rate * 100:.1f}%  |  "
+        f"Colour screw: {m.color_screw_rate * 100:.1f}% of checks  |  "
+        f"Sampled {m.games_analyzed:,} games",
+        title="[bold blue]Colour-Weighted Mana Curve[/bold blue]",
+        border_style="blue",
+    ))
+
+    color_table = Table(title="Colour Reliability", show_header=True, header_style="bold blue")
+    color_table.add_column("Colour", width=7)
+    color_table.add_column("Src", justify="right", width=4)
+    color_table.add_column("Pip", justify="right", width=3)
+    color_table.add_column("On Curve", justify="right", width=8)
+    color_table.add_column("State", width=5)
+    color_table.add_column("What to do", width=38)
+    for line in m.colors:
+        style = _VERDICT_STYLE.get(line.verdict, "white")
+        color_table.add_row(
+            line.name,
+            str(line.sources_in_deck),
+            str(line.peak_requirement),
+            f"{line.on_curve_hit_rate * 100:.1f}%",
+            f"[{style}]{line.verdict}[/{style}]",
+            line.recommendation or "-",
+        )
+    console.print(color_table)
+
+    curve_table = Table(
+        title="Do we have the colours when we need them?",
+        show_header=True, header_style="bold blue")
+    curve_table.add_column("T", justify="right", width=3)
+    curve_table.add_column("N", justify="right", width=3)
+    curve_table.add_column("Needs", width=19)
+    curve_table.add_column("Sources in play", width=23)
+    curve_table.add_column("Castable", justify="right", width=8)
+    curve_table.add_column("", width=6)
+    for point in m.curve:
+        needs = " ".join(
+            f"{c}x{n}" for c, n in sorted(point.requirement.items())) or "colourless"
+        sources = " ".join(
+            f"{c}:{v:.1f}" for c, v in sorted(point.avg_sources.items())) or "-"
+        style = _VERDICT_STYLE.get(point.verdict, "white")
+        curve_table.add_row(
+            str(point.turn), str(point.cards_at_cost), needs, sources,
+            f"{point.castable_rate * 100:.1f}%", f"[{style}]{point.verdict}[/{style}]",
+        )
+    console.print(curve_table)
+
+    if m.unreliable_cards:
+        worst = Table(
+            title="Hardest cards to cast on curve", show_header=True, header_style="bold red")
+        worst.add_column("Card", width=32)
+        worst.add_column("Cost", justify="right", width=6)
+        worst.add_column("On Curve", justify="right", width=9)
+        for name, cmc, rate in m.unreliable_cards[:10]:
+            worst.add_row(name, str(cmc), f"{rate * 100:.1f}%")
+        console.print(worst)
 
 
 # =============================================================================
@@ -2929,6 +3038,8 @@ def _render_goldfish_report(report: GoldfishReport):
 def _render_gauntlet_report(report: GauntletReport):
     """Render matchup gauntlet results."""
     console.print()
+    if getattr(report, "mana_reliability", None) is not None:
+        _render_mana_reliability(report.mana_reliability)
 
     # Summary
     console.print(Panel(
@@ -3138,6 +3249,101 @@ def _read_deck_text(arg) -> str:
     if arg is None or arg == "-":
         return sys.stdin.read()
     return Path(arg).read_text(encoding="utf-8")
+
+
+def cmd_coverage(args):
+    """Report how much of the card pool the simulator actually models.
+
+    This is the early-warning instrument for new sets: a new mechanic with
+    unfamiliar templating produces no functional tag and no parsed effect,
+    which makes those cards invisible to the goldfish casting priority.
+    A sharp rise in either blank rate after a set release means the tagger
+    or the effect parser needs a new pattern.
+    """
+    from densa_deck.classification.tagger import classify_card
+    from densa_deck.data.database import _card_from_json
+    from densa_deck.goldfish.effects import (
+        EFFECT_FAMILIES, UNMODELLED, parse_effects,
+    )
+
+    db = CardDatabase()
+    if db.card_count() == 0:
+        console.print("[yellow]No cards in the database. Run 'densa-deck ingest' first.[/yellow]")
+        return
+
+    conn = db.connect()
+    nonland, tag_blank, fx_blank, both_blank = 0, 0, 0, 0
+    families: dict[str, int] = {}
+    examples: list[str] = []
+
+    for (data_json,) in conn.execute("SELECT data_json FROM cards"):
+        card = _card_from_json(data_json)
+        if card.is_land:
+            continue
+        nonland += 1
+        tags = classify_card(card)
+        fx = parse_effects(card)
+        if not tags:
+            tag_blank += 1
+        if fx.is_empty():
+            fx_blank += 1
+        if not tags and fx.is_empty():
+            both_blank += 1
+            if len(examples) < max(0, args.sample):
+                examples.append(card.name)
+        for fam in fx.matched:
+            families[fam] = families.get(fam, 0) + 1
+
+    if nonland == 0:
+        console.print("[yellow]No nonland cards found.[/yellow]")
+        return
+
+    console.print(f"\n[bold]Simulator coverage[/bold] over {nonland} nonland cards\n")
+    console.print(f"  no functional tag   {tag_blank:6d}  ({tag_blank / nonland * 100:5.1f}%)")
+    console.print(f"  no parsed effect    {fx_blank:6d}  ({fx_blank / nonland * 100:5.1f}%)")
+    console.print(
+        f"  neither             {both_blank:6d}  ({both_blank / nonland * 100:5.1f}%)"
+        "   [dim]<- invisible to the simulator[/dim]")
+
+    # Grouped by when the effect applies, and read off the declared
+    # registry so this listing can never drift from what the parser does.
+    console.print("\n[bold]Effect families modelled[/bold]")
+    phase_titles = {
+        "immediate": "on resolution",
+        "static": "while on the battlefield",
+        "recurring": "each of your turns",
+        "cost": "cost modifiers",
+        "cast": "casts more spells",
+    }
+    for phase, title in phase_titles.items():
+        members = [f for f in EFFECT_FAMILIES if f.phase == phase]
+        if not members:
+            continue
+        console.print(f"\n  [bold cyan]{title}[/bold cyan]")
+        for fam in members:
+            count = families.get(fam.key, 0)
+            pct = count / nonland * 100
+            example = f" [dim]e.g. {fam.example}[/dim]" if fam.example else ""
+            console.print(f"    [bold]{fam.key}[/bold] — {count:,} cards ({pct:.1f}%){example}")
+            console.print(f"      [dim]{fam.summary}[/dim]")
+
+    # Anything the parser emitted that isn't declared is a registry bug.
+    undeclared = sorted(set(families) - {f.key for f in EFFECT_FAMILIES})
+    if undeclared:
+        console.print(
+            f"\n  [bold red]Undeclared families emitted:[/bold red] {', '.join(undeclared)}"
+            "\n  [dim]Add them to EFFECT_FAMILIES in goldfish/effects.py[/dim]"
+        )
+
+    console.print("\n[bold]Deliberately not modelled[/bold]")
+    for line in UNMODELLED:
+        console.print(f"  [dim]- {line}[/dim]")
+
+    if examples:
+        console.print("\n[bold]Sample cards the simulator treats as blanks[/bold]")
+        for name in examples:
+            console.print(f"  [dim]- {name}[/dim]")
+    console.print()
 
 
 def cmd_combos(args):

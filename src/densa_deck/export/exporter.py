@@ -25,6 +25,7 @@ def export_json(
     staples: object | None = None,
     goldfish: object | None = None,
     gauntlet: object | None = None,
+    mana_reliability: object | None = None,
 ) -> str:
     """Export analysis to JSON. Returns the JSON string and optionally writes to file.
 
@@ -68,6 +69,8 @@ def export_json(
         data["goldfish"] = _goldfish_to_dict(goldfish)
     if gauntlet is not None:
         data["gauntlet"] = _gauntlet_to_dict(gauntlet)
+    if mana_reliability is not None:
+        data["mana_reliability"] = _mana_reliability_to_dict(mana_reliability)
 
     output = json.dumps(data, indent=2)
     if path:
@@ -103,11 +106,14 @@ def _castability_to_dict(c) -> dict:
             "castable_by_turn": dict(cc.castable_by_turn),
             "bottleneck_color": cc.bottleneck_color,
             "reliable": cc.reliable,
+            # "estimated" (hypergeometric) or "measured" (simulated).
+            "source": getattr(cc, "source", "estimated"),
         }
     return {
         "cards": [_card(cc) for cc in getattr(c, "cards", [])],
         "unreliable_cards": [_card(cc) for cc in getattr(c, "unreliable_cards", [])],
         "color_bottlenecks": dict(getattr(c, "color_bottlenecks", {})),
+        "source": getattr(c, "source", "estimated"),
     }
 
 
@@ -168,6 +174,93 @@ def _gauntlet_to_dict(gt) -> dict:
     }
 
 
+def _mana_reliability_to_dict(m: object | None) -> dict | None:
+    """Serialise a ManaReliabilityReport for the JSON export."""
+    if m is None or not getattr(m, "colors", None):
+        return None
+    return {
+        "games_analyzed": m.games_analyzed,
+        "summary": m.summary_line(),
+        "over_extended": m.over_extended,
+        "overall_on_curve_rate": m.overall_on_curve_rate,
+        "color_screw_rate": m.color_screw_rate,
+        "colors": [
+            {
+                "color": c.color, "name": c.name,
+                "sources_in_deck": c.sources_in_deck,
+                "peak_requirement": c.peak_requirement,
+                "on_curve_hit_rate": c.on_curve_hit_rate,
+                "verdict": c.verdict, "recommendation": c.recommendation,
+            }
+            for c in m.colors
+        ],
+        "curve": [
+            {
+                "turn": p.turn, "cards_at_cost": p.cards_at_cost,
+                "requirement": dict(p.requirement),
+                "avg_sources": dict(p.avg_sources),
+                "castable_rate": p.castable_rate, "verdict": p.verdict,
+            }
+            for p in m.curve
+        ],
+        "unreliable_cards": [list(row) for row in m.unreliable_cards],
+    }
+
+
+def _mana_reliability_markdown(m: object | None) -> list[str]:
+    """Colour-weighted mana curve as Markdown. Empty list when absent."""
+    if m is None or not getattr(m, "colors", None):
+        return []
+
+    lines = ["## Colour-Weighted Mana Curve", ""]
+    lines.append(f"**{m.summary_line()}**")
+    lines.append("")
+    lines.append(
+        f"On-curve castability {m.overall_on_curve_rate:.1%} · "
+        f"colour screw {m.color_screw_rate:.1%} of checks · "
+        f"measured over {m.games_analyzed:,} simulated games."
+    )
+    lines.append("")
+    lines.append(
+        "*\"Castable\" asks whether the board could have paid for the card on "
+        "that turn, whether or not it was drawn — which separates the mana "
+        "base from draw luck.*"
+    )
+    lines.append("")
+    lines.append("| Colour | Sources | Deepest demand | On curve | Verdict | What to do |")
+    lines.append("|--------|---------|----------------|----------|---------|------------|")
+    for c in m.colors:
+        lines.append(
+            f"| {_md_cell(c.name)} | {c.sources_in_deck} | {c.peak_requirement} pip"
+            f"{'s' if c.peak_requirement != 1 else ''} | {c.on_curve_hit_rate:.1%} | "
+            f"{c.verdict} | {_md_cell(c.recommendation or '—')} |"
+        )
+    lines.append("")
+
+    if getattr(m, "curve", None):
+        lines.append("| Turn | Cards | Needs | Sources in play | Castable | Verdict |")
+        lines.append("|------|-------|-------|-----------------|----------|---------|")
+        for p in m.curve:
+            needs = " ".join(
+                f"{c}×{n}" for c, n in sorted(p.requirement.items())) or "colourless"
+            sources = " ".join(
+                f"{c}:{v:.1f}" for c, v in sorted(p.avg_sources.items())) or "—"
+            lines.append(
+                f"| {p.turn} | {p.cards_at_cost} | {_md_cell(needs)} | "
+                f"{_md_cell(sources)} | {p.castable_rate:.1%} | {p.verdict} |"
+            )
+        lines.append("")
+
+    worst = getattr(m, "unreliable_cards", [])[:10]
+    if worst:
+        lines.append("**Hardest to cast on curve**")
+        lines.append("")
+        for name, cmc, rate in worst:
+            lines.append(f"- {name} (cost {cmc}) — castable {rate:.0%} of the time")
+        lines.append("")
+    return lines
+
+
 def export_markdown(
     result: AnalysisResult,
     advanced: dict | None = None,
@@ -180,6 +273,7 @@ def export_markdown(
     gauntlet: object | None = None,
     combos: list[dict] | None = None,
     near_combos: list[dict] | None = None,
+    mana_reliability: object | None = None,
 ) -> str:
     """Export analysis to Markdown.
 
@@ -190,6 +284,11 @@ def export_markdown(
 
     `near_combos` (optional): same shape but with `missing_cards`. When
     provided, a "Combos you're 1 card away from" section is added.
+
+    `mana_reliability` (optional): a ManaReliabilityReport from a goldfish
+    batch. When provided, a "Colour-Weighted Mana Curve" section is added —
+    usually the most actionable thing in the whole report, so an export
+    without it omits the deck's real problem.
     """
     lines: list[str] = []
     lines.append(f"# {result.deck_name} — Deck Analysis Report")
@@ -399,6 +498,8 @@ def export_markdown(
     # links to the upstream combo page so readers can verify the
     # mechanics. When near_combos are also provided, render them as a
     # second sub-section (separately from the present-in-deck list).
+    lines.extend(_mana_reliability_markdown(mana_reliability))
+
     if combos:
         lines.append("## Combos")
         lines.append("| Combo | Produces | Bracket | Popularity | Link |")
@@ -448,6 +549,7 @@ def export_html(
     gauntlet: object | None = None,
     combos: list[dict] | None = None,
     near_combos: list[dict] | None = None,
+    mana_reliability: object | None = None,
 ) -> str:
     """Export analysis to a self-contained HTML page."""
     # Generate markdown first, then wrap in HTML with styling
@@ -456,6 +558,7 @@ def export_html(
         power=power, castability=castability, staples=staples,
         goldfish=goldfish, gauntlet=gauntlet,
         combos=combos, near_combos=near_combos,
+        mana_reliability=mana_reliability,
     )
 
     # Convert basic markdown to HTML (simple conversion, no external deps)

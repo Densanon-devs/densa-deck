@@ -25,7 +25,13 @@ from densa_deck.goldfish.objectives import (
     check_objectives,
     default_objectives,
 )
+from densa_deck.goldfish.reliability import (
+    DEFAULT_RELIABILITY_GAMES,
+    ManaReliabilityReport,
+    ReliabilityCollector,
+)
 from densa_deck.goldfish.state import GameState, TurnMetrics
+from densa_deck.formats.profiles import starting_life_for
 from densa_deck.models import Deck
 
 console = Console()
@@ -101,6 +107,9 @@ class GoldfishReport:
     # "your most-fired combo across 1000 games was X" in the UI.
     top_combo_lines: list[tuple[str, str, int, float]] = field(default_factory=list)
 
+    # Colour-weighted mana curve — populated unless reliability=False.
+    mana_reliability: ManaReliabilityReport | None = None
+
     # Per-game results (for advanced analysis)
     game_results: list[GameResult] = field(default_factory=list)
 
@@ -113,6 +122,8 @@ def run_goldfish_batch(
     seed: int | None = None,
     store_games: bool = False,
     combos: list[Combo] | None = None,
+    reliability: bool = True,
+    reliability_games: int = DEFAULT_RELIABILITY_GAMES,
 ) -> GoldfishReport:
     """Run a batch of goldfish simulations and aggregate results.
 
@@ -148,7 +159,13 @@ def run_goldfish_batch(
     results: list[GameResult] = []
     spell_counter: Counter[str] = Counter()
 
-    for _ in range(simulations):
+    # Colour-weighted mana curve is sampled from the first N games — the
+    # per-turn per-card colour maths shouldn't scale with a 10k-game batch.
+    collector: ReliabilityCollector | None = None
+    if reliability:
+        collector = ReliabilityCollector(deck, max_turns)
+
+    for sim_index in range(simulations):
         # Reset objectives for this game
         game_objectives = [
             Objective(
@@ -160,7 +177,14 @@ def run_goldfish_batch(
             for o in objectives
         ]
 
-        result = _run_single_game(deck, max_turns, game_objectives, relevant_combos)
+        active_collector = (
+            collector if collector is not None and sim_index < reliability_games else None
+        )
+        if active_collector is not None:
+            active_collector.games += 1
+        result = _run_single_game(
+            deck, max_turns, game_objectives, relevant_combos, active_collector
+        )
         results.append(result)
 
         # Track spell frequency
@@ -172,6 +196,8 @@ def run_goldfish_batch(
     report = _aggregate_results(results, simulations, max_turns, objectives, spell_counter)
     report.combos_evaluated = len(relevant_combos)
     _aggregate_combo_results(report, results, simulations, relevant_combos)
+    if collector is not None:
+        report.mana_reliability = collector.finish()
     if store_games:
         report.game_results = results
 
@@ -183,6 +209,7 @@ def _run_single_game(
     max_turns: int,
     objectives: list[Objective],
     combos: list[Combo] | None = None,
+    collector: ReliabilityCollector | None = None,
 ) -> GameResult:
     """Run a single goldfish game.
 
@@ -196,9 +223,9 @@ def _run_single_game(
     "the earliest one" matches the kill-turn convention.
     """
     state = GameState()
-    is_commander = deck.format and deck.format.value in ("commander", "brawl", "oathbreaker", "duel")
-    state.life = 40 if is_commander else 20
-    state.opponent_life = 40 if is_commander else 20
+    life = starting_life_for(deck.format)
+    state.life = life
+    state.opponent_life = life
 
     # Setup library
     state.setup_library(deck.entries)
@@ -221,11 +248,23 @@ def _run_single_game(
     combo_win_turn: int | None = None
     combo_id_fired: str | None = None
 
-    # Play turns
-    for _ in range(max_turns):
+    # Play turns. Time Warp effects grant additional iterations without
+    # advancing the opponent, which is exactly what an extra turn buys.
+    turns_remaining = max_turns
+    # Hard ceiling so a deck stuffed with extra-turn effects can't stretch a
+    # single game indefinitely and stall a 1000-game batch.
+    turns_played = 0
+    while turns_remaining > 0 and turns_played < max_turns * 2:
+        turns_remaining -= 1
+        turns_played += 1
         state.begin_turn()
         play_turn(state)
+        if collector is not None:
+            collector.observe(state, state.turn)
         metrics = state.end_turn()
+        if state.pending_extra_turns > 0:
+            state.pending_extra_turns -= 1
+            turns_remaining += 1
 
         # Check objectives
         check_objectives(state, objectives)
