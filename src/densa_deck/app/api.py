@@ -2155,6 +2155,127 @@ class AppApi:
     def combo_refresh_progress(self) -> dict:
         return self._read_progress("combo_refresh")
 
+    # --- Opt-in rulings ------------------------------------------------
+
+    def _get_rulings_store(self):
+        """RulingsStore scoped to this AppApi, beside the card DB."""
+        from densa_deck.data.rulings import DEFAULT_RULINGS_DB_PATH, RulingsStore
+        if getattr(self, "_rulings_store", None) is None:
+            if self._db_path:
+                path = Path(self._db_path).parent / "rulings.db"
+            else:
+                path = DEFAULT_RULINGS_DB_PATH
+            self._rulings_store = RulingsStore(db_path=path)
+        return self._rulings_store
+
+    @_safe
+    def get_rulings_status(self) -> dict:
+        """Whether the user has opted in to rulings, and how fresh they are.
+
+        Never triggers a download. The Settings panel renders an opt-in
+        button from this; rulings are not part of the card ingest.
+        """
+        store = self._get_rulings_store()
+        installed = store.is_installed()
+        return {
+            "installed": installed,
+            "ruling_count": store.ruling_count() if installed else 0,
+            "last_download_at": store.get_metadata("last_download_completed_at") or "",
+            "approx_size_mb": 5.1,
+        }
+
+    @_safe
+    def rulings_check_update(self) -> dict:
+        """Is a newer rulings file available? Only meaningful once opted in."""
+        import asyncio
+
+        from densa_deck.data.rulings import rulings_update_available
+        store = self._get_rulings_store()
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(rulings_update_available(store))
+        except Exception as exc:
+            return {"installed": store.is_installed(), "available": False,
+                    "error": str(exc)}
+        finally:
+            loop.close()
+
+    @_safe
+    def rulings_download_start(self) -> dict:
+        """Begin the opt-in rulings download in the background."""
+        with self._progress_lock:
+            current = self._progress.get("rulings", {})
+            existing = self._threads.get("rulings")
+            if current.get("running") or (existing and existing.is_alive()):
+                return {"ok": False, "error": "Rulings download already running"}
+            self._progress["rulings"] = {
+                "pct": 0, "message": "Starting...", "done": False,
+                "error": None, "running": True,
+            }
+            t = threading.Thread(target=self._do_rulings_download, daemon=True)
+            self._threads["rulings"] = t
+            t.start()
+        return {"ok": True, "started": True}
+
+    @_safe
+    def rulings_download_progress(self) -> dict:
+        return self._read_progress("rulings")
+
+    def _do_rulings_download(self):
+        import asyncio
+
+        from densa_deck.data.rulings import download_rulings
+        store = self._get_rulings_store()
+        loop = asyncio.new_event_loop()
+        try:
+            self._update_progress("rulings", pct=5, message="Downloading rulings (~5 MB)...")
+
+            def on_progress(count: int):
+                # Roughly 78k rulings; the bar is indicative, not exact.
+                pct = min(95, 10 + int(count / 1000))
+                self._update_progress("rulings", pct=pct,
+                                      message=f"Storing {count:,} rulings...")
+
+            count = loop.run_until_complete(download_rulings(store, progress=on_progress))
+            self._update_progress(
+                "rulings", pct=100, message=f"{count:,} rulings installed.",
+                done=True, running=False,
+            )
+        except Exception as exc:
+            self._update_progress(
+                "rulings", message="Rulings download failed", error=str(exc),
+                done=True, running=False,
+            )
+        finally:
+            loop.close()
+
+    @_safe
+    def rulings_remove(self) -> dict:
+        """Delete the rulings cache — opting back out."""
+        store = self._get_rulings_store()
+        removed = store.remove()
+        self._rulings_store = None
+        return {"removed": removed}
+
+    @_safe
+    def get_card_rulings(self, card_name: str) -> dict:
+        """Official rulings for one card, empty when the user hasn't opted in."""
+        from densa_deck.data.rulings import RULINGS_ATTRIBUTION
+        store = self._get_rulings_store()
+        if not store.is_installed():
+            return {"installed": False, "rulings": [], "card_name": card_name}
+        db = self._get_db()
+        card = db.lookup_by_name(card_name)
+        if card is None:
+            return {"installed": True, "rulings": [], "card_name": card_name,
+                    "error": "Card not found"}
+        return {
+            "installed": True,
+            "card_name": card.name,
+            "rulings": store.rulings_for_oracle_id(card.oracle_id),
+            "attribution": RULINGS_ATTRIBUTION,
+        }
+
     def _get_combo_store(self):
         """Lazily resolve a ComboStore instance scoped to this AppApi.
 

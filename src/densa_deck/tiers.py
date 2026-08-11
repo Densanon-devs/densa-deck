@@ -83,6 +83,7 @@ COMMAND_FEATURES: dict[str, str] = {
     "bracket": "rule0",          # bracket fit is a free deterministic feature
     "export": "card_search",     # export is free (commodity feature)
     "coverage": "info",          # simulator-fidelity report — free, it's honesty
+    "rulings": "card_search",    # rulings are card data — never paywalled
     "playgroup": "playgroup",    # pod CRUD — always available
     "iterate": "iterate",        # iteration loop — propose/preview/history
 }

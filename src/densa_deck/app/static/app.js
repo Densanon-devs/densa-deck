@@ -38,6 +38,9 @@ function cacheElements() {
     "pref-auto-check", "pref-auto-download", "check-db-update-btn",
     // Settings: Commander Spellbook combo refresh
     "combo-status", "combo-refresh-btn", "combo-refresh-status",
+    "rulings-status", "rulings-download-btn", "rulings-remove-btn",
+    "rulings-status-text", "rulings-progress-wrap", "rulings-progress-fill",
+    "rulings-progress-msg",
     "combo-refresh-progress-wrap", "combo-refresh-progress-fill", "combo-refresh-progress-msg",
     // URL import
     "url-import-input", "url-import-btn", "url-import-status",
@@ -316,6 +319,12 @@ async function bootstrap() {
   }
   if (els.pref_auto_download) {
     els.pref_auto_download.addEventListener("change", onPrefChange);
+  }
+  if (els.rulings_download_btn) {
+    els.rulings_download_btn.addEventListener("click", startRulingsDownload);
+  }
+  if (els.rulings_remove_btn) {
+    els.rulings_remove_btn.addEventListener("click", removeRulings);
   }
   if (els.combo_refresh_btn) {
     els.combo_refresh_btn.addEventListener("click", startComboRefresh);
@@ -720,6 +729,59 @@ async function startComboRefresh() {
     els.combo_refresh_btn.disabled = false;
     els.combo_refresh_status.textContent = "";
     toast("Combo refresh failed to start: " + e.message, "error");
+  }
+}
+
+// ------------------------------ Rulings (opt-in) ------------------------------
+
+// Rulings are never downloaded as part of card data. This panel is the only
+// way in, and Remove is the way back out.
+async function loadRulingsStatus() {
+  if (!els.rulings_status) return;
+  try {
+    const s = await callApi("get_rulings_status");
+    if (!s) return;
+    if (!s.installed) {
+      els.rulings_status.innerHTML = `<div class="card missing"><strong>Rulings</strong><br>Not installed &mdash; optional ~${s.approx_size_mb} MB download. Card analysis works fully without them.</div>`;
+      els.rulings_download_btn.textContent = "Download rulings";
+      els.rulings_remove_btn.classList.add("hidden");
+      return;
+    }
+    const when = s.last_download_at ? escape(s.last_download_at.slice(0, 10)) : "unknown";
+    els.rulings_status.innerHTML = `<div class="card ready"><strong>Rulings</strong><br>${(s.ruling_count || 0).toLocaleString()} rulings installed &middot; downloaded ${when}</div>`;
+    els.rulings_download_btn.textContent = "Check for updates";
+    els.rulings_remove_btn.classList.remove("hidden");
+  } catch (e) {
+    // Non-fatal — never block Settings on an optional dataset.
+  }
+}
+
+async function startRulingsDownload() {
+  if (!els.rulings_download_btn) return;
+  els.rulings_download_btn.disabled = true;
+  els.rulings_status_text.textContent = "Starting...";
+  els.rulings_progress_wrap.classList.remove("hidden");
+  try {
+    await callApi("rulings_download_start");
+    pollProgress("rulings", () => {
+      els.rulings_download_btn.disabled = false;
+      els.rulings_status_text.textContent = "";
+      loadRulingsStatus();
+    });
+  } catch (e) {
+    els.rulings_download_btn.disabled = false;
+    els.rulings_status_text.textContent = "";
+    toast("Rulings download failed to start: " + e.message, "error");
+  }
+}
+
+async function removeRulings() {
+  try {
+    await callApi("rulings_remove");
+    toast("Rulings removed.", "info");
+    loadRulingsStatus();
+  } catch (e) {
+    toast("Could not remove rulings: " + e.message, "error");
   }
 }
 
@@ -1692,6 +1754,7 @@ async function refreshSettings() {
     `;
     await loadUserPrefsIntoSettings();
     await loadComboStatus();
+    await loadRulingsStatus();
     await loadMcpStatus();
   } catch (e) {
     toast("Settings refresh failed: " + e.message, "error");

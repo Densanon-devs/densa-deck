@@ -477,6 +477,21 @@ Mainboard:
         </div>
 
         <div class="settings-row">
+          <h3>Official rulings (optional)</h3>
+          <p class="panel-hint">Wizards' official clarifications for individual cards &mdash; "does this still trigger if&hellip;". A separate ~5&nbsp;MB download, <strong>not</strong> included in card data and never fetched automatically. Free tier. Remove it any time. Attribution: rulings &copy; Wizards of the Coast, via <a href="#" class="external-link" data-url="https://scryfall.com">Scryfall</a>.</p>
+          <div id="rulings-status" class="settings-row" style="margin: 0;">(loading...)</div>
+          <div class="setup-action-row">
+            <button id="rulings-download-btn" class="btn btn-primary">Download rulings</button>
+            <button id="rulings-remove-btn" class="btn btn-outline hidden">Remove</button>
+            <span id="rulings-status-text" class="status-text"></span>
+          </div>
+          <div id="rulings-progress-wrap" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="rulings-progress-fill" class="progress-fill"></div></div>
+            <div id="rulings-progress-msg" class="progress-msg"></div>
+          </div>
+        </div>
+
+        <div class="settings-row">
           <h3>Analyst model (optional, Pro)</h3>
           <p class="panel-hint">Local LLM for executive summary + cut suggestions. Runs fully offline after download. Choose 0.5B (~400 MB, faster) or 3B (~1.8 GB, better prose).</p>
           <div class="setup-action-row">
