@@ -17,14 +17,15 @@ import random
 from dataclasses import dataclass, field
 
 from densa_deck.classification.tagger import classify_card
+
 # Combo import goes through .models (not the package root) so we don't
 # pull in httpx — matchup module stays importable without network deps.
 from densa_deck.combos.models import Combo
+from densa_deck.formats.profiles import starting_life_for
 from densa_deck.goldfish.heuristics import play_turn
 from densa_deck.goldfish.mulligan import mulligan_phase
 from densa_deck.goldfish.runner import _possessed_card_names
 from densa_deck.goldfish.state import GameState
-from densa_deck.formats.profiles import starting_life_for
 from densa_deck.matchup.archetypes import ArchetypeProfile
 from densa_deck.models import Deck
 
@@ -191,8 +192,11 @@ def _run_matchup_game(
 
         # --- Opponent interaction phase (before we play) ---
 
-        # Mana tax from stax
-        effective_tax = opp.mana_tax if state.turn >= opp.pressure_start_turn else 0
+        # Mana tax from stax. This used to be computed into a local that
+        # nothing read, so a stax opponent's mana_tax had no effect on the
+        # simulation at all. Applying it to the state makes every spell we
+        # cast this turn cost that much more generic mana.
+        state.cost_increase = opp.mana_tax if state.turn >= opp.pressure_start_turn else 0
 
         # Hand disruption
         if random.random() < opp.hand_disruption_chance and state.hand:
@@ -205,9 +209,6 @@ def _run_matchup_game(
 
         # --- Our turn ---
         play_turn(state)
-
-        # Apply mana tax: reduce effective spells cast (simplified — already cast above,
-        # but we track the tax impact for metrics)
 
         # --- Opponent interaction after our plays ---
 
@@ -244,7 +245,7 @@ def _run_matchup_game(
                 wipes_suffered += 1
 
         # --- Combat and end ---
-        metrics = state.end_turn()
+        state.end_turn()
 
         # --- Opponent damage to us ---
         if state.turn >= opp.pressure_start_turn:
