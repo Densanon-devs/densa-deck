@@ -44,6 +44,35 @@ def isolated(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def desktop_factory():
+    """A bridge with options, for the cases that need a non-default one."""
+    made = []
+
+    def build(**kwargs):
+        tmp = tempfile.mkdtemp()
+        root = Path(tmp)
+        db = CardDatabase(db_path=root / "cards.db")
+        db.upsert_printings([printing_row_from_scryfall(
+            _raw(SOL, "Sol Ring", "cmm", "410"), "t")])
+        db.close()
+        api = AppApi(db_path=root / "cards.db",
+                     version_db_path=root / "versions.db")
+        api._collection_store = CollectionStore(db_path=root / "collection.db")
+        bridge = PhoneBridge(api, port=8801, companion_port=8802, **kwargs)
+        bridge.start()
+        made.append((api, bridge))
+        return api, bridge
+
+    yield build
+    for api, bridge in made:
+        try:
+            bridge.stop()
+            api.close()
+        except Exception:
+            pass
+
+
+@pytest.fixture
 def desktop():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -294,3 +323,91 @@ class TestTheCompanionPort:
         url = pairing_url(status, {}, {}, bridge.token)
         assert "/scan?t=" in url, url
         assert f"&api=http://100.64.0.1:{bridge.companion_port}" in url, url
+
+
+class TestLanAndHealth:
+    """Reaching the desktop over Wi-Fi as well as the tailnet.
+
+    "Connect like LAN from anywhere": the local address is faster and keeps
+    traffic in the house; the tailnet works from a shop. The desktop is one
+    machine at two addresses and the phone uses whichever answers.
+    """
+
+    def _health(self, bridge, host="127.0.0.1", token=None):
+        query = f"?token={token}" if token else ""
+        url = f"http://{host}:{bridge.companion_port}/health{query}"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            return json.loads(r.read())
+
+    def test_health_answers_without_a_token(self, desktop):
+        """A phone has to be able to ask "are you there" before it can prove
+        anything, so reachability itself is open."""
+        _api, bridge = desktop
+        assert self._health(bridge)["ok"] is True
+
+    def test_it_reports_the_callers_own_address(self, desktop):
+        """The only honest answer to "which path did we take".
+
+        Dialling a LAN URL and arriving from CGNAT means the packets went
+        through the tunnel, whatever the client believed it was doing.
+        """
+        _api, bridge = desktop
+        assert self._health(bridge)["peer"] == "127.0.0.1"
+
+    def test_the_lan_hint_needs_the_token(self, desktop):
+        """It describes this machine's network, so it is not handed to
+        anything that cannot prove it is paired."""
+        _api, bridge = desktop
+        assert "lan" not in self._health(bridge)
+        assert "lan" in self._health(bridge, token=bridge.token)
+
+    def test_the_lan_hint_is_this_machines_address(self, desktop):
+        from densa_deck.app.phone import is_private_lan_address
+
+        _api, bridge = desktop
+        hint = self._health(bridge, token=bridge.token)["lan"]
+        # Empty is legitimate on a machine with no private address at all.
+        assert hint == "" or is_private_lan_address(hint), hint
+
+    def test_binding_the_lan_can_be_declined(self, desktop_factory):
+        """Not everyone wants the collection served to their whole Wi-Fi."""
+        api, bridge = desktop_factory(bind_lan=False)
+        try:
+            assert bridge.lan_host == ""
+            assert all(not h.startswith("192.168.") and not h.startswith("10.")
+                       for h in bridge.bound_hosts)
+        finally:
+            bridge.stop()
+            api.close()
+
+
+class TestPrivateAddresses:
+    """What may be bound, and what may never be.
+
+    A specific private address is bound, never 0.0.0.0 — that distinction is
+    the whole safety argument, because 0.0.0.0 would also answer on whatever
+    untrusted Wi-Fi this machine joins next.
+    """
+
+    def test_the_private_ranges(self):
+        from densa_deck.app.phone import is_private_lan_address
+
+        for ip in ("10.0.0.5", "192.168.1.1", "172.16.0.1", "172.31.255.254"):
+            assert is_private_lan_address(ip), ip
+
+    def test_everything_else(self):
+        from densa_deck.app.phone import is_private_lan_address
+
+        for ip in ("172.15.0.1", "172.32.0.1", "8.8.8.8", "100.124.242.11",
+                   "127.0.0.1", "0.0.0.0", "", "not an address"):
+            assert not is_private_lan_address(ip), ip
+
+    def test_a_tailnet_address_is_not_a_lan_address(self):
+        """They are handled by different code paths for different reasons."""
+        from densa_deck.app.phone import (
+            is_private_lan_address,
+            is_tailnet_address,
+        )
+
+        assert is_tailnet_address("100.124.242.11")
+        assert not is_private_lan_address("100.124.242.11")

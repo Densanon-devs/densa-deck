@@ -14,6 +14,8 @@
 
 import { isApiError } from './protocol.ts';
 import type { ApiError } from './protocol.ts';
+import { Reachability, makeProbe } from './reach.ts';
+import type { Probe, Via } from './reach.ts';
 
 export class Unreachable extends Error {
   /** True when the desktop is simply not there, as opposed to refusing us. */
@@ -42,64 +44,69 @@ export interface Pairing {
 export interface ClientOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /** Overridable so tests can drive resolution without a network. */
+  probe?: Probe;
 }
 
 export class DesktopClient {
   private pairing: Pairing;
   private timeoutMs: number;
   private fetchImpl: typeof fetch;
-  /** Which address answered last, so the working one is tried first. */
-  private preferred?: string;
+  private reach: Reachability;
+  /** Which path the last successful call took, for the UI to show. */
+  private lastVia: Via = null;
 
   constructor(pairing: Pairing, options: ClientOptions = {}) {
     this.pairing = pairing;
     this.timeoutMs = options.timeoutMs ?? 15000;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    // LAN first, tunnel when away — and the LAN address heals itself when the
+    // desktop's DHCP lease moves, which it does.
+    this.reach = new Reachability(
+      {
+        lanUrl: pairing.lanUrl,
+        tunnelUrl: pairing.baseUrl,
+        token: pairing.token,
+      },
+      options.probe ?? makeProbe(this.fetchImpl),
+    );
   }
 
-  /** Addresses to try, best guess first. */
-  private candidates(): string[] {
-    const all = [this.pairing.baseUrl, this.pairing.lanUrl].filter(
-      (u): u is string => Boolean(u),
-    );
-    if (this.preferred) {
-      return [this.preferred, ...all.filter((u) => u !== this.preferred)];
-    }
-    return all;
+  /** Which path the last call took: 'lan', 'tunnel', or null if unknown. */
+  get via(): Via {
+    return this.lastVia;
+  }
+
+  /** The addresses currently in use, so a healed LAN address can be saved. */
+  endpoints() {
+    return this.reach.current();
   }
 
   async call<T>(route: string, payload: Record<string, unknown> = {}): Promise<T> {
-    const problems: string[] = [];
+    const resolved = await this.reach.resolve();
+    if (!resolved.url) throw new Unreachable('No desktop address configured.');
+    this.lastVia = resolved.via;
 
-    for (const base of this.candidates()) {
-      let response: Response;
-      try {
-        response = await this.withTimeout(`${base}/api/${route}`, payload);
-      } catch (err) {
-        // A dead address is worth trying the next one for. Note it and move
-        // on rather than failing the whole call on the first miss.
-        problems.push(`${base}: ${(err as Error).message}`);
-        continue;
-      }
-
-      if (response.status === 403) {
-        // Being unreachable and being refused are different problems with
-        // different fixes, so they are different exceptions. Retrying a 403
-        // forever is exactly the wrong response to being unpaired.
-        throw new Unpaired();
-      }
-
-      this.preferred = base;
-      const data = (await response.json()) as T | ApiError;
-      if (isApiError(data)) throw new Error(data.error);
-      return data as T;
+    let response: Response;
+    try {
+      response = await this.withTimeout(`${resolved.url}/api/${route}`, payload);
+    } catch (err) {
+      // The address we were told to use has stopped answering. Drop it so the
+      // next call re-probes rather than hammering a dead one.
+      this.reach.clear();
+      throw new Unreachable(`Desktop unreachable (${(err as Error).message})`);
     }
 
-    throw new Unreachable(
-      problems.length
-        ? `Desktop unreachable (${problems.join('; ')})`
-        : 'No desktop address configured.',
-    );
+    if (response.status === 403) {
+      // Being unreachable and being refused are different problems with
+      // different fixes, so they are different exceptions. Retrying a 403
+      // forever is exactly the wrong response to being unpaired.
+      throw new Unpaired();
+    }
+
+    const data = (await response.json()) as T | ApiError;
+    if (isApiError(data)) throw new Error(data.error);
+    return data as T;
   }
 
   private async withTimeout(
@@ -132,6 +139,11 @@ export class DesktopClient {
       return false;
     }
   }
+
+  /** Force the next call to re-probe rather than trust the cached winner. */
+  forget(): void {
+    this.reach.clear();
+  }
 }
 
 /**
@@ -157,7 +169,15 @@ export function parsePairingUrl(raw: string): Pairing | null {
     // keeps older pairings working.
     const api = url.searchParams.get('api');
     const baseUrl = api ? api.replace(/\/+$/, '') : `${url.protocol}//${url.host}`;
-    return { baseUrl, token };
+
+    // The desktop's local address, when it has one. A starting point rather
+    // than a fact: a DHCP lease moves, and the phone re-learns the current
+    // one from /health on any successful contact — including over the tunnel,
+    // which is the path that always works and so is the right one to carry
+    // the news.
+    const lan = url.searchParams.get('lan');
+    const lanUrl = lan ? lan.replace(/\/+$/, '') : undefined;
+    return lanUrl ? { baseUrl, token, lanUrl } : { baseUrl, token };
   } catch {
     return null;
   }

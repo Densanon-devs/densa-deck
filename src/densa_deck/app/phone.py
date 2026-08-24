@@ -84,6 +84,48 @@ def is_tailnet_address(ip: str) -> bool:
     except ValueError:
         return False
 
+
+
+# Private ranges, per RFC 1918. A LAN listener binds one of these explicitly
+# and nothing else — never 0.0.0.0, which would also answer on whatever
+# untrusted Wi-Fi this machine joins next, and never a routable address.
+def is_private_lan_address(ip: str) -> bool:
+    """True for 10/8, 172.16/12 and 192.168/16, and nothing else."""
+    parts = (ip or "").split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        a, b = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    return a == 192 and b == 168
+
+
+def lan_address() -> str:
+    """This machine's current private LAN address, or "".
+
+    Found by asking the OS which local address it would use to reach the
+    outside world — that is the interface with the default route, which is the
+    one a phone on the same Wi-Fi can reach. No packet is actually sent.
+    """
+    import socket
+
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.settimeout(0.4)
+        probe.connect(("8.8.8.8", 80))   # UDP connect sends nothing
+        found = probe.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        probe.close()
+    return found if is_private_lan_address(found) else ""
+
+
 STATIC_DIR = Path(__file__).parent / "static" / "phone"
 
 # Where the pairing token lives between runs. Beside the collection database,
@@ -158,11 +200,15 @@ class PhoneBridge:
     """Owns the loopback server and the pairing token."""
 
     def __init__(self, api, port: int = DEFAULT_PORT, use_tls: bool = True,
-                 companion_port: int = COMPANION_PORT):
+                 companion_port: int = COMPANION_PORT, bind_lan: bool = True):
         self._api = api
         self.port = int(port)
         self.companion_port = int(companion_port)
         self.companion_hosts: list[str] = []
+        # Serving the local network as well as the tailnet. On by default
+        # because "same Wi-Fi" is the common case at home and the fast one.
+        self.bind_lan = bool(bind_lan)
+        self.lan_host = ""
         # TLS on by default. Without it the phone has no camera API at all,
         # which reduces "scanning" to uploading one photo at a time.
         self.use_tls = bool(use_tls)
@@ -217,6 +263,15 @@ class PhoneBridge:
             # on a routable interface.
             if tailnet_ip and is_tailnet_address(tailnet_ip):
                 hosts.append(tailnet_ip)
+
+            # The local address, so a phone on the same Wi-Fi connects
+            # directly: faster than the tunnel, and nothing leaves the house.
+            # A SPECIFIC private address, never 0.0.0.0 — that distinction is
+            # the entire safety argument, because 0.0.0.0 would also answer on
+            # whatever untrusted network this machine joins next.
+            self.lan_host = lan_address() if self.bind_lan else ""
+            if self.lan_host and self.lan_host not in hosts:
+                hosts.append(self.lan_host)
 
             # TLS from a locally-generated certificate. This is what gives the
             # phone `isSecureContext`, and therefore a live camera instead of
@@ -319,6 +374,7 @@ class PhoneBridge:
         self._threads = []
         self.bound_hosts = []
         self.companion_hosts = []
+        self.lan_host = ""
 
     def status(self) -> dict:
         tailnet_hosts = [h for h in self.bound_hosts if h != BIND_HOST]
@@ -334,6 +390,7 @@ class PhoneBridge:
             "tls": self.ssl_context is not None,
             "companion_port": self.companion_port,
             "companion_hosts": list(self.companion_hosts),
+            "lan_host": self.lan_host,
             "scheme": "https" if self.ssl_context is not None else "http",
             "token": self.token,
             "local_url": (f"http://{BIND_HOST}:{self.port}/scan?t={self.token}"
@@ -696,8 +753,28 @@ class _PhoneHandler(BaseHTTPRequestHandler):
     # ----------------------------------------------------------------- GET
 
     def do_GET(self):
-        from urllib.parse import urlparse
-        path = urlparse(self.path).path
+        from urllib.parse import parse_qs, urlparse
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        # Reachability probe. Deliberately open — a phone has to be able to
+        # ask "are you there" before it can prove anything — but the two
+        # fields that describe this machine are only handed out to a caller
+        # holding the pairing token.
+        if path == "/health":
+            body = {"ok": True}
+            # The caller's source address AS THIS SERVER SAW IT. The only
+            # honest answer to "which path did we take": dialling a LAN URL
+            # and arriving from CGNAT means the packets took the tunnel.
+            body["peer"] = self.client_address[0] if self.client_address else ""
+            token = (parse_qs(parsed.query).get("token") or [""])[0]
+            if self.bridge is not None and self.bridge.check_token(token):
+                # This machine's CURRENT LAN address, so a phone whose stored
+                # one has gone stale can find its way home without re-pairing.
+                body["lan"] = self.bridge.lan_host
+                body["device"] = getattr(self.bridge, "device_name", "")
+            self._json(200, body)
+            return
 
         if path in ("/", "/scan"):
             if not self._authorised():
@@ -1017,6 +1094,13 @@ def pairing_url(bridge_status: dict, ts: dict, serve: dict, token: str) -> str:
         companion_port = bridge_status.get("companion_port")
         if companion_port and bridge_status.get("companion_hosts"):
             url += f"&api=http://{host}:{companion_port}"
+            # The local address as well, so the phone can take the fast path
+            # when it is on the same Wi-Fi. It is a starting point rather than
+            # a fact: a DHCP lease moves, and the phone re-learns the current
+            # one from /health on any successful contact.
+            lan = bridge_status.get("lan_host") or ""
+            if lan:
+                url += f"&lan=http://{lan}:{companion_port}"
         return url
     return ""
 

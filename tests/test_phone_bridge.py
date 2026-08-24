@@ -194,11 +194,23 @@ class TestBindsTailnetNotLan:
         bridge.start()
         assert "0.0.0.0" not in bridge.status()["bound_hosts"]
 
-    def test_every_bound_host_is_loopback_or_tailnet(self, bridge):
-        from densa_deck.app.phone import is_tailnet_address
+    def test_every_bound_host_is_loopback_tailnet_or_private(self, bridge):
+        """The local network is served too, so a phone on the same Wi-Fi
+        takes the fast path — but only ever a SPECIFIC private address.
+
+        The invariant that protects anything is unchanged: never 0.0.0.0,
+        which would also answer on whatever untrusted Wi-Fi this machine
+        joins next, and never a routable one.
+        """
+        from densa_deck.app.phone import (
+            is_private_lan_address,
+            is_tailnet_address,
+        )
         bridge.start()
         for host in bridge.status()["bound_hosts"]:
-            assert host == "127.0.0.1" or is_tailnet_address(host), host
+            assert (host == "127.0.0.1" or is_tailnet_address(host)
+                    or is_private_lan_address(host)), host
+            assert host != "0.0.0.0"
 
     def test_not_reachable_on_a_lan_address(self, bridge):
         """The property that matters: a laptop on café Wi-Fi is not serving
@@ -246,18 +258,43 @@ class TestNonTailnetAddressRefused:
         assert not is_tailnet_address("")
         assert not is_tailnet_address("not.an.ip.at.all")
 
-    def test_a_lan_address_from_tailscale_is_not_bound(self, api, monkeypatch):
+    def test_a_lan_address_from_tailscale_is_not_treated_as_the_tailnet(
+            self, api, monkeypatch):
         """Trusting the reported address blindly would put the scan surface on
-        a routable interface."""
+        a routable interface.
+
+        The local network is now served deliberately, through its own code
+        path with its own opt-out. What must never happen is a NON-tailnet
+        address being adopted AS the tailnet: that is how a routable address
+        gets bound by accident and announced to a phone as safe.
+        """
         monkeypatch.setattr("densa_deck.app.phone.tailscale_status",
                             lambda: {"ipv4": "192.168.1.50"})
-        b = PhoneBridge(api, port=8797)
+        b = PhoneBridge(api, port=8797, companion_port=8803, bind_lan=False)
         try:
             b.start()
             assert b.status()["bound_hosts"] == ["127.0.0.1"]
+            assert b.status()["tailnet_host"] == ""
             assert b.status()["reachable_from_phone"] is False
         finally:
             b.stop()
+
+    def test_the_local_network_can_be_declined(self, api):
+        """Serving the whole Wi-Fi is a choice, and it must be refusable."""
+        b = PhoneBridge(api, port=8797, companion_port=8803, bind_lan=False)
+        try:
+            b.start()
+            from densa_deck.app.phone import is_private_lan_address
+            assert not any(is_private_lan_address(h)
+                           for h in b.status()["bound_hosts"])
+        finally:
+            b.stop()
+
+    def test_zero_zero_zero_zero_is_never_bound(self, bridge):
+        """The distinction the whole safety argument rests on."""
+        bridge.start()
+        assert "0.0.0.0" not in bridge.status()["bound_hosts"]
+        assert "0.0.0.0" not in bridge.status()["companion_hosts"]
 
 
 class TestPairingUrlPointsWhereSomethingListens:

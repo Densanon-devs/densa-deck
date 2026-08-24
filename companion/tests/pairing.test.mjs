@@ -58,6 +58,22 @@ describe('reading the QR link', () => {
     assert.equal(pairing.token, 'abc');
   });
 
+  test('the link carries both routes: Wi-Fi and tailnet', () => {
+    const pairing = parsePairingUrl(
+      'https://100.64.0.1:8791/scan?t=abc' +
+      '&api=http://100.64.0.1:8792&lan=http://192.168.88.10:8792',
+    );
+    assert.equal(pairing.baseUrl, 'http://100.64.0.1:8792', 'tunnel');
+    assert.equal(pairing.lanUrl, 'http://192.168.88.10:8792', 'Wi-Fi');
+  });
+
+  test('a desktop with no local address just omits it', () => {
+    const pairing = parsePairingUrl(
+      'https://100.64.0.1:8791/scan?t=abc&api=http://100.64.0.1:8792',
+    );
+    assert.equal(pairing.lanUrl, undefined);
+  });
+
   test('an older link without an api endpoint still works', () => {
     const pairing = parsePairingUrl('https://100.64.0.1:8791/scan?t=abc');
     assert.equal(pairing.baseUrl, 'https://100.64.0.1:8791');
@@ -107,40 +123,55 @@ describe('device identity', () => {
 });
 
 describe('reaching the desktop', () => {
-  test('the LAN address is tried when the tailnet is down', async () => {
+  test('the LAN address is preferred when the phone is home', async () => {
+    // Faster than the tunnel, and the traffic never leaves the house.
     const desktop = new FakeDesktop();
-    const tailnet = 'https://100.64.0.1:8791';
-    const lan = 'https://192.168.1.20:8791';
-
-    const fetchImpl = async (url, init) => {
-      if (String(url).startsWith(tailnet)) throw new Error('no route to host');
-      return desktop.fetchImpl(url, init);
-    };
     const client = new DesktopClient(
-      withLanFallback({ baseUrl: tailnet, token: desktop.token }, lan),
-      { fetchImpl },
+      { baseUrl: 'http://100.64.0.1:8792', token: desktop.token,
+        lanUrl: 'http://192.168.88.10:8792' },
+      {
+        fetchImpl: desktop.fetchImpl,
+        probe: async (base) => ({
+          ok: true,
+          peer: base.includes('100.64') ? '100.107.166.26' : '192.168.88.3',
+        }),
+      },
     );
     assert.equal(await client.reachable(), true);
+    assert.equal(client.via, 'lan');
   });
 
-  test('the address that worked is tried first next time', async () => {
+  test('the tunnel takes over when the LAN address is dead', async () => {
     const desktop = new FakeDesktop();
-    const attempts = [];
-    const fetchImpl = async (url, init) => {
-      attempts.push(String(url).split('/api/')[0]);
-      if (String(url).includes('100.64')) throw new Error('no route');
-      return desktop.fetchImpl(url, init);
-    };
     const client = new DesktopClient(
-      { baseUrl: 'https://100.64.0.1:8791', token: desktop.token,
-        lanUrl: 'https://192.168.1.20:8791' },
-      { fetchImpl },
+      { baseUrl: 'http://100.64.0.1:8792', token: desktop.token,
+        lanUrl: 'http://192.168.88.6:8792' },     // a lease that has moved
+      {
+        fetchImpl: desktop.fetchImpl,
+        probe: async (base) =>
+          base.includes('100.64')
+            ? { ok: true, peer: '100.107.166.26' }
+            : null,
+      },
     );
-    await client.reachable();
-    attempts.length = 0;
-    await client.reachable();
-    assert.equal(attempts[0], 'https://192.168.1.20:8791',
-                 'a known-good address should not be rediscovered every call');
+    assert.equal(await client.reachable(), true);
+    assert.equal(client.via, 'tunnel');
+  });
+
+  test('a dead address is dropped so the next call re-probes', async () => {
+    // Otherwise the client hammers an address that has stopped answering.
+    const desktop = new FakeDesktop();
+    let probes = 0;
+    const client = new DesktopClient(
+      { baseUrl: 'http://100.64.0.1:8792', token: desktop.token },
+      {
+        fetchImpl: async () => { throw new Error('ECONNREFUSED'); },
+        probe: async () => { probes += 1; return { ok: true, peer: '100.107.166.26' }; },
+      },
+    );
+    await assert.rejects(() => client.call('sync/hello'), Unreachable);
+    await assert.rejects(() => client.call('sync/hello'), Unreachable);
+    assert.equal(probes, 2, 'the second call re-probed rather than trusting a dead winner');
   });
 
   test('unreachable and refused are different problems', async () => {
