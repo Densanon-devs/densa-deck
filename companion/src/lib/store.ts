@@ -85,6 +85,32 @@ export const SCHEMA: string[] = [
    )`,
 ];
 
+/** A stack as it comes back from the mirror. */
+export interface StackRow {
+  stack_key: string;
+  printing_id: string;
+  card_name: string;
+  oracle_id: string;
+  finish: string;
+  condition: string;
+  language: string;
+  location: string;
+  collection_uid: string;
+  quantity: number;
+  price_usd?: number | null;
+  updated_at: string;
+}
+
+export interface CollectionRow {
+  collection_uid: string;
+  name: string;
+  kind: string;
+  notes: string;
+  is_default: number;
+  cards: number;
+  updated_at: string;
+}
+
 /** The desktop's well-known uid for "cards I haven't filed anywhere". */
 export const DEFAULT_COLLECTION_UID = '00000000-0000-4000-8000-00000000d0cc';
 
@@ -199,7 +225,10 @@ export class LocalStore {
     return Number(row?.n ?? 0);
   }
 
-  async listStacks(collectionUid?: string, search?: string) {
+  async listStacks(
+    collectionUid?: string,
+    search?: string,
+  ): Promise<StackRow[]> {
     const where: string[] = ['quantity > 0'];
     const params: unknown[] = [];
     if (collectionUid) {
@@ -210,7 +239,7 @@ export class LocalStore {
       where.push('card_name LIKE ?');
       params.push(`%${search}%`);
     }
-    return this.db.all(
+    return this.db.all<StackRow>(
       `SELECT * FROM stacks WHERE ${where.join(' AND ')}
        ORDER BY card_name LIMIT 500`,
       params,
@@ -259,8 +288,8 @@ export class LocalStore {
     await this.db.run('DELETE FROM collections WHERE collection_uid = ?', [uid]);
   }
 
-  async listCollections() {
-    return this.db.all(
+  async listCollections(): Promise<CollectionRow[]> {
+    return this.db.all<CollectionRow>(
       `SELECT c.*, COALESCE(SUM(s.quantity), 0) AS cards
        FROM collections c
        LEFT JOIN stacks s ON s.collection_uid = c.collection_uid
