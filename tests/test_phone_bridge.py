@@ -805,6 +805,8 @@ class TestPairingSurvivesRestarts:
 
     def test_a_corrupt_pairing_file_does_not_break_scanning(self, tmp_path,
                                                             monkeypatch):
+        """It still works — see TestThePairingIsNotThrownAway for the cost,
+        which is that every paired device is locked out and must be told."""
         path = tmp_path / "p.json"
         path.write_text("{not json", encoding="utf-8")
         monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
@@ -847,3 +849,83 @@ class TestAutostart:
         api.phone_bridge_start()
         api.phone_bridge_stop()
         assert api.phone_autostart_enabled() is False
+
+
+class TestThePairingIsNotThrownAway:
+    """Minting a new token unpairs every device that holds the old one.
+
+    That is a walk-to-the-desktop failure, and the whole design exists to
+    avoid needing one. So it happens when there is genuinely no pairing, and
+    not merely when one cannot be read this instant.
+    """
+
+    def test_a_missing_file_mints_one(self, tmp_path, monkeypatch):
+        from densa_deck.app.phone import load_or_create_token
+
+        monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(tmp_path / "new.json"))
+        assert len(load_or_create_token()) >= 24
+
+    def test_an_existing_pairing_is_returned_unchanged(self, tmp_path,
+                                                        monkeypatch):
+        from densa_deck.app.phone import load_or_create_token
+
+        path = tmp_path / "pair.json"
+        monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
+        first = load_or_create_token()
+        for _ in range(5):
+            assert load_or_create_token() == first
+
+    def test_a_transient_read_failure_does_not_unpair(self, tmp_path,
+                                                       monkeypatch):
+        """A partial read while another process writes must not unpair a phone.
+
+        The file is retried before any conclusion is drawn, because the
+        pairing is very likely perfectly fine a tenth of a second later.
+        """
+        from densa_deck.app import phone
+
+        path = tmp_path / "pair.json"
+        monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
+        original = phone.load_or_create_token()
+
+        real_read = Path.read_text
+        attempts = {"n": 0}
+
+        def flaky(self, *args, **kwargs):
+            if self == path:
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise OSError("locked by another process")
+            return real_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", flaky)
+        assert phone.load_or_create_token() == original, "a retry saved it"
+
+    def test_a_truly_corrupt_file_is_kept_and_the_reset_is_flagged(
+            self, tmp_path, monkeypatch):
+        """Scanning must keep working, but silence would be the real failure.
+
+        Re-minting locks out every paired device. That is survivable if the
+        user is told; discovering it when your phone stops working in a shop
+        is not.
+        """
+        from densa_deck.app import phone
+
+        path = tmp_path / "pair.json"
+        path.write_text("{not json at all", encoding="utf-8")
+        monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
+
+        fresh = phone.load_or_create_token()
+        assert len(fresh) >= 24, "the desktop still works"
+        assert phone.pairing_was_reset()["happened"] is True, "and it says so"
+        # The unreadable file is kept as evidence rather than overwritten.
+        assert path.with_suffix(".corrupt.json").exists()
+
+    def test_a_present_but_empty_pairing_mints_one(self, tmp_path, monkeypatch):
+        """Parsed cleanly and genuinely holding nothing is a real "no pairing"."""
+        from densa_deck.app.phone import load_or_create_token
+
+        path = tmp_path / "pair.json"
+        path.write_text('{"token": ""}', encoding="utf-8")
+        monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
+        assert len(load_or_create_token()) >= 24

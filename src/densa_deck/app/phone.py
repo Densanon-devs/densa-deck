@@ -153,13 +153,51 @@ def load_or_create_token() -> str:
     it, so that reaching the port is not the same as being allowed in.
     """
     path = _token_path()
-    try:
-        stored = json.loads(path.read_text(encoding="utf-8")).get("token", "")
-        if isinstance(stored, str) and len(stored) >= 12:
-            return stored
-    except (OSError, ValueError):
-        pass
+    if path.exists():
+        # A file that EXISTS but will not parse is not permission to mint a
+        # new pairing. It could be a partial read while another process is
+        # writing, or a momentarily locked file — and rotating on that
+        # strands every paired device with no way back except walking to the
+        # desktop, which is the precise failure this whole design avoids.
+        # Minting only happens when there is genuinely nothing there.
+        for attempt in range(3):
+            try:
+                stored = json.loads(path.read_text(encoding="utf-8")).get("token", "")
+                if isinstance(stored, str) and len(stored) >= 12:
+                    return stored
+                break          # present, parsed, and genuinely empty
+            except (OSError, ValueError):
+                if attempt == 2:
+                    # Genuinely unreadable, not a passing race. Keep the file
+                    # as evidence and mint a new pairing so the desktop still
+                    # works — but leave a marker, because every paired device
+                    # has just been locked out and the user has to be told
+                    # rather than discovering it when their phone fails.
+                    try:
+                        path.replace(path.with_suffix(".corrupt.json"))
+                    except OSError:
+                        pass
+                    fresh = rotate_token()
+                    _mark_pairing_reset(path)
+                    return fresh
+                import time
+                time.sleep(0.1)
     return rotate_token()
+
+
+# Set when an unreadable pairing file forced a new token. The desktop reports
+# it so "your phone stopped working" is explained rather than mysterious.
+_PAIRING_RESET: dict = {"happened": False, "previous_file": ""}
+
+
+def _mark_pairing_reset(path) -> None:
+    _PAIRING_RESET["happened"] = True
+    _PAIRING_RESET["previous_file"] = str(path.with_suffix(".corrupt.json"))
+
+
+def pairing_was_reset() -> dict:
+    """Whether an unreadable pairing file forced every device to re-pair."""
+    return dict(_PAIRING_RESET)
 
 
 def rotate_token() -> str:
