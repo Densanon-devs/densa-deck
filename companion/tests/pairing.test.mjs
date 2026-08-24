@@ -46,6 +46,23 @@ describe('reading the QR link', () => {
     assert.equal(parsePairingUrl(''), null);
   });
 
+  test('the app is told where to talk, which is not the browser address', () => {
+    // The desktop serves the web page over TLS because a browser has no
+    // camera outside a secure context. That certificate is self-signed, and
+    // Android refuses those with no way to override it from JavaScript — so
+    // pointing the app at the browser address fails on the first request.
+    const pairing = parsePairingUrl(
+      'https://100.64.0.1:8791/scan?t=abc&api=http://100.64.0.1:8792',
+    );
+    assert.equal(pairing.baseUrl, 'http://100.64.0.1:8792');
+    assert.equal(pairing.token, 'abc');
+  });
+
+  test('an older link without an api endpoint still works', () => {
+    const pairing = parsePairingUrl('https://100.64.0.1:8791/scan?t=abc');
+    assert.equal(pairing.baseUrl, 'https://100.64.0.1:8791');
+  });
+
   test('surrounding whitespace from a scan is tolerated', () => {
     const pairing = parsePairingUrl('  https://100.64.0.1:8791/scan?t=xyz \n');
     assert.equal(pairing.token, 'xyz');

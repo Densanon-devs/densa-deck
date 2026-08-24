@@ -62,6 +62,11 @@ from pathlib import Path
 BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8791
 
+# The native companion talks here, in the clear. See the note on TLS below:
+# the certificate exists for a browser API, and Android refuses a self-signed
+# one with no way to override it from JavaScript.
+COMPANION_PORT = 8792
+
 # Tailscale hands out addresses in 100.64.0.0/10 (CGNAT). A listener on one of
 # those is reachable *only* by devices already authenticated onto the tailnet
 # — which is what makes plain HTTP acceptable here and what distinguishes this
@@ -152,9 +157,12 @@ MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 class PhoneBridge:
     """Owns the loopback server and the pairing token."""
 
-    def __init__(self, api, port: int = DEFAULT_PORT, use_tls: bool = True):
+    def __init__(self, api, port: int = DEFAULT_PORT, use_tls: bool = True,
+                 companion_port: int = COMPANION_PORT):
         self._api = api
         self.port = int(port)
+        self.companion_port = int(companion_port)
+        self.companion_hosts: list[str] = []
         # TLS on by default. Without it the phone has no camera API at all,
         # which reduces "scanning" to uploading one photo at a time.
         self.use_tls = bool(use_tls)
@@ -252,6 +260,27 @@ class PhoneBridge:
                 self._threads.append(thread)
                 self.bound_hosts.append(host)
 
+            # The companion's port, always in the clear. Same handler, same
+            # token, same tailnet-only binding — only the transport differs,
+            # because a native client cannot be made to accept a self-signed
+            # certificate and does not need one.
+            self.companion_hosts = []
+            for host in hosts:
+                try:
+                    plain = ThreadingHTTPServer((host, self.companion_port),
+                                                Handler)
+                except OSError:
+                    # Losing this costs the app, not the desktop or the web
+                    # page, so it is never fatal.
+                    continue
+                plain.daemon_threads = True
+                thread = threading.Thread(target=plain.serve_forever,
+                                          daemon=True)
+                thread.start()
+                self._servers.append(plain)
+                self._threads.append(thread)
+                self.companion_hosts.append(host)
+
             return {"ok": True, **self.status()}
 
     def stop(self) -> dict:
@@ -289,6 +318,7 @@ class PhoneBridge:
         self._servers = []
         self._threads = []
         self.bound_hosts = []
+        self.companion_hosts = []
 
     def status(self) -> dict:
         tailnet_hosts = [h for h in self.bound_hosts if h != BIND_HOST]
@@ -302,6 +332,8 @@ class PhoneBridge:
             # the URL we hand out would just hang.
             "reachable_from_phone": bool(tailnet_hosts),
             "tls": self.ssl_context is not None,
+            "companion_port": self.companion_port,
+            "companion_hosts": list(self.companion_hosts),
             "scheme": "https" if self.ssl_context is not None else "http",
             "token": self.token,
             "local_url": (f"http://{BIND_HOST}:{self.port}/scan?t={self.token}"
@@ -975,7 +1007,17 @@ def pairing_url(bridge_status: dict, ts: dict, serve: dict, token: str) -> str:
     if host:
         scheme = bridge_status.get("scheme", "http")
         port = bridge_status.get("port", DEFAULT_PORT)
-        return f"{scheme}://{host}:{port}/scan?t={token}"
+        url = f"{scheme}://{host}:{port}/scan?t={token}"
+        # The native app cannot use the TLS port: Android refuses a
+        # self-signed certificate and offers no way to override it from
+        # JavaScript. Carrying the plain endpoint in the SAME link means one
+        # QR code serves both the web page and the app — the browser ignores
+        # the extra parameter, and the app does not have to guess at port
+        # arithmetic to find its way home.
+        companion_port = bridge_status.get("companion_port")
+        if companion_port and bridge_status.get("companion_hosts"):
+            url += f"&api=http://{host}:{companion_port}"
+        return url
     return ""
 
 

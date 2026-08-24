@@ -54,7 +54,10 @@ def desktop():
         api = AppApi(db_path=root / "cards.db",
                      version_db_path=root / "versions.db")
         api._collection_store = CollectionStore(db_path=root / "collection.db")
-        bridge = PhoneBridge(api, port=8797)
+        # Distinct ports on BOTH listeners: a real desktop app running on
+        # this machine holds the defaults, and a test that quietly bound
+        # nothing would pass alone and fail in a full run.
+        bridge = PhoneBridge(api, port=8797, companion_port=8799)
         bridge.start()
         yield api, bridge
         bridge.stop()
@@ -223,3 +226,71 @@ class TestStatus:
         api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
         after = _post(bridge, "sync/status", {})["events"]
         assert after > before
+
+
+class TestTheCompanionPort:
+    """The native app talks in the clear, on its own port.
+
+    The certificate on the main port exists so a BROWSER gets a secure
+    context, without which it has no `getUserMedia` and the web scan page
+    cannot open a viewfinder at all. A native app has direct camera access and
+    needs none of that — and Android refuses a self-signed certificate
+    outright, with no way to override it from JavaScript, so pointing the app
+    at the TLS port fails on its very first request.
+
+    The boundary was never the certificate. It is the tailnet, with the
+    pairing token beneath it, and both still apply here.
+    """
+
+    def _plain(self, bridge, route, payload, token=None):
+        request = urllib.request.Request(
+            f"http://{BIND_HOST}:{bridge.companion_port}/api/{route}",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-Densa-Token": bridge.token if token is None else token},
+            method="POST")
+        with urllib.request.urlopen(request, timeout=10) as r:
+            return json.loads(r.read())
+
+    def test_the_app_can_reach_it_without_a_certificate(self, desktop):
+        _api, bridge = desktop
+        reply = self._plain(bridge, "sync/hello", {"peer": "phone-1"})
+        assert reply["protocol"] == 1
+
+    def test_it_still_needs_the_pairing_token(self, desktop):
+        """Plain HTTP is not open house."""
+        _api, bridge = desktop
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            self._plain(bridge, "sync/pull", {"since": 0}, token="wrong")
+        assert caught.value.code == 403
+
+    def test_it_serves_the_same_routes(self, desktop):
+        api, bridge = desktop
+        api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
+        pulled = self._plain(bridge, "sync/pull", {"since": 0, "peer": "p1"})
+        assert any(e["kind"] == "stack-delta" for e in pulled["events"])
+
+    def test_it_is_a_different_port_from_the_browser(self, desktop):
+        _api, bridge = desktop
+        assert bridge.companion_port != bridge.port
+
+    def test_it_actually_bound(self, desktop):
+        """A listener that silently failed to bind would make the tests above
+        vacuous: they would be asserting about a port nothing is serving."""
+        _api, bridge = desktop
+        assert bridge.companion_hosts, "the companion port bound nothing"
+
+    def test_the_pairing_link_tells_the_app_where_to_go(self, desktop):
+        """One QR code has to serve both the web page and the app.
+
+        The app cannot use the address the browser uses, and making it guess
+        at port arithmetic would break the moment either port moved.
+        """
+        from densa_deck.app.phone import pairing_url
+
+        _api, bridge = desktop
+        status = {**bridge.status(), "tailnet_host": "100.64.0.1",
+                  "scheme": "https"}
+        url = pairing_url(status, {}, {}, bridge.token)
+        assert "/scan?t=" in url, url
+        assert f"&api=http://100.64.0.1:{bridge.companion_port}" in url, url

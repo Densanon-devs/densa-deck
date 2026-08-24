@@ -147,7 +147,17 @@ export function parsePairingUrl(raw: string): Pairing | null {
     const url = new URL(raw.trim());
     const token = url.searchParams.get('t');
     if (!token) return null;
-    return { baseUrl: `${url.protocol}//${url.host}`, token };
+
+    // The link carries an `api` endpoint for native clients, and it is NOT
+    // the same address the browser uses. The desktop serves the web page over
+    // TLS because a browser has no camera outside a secure context; that
+    // certificate is self-signed, and Android refuses those outright with no
+    // way to override it from JavaScript. So the app is told, in the same QR
+    // code, where to talk instead. Falling back to the link's own origin
+    // keeps older pairings working.
+    const api = url.searchParams.get('api');
+    const baseUrl = api ? api.replace(/\/+$/, '') : `${url.protocol}//${url.host}`;
+    return { baseUrl, token };
   } catch {
     return null;
   }

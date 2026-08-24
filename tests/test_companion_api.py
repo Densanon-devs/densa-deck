@@ -82,7 +82,7 @@ def paired():
         api = AppApi(db_path=root / "cards.db",
                      version_db_path=root / "versions.db")
         api._collection_store = CollectionStore(db_path=root / "collection.db")
-        bridge = PhoneBridge(api, port=8798)
+        bridge = PhoneBridge(api, port=8798, companion_port=8800)
         bridge.start()
         yield api, bridge
         bridge.stop()
