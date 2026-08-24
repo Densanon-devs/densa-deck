@@ -240,3 +240,81 @@ class TestMigration:
         assert len(collections) == 1
         assert collections[0]["is_default"] is True
         assert collections[0]["cards"] == 4
+
+
+class TestUpgradingARealDatabase:
+    """The upgrade path, which fresh test databases never exercise.
+
+    Both bugs here were invisible to the suite and appeared the moment the
+    code met a database an earlier build had written. A test database is
+    created by today's CREATE TABLE and therefore already has every column;
+    a real one is not.
+    """
+
+    def _database_from_an_earlier_build(self, path):
+        """A collections table with no `collection_uid`, as v1 wrote it."""
+        import sqlite3
+
+        store = CollectionStore(db_path=path)
+        store.add_copies("p1", "Sol Ring", quantity=12)
+        conn = sqlite3.connect(path)
+        conn.execute("DROP INDEX IF EXISTS idx_collections_uid")
+        conn.execute("ALTER TABLE collections DROP COLUMN collection_uid")
+        conn.commit()
+        conn.close()
+
+    def test_it_opens_at_all(self, tmp_path):
+        """The schema creates a unique index over a column the migration adds.
+
+        Run in the wrong order, CREATE UNIQUE INDEX fails and the app cannot
+        open the user's collection — total loss of access, not a subtle bug.
+        """
+        path = tmp_path / "collection.db"
+        self._database_from_an_earlier_build(path)
+        reopened = CollectionStore(db_path=path)
+        assert _owned(reopened) == 12
+
+    def test_the_default_collection_gets_the_shared_uid(self, tmp_path):
+        """A random uid per device gives each its own "unfiled" pile.
+
+        A removal made on the phone then lands in a collection the desktop
+        does not have, so the card comes back on the next sync.
+        """
+        from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
+
+        path = tmp_path / "collection.db"
+        self._database_from_an_earlier_build(path)
+        reopened = CollectionStore(db_path=path)
+        default = [c for c in reopened.list_collections() if c["is_default"]][0]
+        assert default["collection_uid"] == DEFAULT_COLLECTION_UID
+
+    def test_a_random_uid_written_by_a_later_build_is_corrected(self, tmp_path):
+        """An intermediate build handed the default a random uid."""
+        import sqlite3
+
+        from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
+
+        path = tmp_path / "collection.db"
+        store = CollectionStore(db_path=path)
+        store.add_copies("p1", "Sol Ring", quantity=3)
+        conn = sqlite3.connect(path)
+        conn.execute("UPDATE collections SET collection_uid = ? "
+                     "WHERE is_default = 1", ("a-random-one",))
+        conn.commit()
+        conn.close()
+
+        reopened = CollectionStore(db_path=path)
+        default = [c for c in reopened.list_collections() if c["is_default"]][0]
+        assert default["collection_uid"] == DEFAULT_COLLECTION_UID
+        assert _owned(reopened) == 3
+
+    def test_other_collections_keep_their_own_identity(self, tmp_path):
+        from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
+
+        path = tmp_path / "collection.db"
+        store = CollectionStore(db_path=path)
+        store.create_collection("Trade box")
+        reopened = CollectionStore(db_path=path)
+        uids = {c["name"]: c["collection_uid"] for c in reopened.list_collections()}
+        assert uids["Trade box"] != DEFAULT_COLLECTION_UID
+        assert uids["Main Collection"] == DEFAULT_COLLECTION_UID

@@ -220,10 +220,18 @@ class CollectionStore:
 
     def _init_schema(self):
         with self._connect() as conn:
+            # Both migrations run BEFORE the schema statements, because the
+            # schema includes indexes over columns they add. A database
+            # created by an earlier build has a `collections` table with no
+            # `collection_uid`, and CREATE UNIQUE INDEX on that column fails
+            # outright — the app will not open. Fresh databases never show
+            # this, because their CREATE TABLE already has the column, which
+            # is exactly why it survived the test suite and only appeared
+            # against a real one.
             self._migrate_collections(conn)
+            self._migrate_collection_uids(conn)
             for stmt in _SCHEMA:
                 conn.execute(stmt)
-            self._migrate_collection_uids(conn)
             self._ensure_default_collection(conn)
             conn.commit()
 
@@ -252,19 +260,40 @@ class CollectionStore:
         conn.execute("DROP INDEX IF EXISTS idx_ci_stack")
 
     def _migrate_collection_uids(self, conn) -> None:
-        """Backfill UUIDs onto collections that predate syncing."""
+        """Backfill UUIDs onto collections that predate syncing.
+
+        Runs BEFORE the schema statements, because those include a unique
+        index over `collection_uid`: a database created by an earlier build
+        has no such column, and creating that index fails outright — the app
+        will not open at all. Fresh databases never show this, because their
+        CREATE TABLE already has the column, which is why it survived the test
+        suite and only appeared against a real one.
+        """
         tables = {r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type=\'table\'").fetchall()}
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         if "collections" not in tables:
             return
+
         columns = {r[1] for r in conn.execute(
             "PRAGMA table_info(collections)").fetchall()}
         if "collection_uid" not in columns:
             conn.execute("ALTER TABLE collections "
-                         "ADD COLUMN collection_uid TEXT NOT NULL DEFAULT \'\'")
+                         "ADD COLUMN collection_uid TEXT NOT NULL DEFAULT ''")
+
+        # The default collection takes the WELL-KNOWN uid, whatever it had
+        # before — including a random one handed out by an earlier build.
+        # Both devices have to agree on what "unfiled" means without ever
+        # having spoken: a random uid per device gives each its own unfiled
+        # pile, so a removal made on one lands in a collection the other does
+        # not have, and the card reappears on the next sync.
+        conn.execute("UPDATE collections SET collection_uid = ? "
+                     "WHERE is_default = 1 AND collection_uid != ?",
+                     (DEFAULT_COLLECTION_UID, DEFAULT_COLLECTION_UID))
+
+        # Everything else keeps an identity of its own.
         rows = conn.execute(
             "SELECT collection_id FROM collections "
-            "WHERE collection_uid IS NULL OR collection_uid = \'\'").fetchall()
+            "WHERE collection_uid IS NULL OR collection_uid = ''").fetchall()
         for (collection_id,) in rows:
             conn.execute("UPDATE collections SET collection_uid = ? "
                          "WHERE collection_id = ?",
