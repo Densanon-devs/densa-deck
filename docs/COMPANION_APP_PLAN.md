@@ -147,16 +147,28 @@ every screen is unproven in the only environment that counts.
 - The bridge refuses unpaired callers on every route, and the destructive
   AppApi methods a forwarding router would have exposed stay unreachable.
 
+**It compiles.** A debug APK builds locally: `com.densanon.densadeck`,
+140 MB, with `libexpo-sqlite` and the camera libraries inside it.
+
+    cd companion/android
+    JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew assembleDebug
+    # -> app/build/outputs/apk/debug/app-debug.apk
+
+Three things had to be fixed to get there, none of which a test could catch:
+`package.json` named an entry point that was never created; `local.properties`
+needs forward slashes on Windows; and `expo-barcode-scanner` does not compile
+against Expo 54 and was never used — QR scanning goes through `expo-camera`.
+
 **Not verified**
-- Anything React Native. The screens typecheck and their logic is tested, but
-  no pixel has been rendered.
-- expo-sqlite against the real schema — only the in-memory driver has run.
-- The camera path on a device, including the lens picker findings that were
-  learned on the web version and carried over here by hand.
+- Anything on hardware. No pixel has been rendered, and the APK has not been
+  installed or launched.
+- expo-sqlite against the real schema — only the in-memory driver has run, so
+  a statement it accepts and the device rejects is still possible.
+- The camera path, including the lens findings carried over by hand from the
+  web version.
 
 **Next**
-1. `cd companion && npx expo run:android` with `JAVA_HOME` pointing at
-   `C:\Program Files\Android\Android Studio\jbr`.
+1. Install it: `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
 2. Pair against the running desktop and confirm a scan reaches the PC.
-3. Deck screen and scan screen are written but not wired into navigation —
-   `App.tsx` currently shows pairing or the collection.
+3. The deck and scan screens are written and typechecked but not yet wired
+   into navigation — `App.tsx` shows pairing or the collection today.
