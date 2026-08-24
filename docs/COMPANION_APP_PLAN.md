@@ -121,9 +121,11 @@ Each stage ends green: full Python suite, the browser/DOM suite, and lint.
 
 ## Known constraints
 
-* **Java is not installed on this machine**, so a local APK build will need a
-  JDK + Android SDK, or EAS (cloud) builds. Flagged early because it gates
-  Stage 3 delivery, not Stage 3 development.
+* **Local APK builds are possible.** Checked rather than assumed: the Android
+  SDK is installed (platforms 34-36, build-tools 34-36) and Android Studio
+  ships a working JDK 17 at `C:\Program Files\Android\Android Studio\jbr`.
+  The system `java` on PATH is a stub that does nothing, so `JAVA_HOME` has
+  to point at the JBR. No cloud build service is needed.
 * **iOS is out of scope** — the Mac/iOS builds belong to a separate team.
 * The desktop must be awake to sync or to run the analyst. That is inherent
   to "the PC is the brain" and is the tradeoff for not shipping a model to

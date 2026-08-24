@@ -1,0 +1,26 @@
+{
+  "name": "densa-deck-companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Densa Deck companion for Android: browse collections, build decks, run the analyst on the PC.",
+  "main": "index.ts",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.mjs\"",
+    "typecheck": "tsc --noEmit",
+    "android": "expo run:android",
+    "start": "expo start"
+  },
+  "dependencies": {
+    "expo": "~54.0.0",
+    "expo-barcode-scanner": "~14.0.0",
+    "expo-camera": "~17.0.0",
+    "expo-sqlite": "~16.0.0",
+    "react": "19.1.0",
+    "react-native": "0.81.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "5.9"
+  },
+  "type": "module"
+}
