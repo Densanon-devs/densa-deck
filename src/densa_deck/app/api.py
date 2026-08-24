@@ -2490,9 +2490,13 @@ class AppApi:
     def list_collection(self, query: dict | None = None) -> dict:
         """Owned stacks, filtered, sorted and paginated. Free-tier.
 
-        Keys: name_like, finish, condition, location, set_code, rarity,
-        min_price, max_price, unpriced_only, sort, limit (capped at 300),
-        offset.
+        Keys: name_like, finish, condition, location, collection_id,
+        set_code, rarity, min_price, max_price, unpriced_only, sort,
+        limit (capped at 300), offset.
+
+        Omitting `collection_id` searches the MASTER collection — every card
+        owned, whatever grouping it sits in. Passing one narrows to that
+        grouping.
 
         Runs through the price-aware search so filtering and sorting happen
         in SQL across both databases rather than over a fetched page — sorting
@@ -2510,6 +2514,9 @@ class AppApi:
             finish=query.get("finish") or None,
             condition=query.get("condition") or None,
             location=query.get("location") or None,
+            collection_id=(int(query["collection_id"])
+                           if query.get("collection_id") not in (None, "")
+                           else None),
             set_code=query.get("set_code") or None,
             rarity=query.get("rarity") or None,
             min_price=_opt_float(query.get("min_price")),

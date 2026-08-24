@@ -50,6 +50,7 @@ def search_collection(
     finish: str | None = None,
     condition: str | None = None,
     location: str | None = None,
+    collection_id: int | None = None,
     set_code: str | None = None,
     rarity: str | None = None,
     min_price: float | None = None,
@@ -87,6 +88,11 @@ def search_collection(
     if location:
         conditions.append("ci.location = ?")
         params.append(location)
+    # None means the MASTER collection — every stack, whatever grouping it is
+    # in — which is the difference between "my Modern binder" and "my cards".
+    if collection_id is not None:
+        conditions.append("ci.collection_id = ?")
+        params.append(int(collection_id))
     if set_code:
         conditions.append("p.set_code = ? COLLATE NOCASE")
         params.append(set_code.strip().lower())

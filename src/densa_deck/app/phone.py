@@ -41,9 +41,12 @@ Being on the tailnet proves *which device* you are, not that you meant to
 mutate someone's inventory. So:
 
   * a **pairing token** is minted per session and required on every request;
-  * the surface is **scoped** - identify, commit, skip, session. No deck
-    deletion, no licence, no fee model, no 74 MB downloads, nothing
-    destructive. The full AppApi is never reachable from the phone;
+  * the surface is **scoped** - scanning, browsing, decks, the analyst and
+    sync. Written out one route at a time rather than forwarding method
+    names onto AppApi, because that would put deck deletion, licence
+    handling and 74 MB downloads one typo away from a phone on a network.
+    No deletion of decks or collections, no licence, no fee model, no
+    catalogue downloads. The full AppApi is never reachable from the phone;
   * it is **off by default** and stops when the desktop app closes.
 """
 
@@ -346,6 +349,81 @@ class PhoneBridge:
             ))
         if route == "skip":
             return _unwrap(api.scan_skip("unknown"))
+        # --- browsing the collection ------------------------------------
+        # Read-only. `collection_id` omitted means the master collection.
+        if route == "collection/list":
+            return _unwrap(api.list_collection(payload.get("query") or {}))
+        if route == "collection/value":
+            # capture=False: a phone browsing must not write a price snapshot,
+            # which is a once-a-day fact the desktop owns.
+            return _unwrap(api.get_collection_value(capture=False))
+        if route == "collection/sets":
+            return _unwrap(api.get_collection_sets(
+                int(payload.get("limit", 100) or 100)))
+        if route == "collection/status":
+            return _unwrap(api.get_collection_status())
+        if route == "collection/move":
+            return _unwrap(api.move_to_collection(
+                int(payload.get("item_id", 0) or 0),
+                int(payload.get("collection_id", 0) or 0),
+                payload.get("quantity")))
+        if route == "collection/set-quantity":
+            return _unwrap(api.set_collection_item_quantity(
+                int(payload.get("item_id", 0) or 0),
+                int(payload.get("quantity", 0) or 0)))
+
+        # --- decks --------------------------------------------------------
+        if route == "decks/list":
+            # Named key rather than a bare array. Every response from this
+            # bridge is a JSON object, so a typed client can model one
+            # envelope shape instead of asking, per route, whether it is
+            # about to receive a list.
+            return {"decks": _unwrap(api.list_saved_decks())}
+        if route == "decks/get":
+            return _unwrap(api.get_deck_latest(payload.get("deck_id", "")))
+        if route == "decks/history":
+            return {"versions": _unwrap(api.get_deck_history(
+                payload.get("deck_id", "")))}
+        if route == "decks/save":
+            # Argument order is (deck_id, name, decklist_text) — getting it
+            # wrong saves a deck whose name is its decklist, which the test
+            # for this route caught.
+            return _unwrap(api.save_deck_version(
+                payload.get("deck_id", ""),
+                payload.get("name", ""),
+                payload.get("decklist_text", ""),
+                payload.get("format"),
+                payload.get("notes", "")))
+        if route == "decks/ownership":
+            return _unwrap(api.get_deck_ownership(
+                payload.get("decklist_text", "")))
+        if route == "decks/value":
+            return _unwrap(api.get_deck_collection_value(
+                payload.get("decklist_text", "")))
+
+        # --- analyst: the PC does the thinking ----------------------------
+        # These are why the desktop is the brain. A phone cannot hold the
+        # catalogue, the combo database or a model, and does not need to.
+        if route == "analyst/analyze":
+            return _unwrap(api.analyze_deck(
+                payload.get("decklist_text", ""),
+                payload.get("format"),
+                payload.get("name", "Unnamed Deck")))
+        if route == "analyst/combos":
+            return _unwrap(api.detect_combos_for_deck(
+                payload.get("decklist_text", "")))
+        if route == "analyst/bracket":
+            return _unwrap(api.assess_bracket_fit(
+                payload.get("decklist_text", ""),
+                payload.get("target_bracket")))
+        if route == "analyst/rule0":
+            return _unwrap(api.build_rule0_worksheet(
+                payload.get("decklist_text", "")))
+        if route == "analyst/explain":
+            return _unwrap(api.explain_card_in_deck(
+                payload.get("card_name", ""),
+                payload.get("decklist_text", "")))
+
         # --- sync -------------------------------------------------------
         # Reachable by a paired companion only, like everything else here.
         # These carry data both ways, so they sit under the same token and
@@ -529,12 +607,19 @@ def _save_debug_frame(frame, reason: str) -> None:
 
 
 def _unwrap(envelope):
-    """Flatten the AppApi @_safe envelope for the phone's JSON client."""
+    """Flatten the AppApi @_safe envelope for the phone's JSON client.
+
+    Lists are unwrapped as well as dicts. They used not to be, which meant a
+    route returning a list (saved decks, for one) arrived shaped differently
+    from every other route — `{"ok": true, "data": [...]}` instead of the bare
+    payload — and a client had to know which was which. Errors stay
+    recognisable either way: they are always a dict carrying `ok: false`.
+    """
     if isinstance(envelope, dict) and "ok" in envelope:
         if not envelope["ok"]:
             return envelope
         data = envelope.get("data")
-        return data if isinstance(data, dict) else envelope
+        return data if isinstance(data, (dict, list)) else envelope
     return envelope
 
 
@@ -651,7 +736,10 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             # The phone is across a network; a stack trace helps nobody there.
             self._json(200, {"ok": False, "error": str(exc)})
             return
-        self._json(200, result if isinstance(result, dict) else {"ok": True, "data": result})
+        # Routes are expected to return a dict; anything else is wrapped so
+        # the wire shape stays predictable rather than silently varying.
+        self._json(200, result if isinstance(result, dict)
+                   else {"ok": True, "data": result})
 
 
 _DENIED_HTML = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
