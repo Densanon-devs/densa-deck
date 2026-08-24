@@ -346,6 +346,25 @@ class PhoneBridge:
             ))
         if route == "skip":
             return _unwrap(api.scan_skip("unknown"))
+        # --- sync -------------------------------------------------------
+        # Reachable by a paired companion only, like everything else here.
+        # These carry data both ways, so they sit under the same token and
+        # the same tailnet-only listener as the scanner.
+        if route == "sync/hello":
+            return _unwrap(api.sync_hello(payload.get("peer", "")))
+        if route == "sync/pull":
+            return _unwrap(api.sync_pull(
+                int(payload.get("since", 0) or 0),
+                int(payload.get("limit", 500) or 500),
+                payload.get("peer", "")))
+        if route == "sync/push":
+            return _unwrap(api.sync_push(
+                payload.get("events") or [],
+                payload.get("peer", ""),
+                payload.get("cursor")))
+        if route == "sync/status":
+            return _unwrap(api.sync_status())
+
         if route == "collections":
             return _unwrap(api.list_collections())
         if route == "new-collection":

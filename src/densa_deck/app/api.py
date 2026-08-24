@@ -3078,6 +3078,132 @@ class AppApi:
         except Exception as exc:
             return {"ok": False, "error": str(exc), "autostart": True}
 
+    # ------------------------------------------------------------ sync
+
+    def _get_sync(self):
+        """The event log and applier for this installation.
+
+        Built lazily against the collection database so a user who never
+        pairs a phone pays nothing for it.
+        """
+        if getattr(self, "_sync_applier", None) is None:
+            from densa_deck.sync.apply import SyncApplier
+            from densa_deck.sync.log import SyncLog
+            store = self._get_collection_store()
+            log = SyncLog(store.db_path)
+            self._sync_applier = SyncApplier(store, log)
+        return self._sync_applier
+
+    def _log_stack_delta(self, printing_id: str, card_name: str, delta: int,
+                         *, collection_id=None, finish: str = "nonfoil",
+                         condition: str = "NM", language: str = "en",
+                         location: str = "", oracle_id: str = "",
+                         reason: str = "manual") -> None:
+        """Note a quantity change for the other device.
+
+        Failures here are swallowed on purpose: a phone that is not paired,
+        or a log that cannot be written, must never stop someone recording
+        the cards they own. The cost is that the change is not synced, which
+        is exactly what the situation already was.
+        """
+        try:
+            store = self._get_collection_store()
+            uid = store.collection_uid(
+                collection_id if collection_id is not None
+                else store.default_collection_id())
+            self._get_sync().record_stack_delta(
+                printing_id=printing_id, card_name=card_name, delta=int(delta),
+                collection_uid=uid, oracle_id=oracle_id, finish=finish,
+                condition=condition, language=language, location=location,
+                reason=reason)
+        except Exception:
+            pass
+
+    def _log_collection_change(self, kind: str, collection: dict, **extra) -> None:
+        try:
+            sync = self._get_sync()
+            if kind == "upsert":
+                sync.record_collection_upsert(collection)
+            elif kind == "delete":
+                sync.record_collection_delete(
+                    collection.get("collection_uid", ""),
+                    discard_cards=bool(extra.get("discard_cards")))
+        except Exception:
+            pass
+
+    @_safe
+    def sync_hello(self, peer: str = "") -> dict:
+        """Who this device is, and how far along it is.
+
+        A companion calls this first so it can tell whether it is talking to
+        the same desktop as last time. A different device id means the peer
+        was reinstalled and its cursors are meaningless — better to notice
+        that here than to silently resume from a watermark that refers to
+        somebody else's history.
+        """
+        sync = self._get_sync()
+        return {
+            "device": sync.log.device,
+            "head": sync.log.head(),
+            "events": sync.log.count(),
+            "peer_cursor": sync.log.peer_cursor(peer) if peer else 0,
+            "protocol": 1,
+        }
+
+    @_safe
+    def sync_pull(self, since: int = 0, limit: int = 500,
+                  peer: str = "") -> dict:
+        """Events this device has that the caller may not.
+
+        The caller's own events are filtered out: harmless if returned, since
+        it would recognise and drop them, but it halves the traffic on every
+        exchange.
+        """
+        sync = self._get_sync()
+        events, cursor = sync.log.since(int(since), limit=int(limit),
+                                        exclude_device=peer or "")
+        if peer:
+            sync.log.set_peer_cursor(peer, int(since))
+        return {
+            "events": [e.to_dict() for e in events],
+            "cursor": cursor,
+            "head": sync.log.head(),
+            "device": sync.log.device,
+            # Tells the caller whether another round is needed straight away,
+            # so a large backlog does not need guessing at.
+            "more": cursor < sync.log.head(),
+        }
+
+    @_safe
+    def sync_push(self, events: list | None = None, peer: str = "",
+                  cursor: int | None = None) -> dict:
+        """Apply events from a peer.
+
+        Every event is idempotent by uid, so a caller that is unsure whether
+        its last push arrived should simply send again rather than trying to
+        work it out.
+        """
+        from densa_deck.sync.log import SyncEvent
+
+        parsed = [SyncEvent.from_dict(e) for e in (events or [])
+                  if isinstance(e, dict)]
+        sync = self._get_sync()
+        result = sync.apply_many(parsed)
+        if peer and cursor is not None:
+            sync.log.set_peer_cursor(peer, int(cursor))
+        return {**result, "head": sync.log.head(), "device": sync.log.device}
+
+    @_safe
+    def sync_status(self) -> dict:
+        """What has been exchanged with whom, for the Settings panel."""
+        sync = self._get_sync()
+        return {
+            "device": sync.log.device,
+            "events": sync.log.count(),
+            "head": sync.log.head(),
+            "peers": sync.log.peers(),
+        }
+
     # ------------------------------------------------------- collections
 
     @_safe
@@ -3107,10 +3233,12 @@ class AppApi:
                           notes: str = "") -> dict:
         """Make a new grouping. Returns the existing one if the name is taken."""
         try:
-            return {"collection": self._get_collection_store().create_collection(
-                name, kind=kind, notes=notes)}
+            made = self._get_collection_store().create_collection(
+                name, kind=kind, notes=notes)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        self._log_collection_change("upsert", made)
+        return {"collection": made}
 
     @_safe
     def rename_collection(self, collection_id: int, name: str) -> dict:
@@ -3121,6 +3249,10 @@ class AppApi:
             return {"ok": False, "error": str(exc)}
         if not renamed:
             return {"ok": False, "error": "No such collection."}
+        store = self._get_collection_store()
+        self._log_collection_change("upsert", {
+            "collection_uid": store.collection_uid(int(collection_id)),
+            "name": name})
         return {"renamed": True}
 
     @_safe
@@ -3133,23 +3265,47 @@ class AppApi:
         are removed from the master collection as well — irreversible, so the
         caller must ask for it explicitly and the UI must confirm it.
         """
-        result = self._get_collection_store().delete_collection(
+        store = self._get_collection_store()
+        # Read the uid BEFORE deleting — afterwards there is nothing to read,
+        # and the peer needs to know which collection this was about.
+        uid = store.collection_uid(int(collection_id))
+        result = store.delete_collection(
             int(collection_id),
             move_to=None if move_to is None else int(move_to),
             discard_cards=bool(discard_cards))
         if not result.get("deleted") and not result.get("emptied"):
             return {"ok": False, "error": result.get("reason", "Could not delete.")}
+        self._log_collection_change("delete", {"collection_uid": uid},
+                                    discard_cards=bool(discard_cards))
         return result
 
     @_safe
     def move_to_collection(self, item_id: int, collection_id: int,
                            quantity: int | None = None) -> dict:
         """Move copies of one stack into another collection."""
-        result = self._get_collection_store().move_copies(
+        store = self._get_collection_store()
+        # The stack has to be read before the move: afterwards it may have
+        # been merged into another or deleted outright.
+        item = store.get_item(int(item_id))
+        result = store.move_copies(
             int(item_id), int(collection_id),
             quantity=None if quantity is None else int(quantity))
         if not result.get("moved"):
             return {"ok": False, "error": result.get("reason", "Nothing moved.")}
+        # A move is two quantity facts, and sending it as a pair keeps the
+        # commutative property: no total is ever asserted, so a move racing an
+        # add on the other device cannot lose either.
+        if item is not None:
+            moved = int(result["moved"])
+            common = {"printing_id": item.printing_id, "card_name": item.card_name,
+                      "oracle_id": item.oracle_id, "finish": item.finish.value,
+                      "condition": item.condition.value,
+                      "language": item.language, "location": item.location,
+                      "reason": "move"}
+            self._log_stack_delta(delta=-moved,
+                                  collection_id=result.get("from"), **common)
+            self._log_stack_delta(delta=moved,
+                                  collection_id=int(collection_id), **common)
         return result
 
     # ------------------------------------------------------------ allocation
@@ -3573,6 +3729,11 @@ class AppApi:
             collection_id=None if collection_id is None else int(collection_id),
             reason="scan",
         )
+        self._log_stack_delta(
+            printing_id, card_name or printing["name"], 1,
+            collection_id=collection_id, finish=finish, condition=condition,
+            location=location, oracle_id=printing.get("oracle_id", ""),
+            reason="scan")
 
         session = self._get_scan_session()
         result = ScanResult(
@@ -3621,6 +3782,10 @@ class AppApi:
                 collection_id=None if collection_id is None else int(collection_id),
                 reason="scan",
             )
+            self._log_stack_delta(
+                printing_id, name, 1, collection_id=collection_id,
+                finish=finish, condition=condition, location=location,
+                oracle_id=printing.get("oracle_id", ""), reason="scan")
             entry = session.record_extra_copy(printing, finish)
             return {"entry": entry, "session": session.to_dict()}
 
@@ -3635,6 +3800,9 @@ class AppApi:
                             condition=condition, location=location,
                             collection_id=None if collection_id is None
                             else int(collection_id))
+        self._log_stack_delta(
+            printing_id, name, -1, collection_id=collection_id, finish=finish,
+            condition=condition, location=location, reason="scan-undo")
         return {"entry": undone, "removed": True, "session": session.to_dict()}
 
     @_safe
