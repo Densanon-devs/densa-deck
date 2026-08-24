@@ -109,6 +109,66 @@ export class AppState {
     return { cards: await this.store.totalCards() };
   }
 
+  // ------------------------------------------------------------- writing
+  //
+  // Writes go to the local mirror AND the local log together, so an edit made
+  // with no signal is both visible immediately and remembered for the desktop.
+
+  /** File a card into a collection. Works offline. */
+  async addCard(card: {
+    printing_id: string;
+    card_name: string;
+    finish?: string;
+    condition?: string;
+    collection_uid?: string;
+    oracle_id?: string;
+    location?: string;
+    quantity?: number;
+  }): Promise<void> {
+    await this.engine.editQuantity({
+      printing_id: card.printing_id,
+      card_name: card.card_name,
+      oracle_id: card.oracle_id ?? '',
+      finish: card.finish ?? 'nonfoil',
+      condition: card.condition ?? 'NM',
+      language: 'en',
+      location: card.location ?? '',
+      collection_uid: card.collection_uid ?? '',
+      reason: 'phone-scan',
+      delta: card.quantity ?? 1,
+    });
+    await this.refreshPending();
+  }
+
+  /** Take a card back out. Also works offline. */
+  async removeCard(card: {
+    printing_id: string;
+    card_name: string;
+    finish?: string;
+    condition?: string;
+    collection_uid?: string;
+    quantity?: number;
+  }): Promise<void> {
+    await this.addCard({ ...card, quantity: -(card.quantity ?? 1) });
+  }
+
+  async newCollection(name: string): Promise<string> {
+    const uid = await this.engine.createCollection(name);
+    await this.refreshPending();
+    return uid;
+  }
+
+  /**
+   * Scanning needs the desktop's OCR, so the raw client is exposed for it.
+   *
+   * Deliberately narrow: a screen reaching into the client for anything the
+   * app already has a method for would be reaching around the offline-first
+   * rule, and browse/edit must never depend on the network.
+   */
+  get scanClient(): DesktopClient {
+    return this.client;
+  }
+
   // ------------------------------------------- things only the desktop knows
 
   /**

@@ -170,6 +170,11 @@ export class MemoryDatabase {
     }
     if (/FROM collections c/i.test(text)) return this._selectCollections();
     if (/FROM sync_events/i.test(text)) return this._selectEvents(text, params);
+    if (/FROM decks/i.test(text)) {
+      return [...this._table('decks')].sort((a, b) =>
+        String(b.updated_at).localeCompare(String(a.updated_at)),
+      );
+    }
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
   }
 

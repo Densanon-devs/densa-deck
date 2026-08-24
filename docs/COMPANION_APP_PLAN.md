@@ -90,30 +90,30 @@ Each stage ends green: full Python suite, the browser/DOM suite, and lint.
 - Pull/push with watermarks
 - Tests: commutativity, idempotency, offline-both-sides, delete-vs-add races
 
-### Stage 2 — Companion API surface
+### Stage 2 — Companion API surface ✅
 - Browse: collections, cards (paged, searchable, priced)
 - Decks: list, read, save, delete, allocations
 - Analyst: analyze, explain, rule 0, bracket, combos — PC computes
 - Scoped allow-list on the bridge; nothing destructive reachable by accident
 - Tests: every route, including what must NOT be exposed
 
-### Stage 3 — Expo app scaffold
+### Stage 3 — Expo app scaffold ✅
 - Project, navigation, pairing by QR (reuses the existing token)
 - Connectivity: tailnet address, LAN fallback, clear offline state
 - Local SQLite mirror mirroring the desktop schema
 - Tests: schema parity, pairing, reachability logic
 
-### Stage 4 — Offline editing + sync engine (phone)
+### Stage 4 — Offline editing + sync engine (phone) ✅
 - Local writes emit events into the phone's own log
 - Background push/pull, watermarks, retry
 - Conflict surfaces shown honestly rather than hidden
 - Tests: edit-while-offline, reconnect, duplicate delivery, clock skew
 
-### Stage 5 — Analyst on the phone
+### Stage 5 — Analyst on the phone ✅
 - Request/response over the bridge, rendered natively
 - Long-running jobs: progress, cancellation, no silent timeouts
 
-### Stage 6 — Scanner in the app
+### Stage 6 — Scanner in the app ✅ (logic) / ⏳ (on a device)
 - Camera → frames → desktop OCR (the pipeline already exists and is tuned)
 - Reuses the lens picker findings: minimum focus distance is the real enemy
 
@@ -130,3 +130,33 @@ Each stage ends green: full Python suite, the browser/DOM suite, and lint.
 * The desktop must be awake to sync or to run the analyst. That is inherent
   to "the PC is the brain" and is the tradeoff for not shipping a model to
   the phone.
+
+
+---
+
+## Where this got to, 2026-08-24
+
+Everything above is built and green. What has **not** happened is a build on a
+real phone: the app has never been compiled to an APK or run on hardware, so
+every screen is unproven in the only environment that counts.
+
+**Verified**
+- 1,365 Python tests, 81 companion tests, lint and typecheck clean.
+- Sync survives: both sides edited apart, duplicate delivery, a lost push
+  reply, a reinstalled desktop, a delete racing an add, clock skew.
+- The bridge refuses unpaired callers on every route, and the destructive
+  AppApi methods a forwarding router would have exposed stay unreachable.
+
+**Not verified**
+- Anything React Native. The screens typecheck and their logic is tested, but
+  no pixel has been rendered.
+- expo-sqlite against the real schema — only the in-memory driver has run.
+- The camera path on a device, including the lens picker findings that were
+  learned on the web version and carried over here by hand.
+
+**Next**
+1. `cd companion && npx expo run:android` with `JAVA_HOME` pointing at
+   `C:\Program Files\Android\Android Studio\jbr`.
+2. Pair against the running desktop and confirm a scan reaches the PC.
+3. Deck screen and scan screen are written but not wired into navigation —
+   `App.tsx` currently shows pairing or the collection.

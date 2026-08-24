@@ -170,3 +170,65 @@ describe('the analyst needs the desktop', () => {
     await assert.rejects(() => state.analyze('1 Sol Ring'), /unreachable/i);
   });
 });
+
+
+describe('writing works offline', () => {
+  test('a scanned card is filed with no signal and syncs later', async () => {
+    const desktop = new FakeDesktop();
+    desktop.reachable = false;
+    const { state } = await build(desktop);
+
+    await state.addCard({ printing_id: 'p-sol', card_name: 'Sol Ring' });
+    assert.equal((await state.totals()).cards, 1, 'visible immediately');
+
+    desktop.reachable = true;
+    await state.sync();
+    assert.equal(desktop.totalCards(), 1, 'and remembered for the desktop');
+  });
+
+  test('a card filed by mistake can be taken back', async () => {
+    const desktop = new FakeDesktop();
+    const { state } = await build(desktop);
+    await state.addCard({ printing_id: 'p-sol', card_name: 'Sol Ring' });
+    await state.removeCard({ printing_id: 'p-sol', card_name: 'Sol Ring' });
+    assert.equal((await state.totals()).cards, 0);
+
+    await state.sync();
+    assert.equal(desktop.totalCards(), 0, 'the desktop agrees');
+  });
+
+  test('a collection made offline reaches the desktop', async () => {
+    const desktop = new FakeDesktop();
+    desktop.reachable = false;
+    const { state } = await build(desktop);
+
+    const uid = await state.newCollection('Shop pickups');
+    await state.addCard({
+      printing_id: 'p-sol', card_name: 'Sol Ring', collection_uid: uid,
+    });
+
+    desktop.reachable = true;
+    await state.sync();
+    assert.equal(desktop.collections.get(uid), 'Shop pickups');
+  });
+
+  test('unsent edits are counted for the user', async () => {
+    const desktop = new FakeDesktop();
+    desktop.reachable = false;
+    const { state } = await build(desktop);
+
+    let latest = null;
+    state.subscribe((s) => { latest = s; });
+    await state.addCard({ printing_id: 'p-sol', card_name: 'Sol Ring' });
+    assert.equal(latest.pendingEdits, 1,
+                 'the screen can say how much is waiting');
+  });
+
+  test('several copies of one card', async () => {
+    const desktop = new FakeDesktop();
+    const { state } = await build(desktop);
+    await state.addCard({ printing_id: 'p-sol', card_name: 'Sol Ring',
+                          quantity: 4 });
+    assert.equal((await state.totals()).cards, 4);
+  });
+});
