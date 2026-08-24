@@ -24,6 +24,7 @@ is built on, so it is cheaper to write it from the start than to retrofit it.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,14 @@ from densa_deck.collection.models import (
 )
 
 DEFAULT_COLLECTION_NAME = "Main Collection"
+
+# The default collection is a singleton CONCEPT — "cards I haven't filed
+# anywhere" — so every device has to agree on it without ever having spoken.
+# A random uid per device meant the desktop and the phone each had their own
+# unfiled pile: removals made on one landed in a collection the other did not
+# have, and syncing produced a second "Main Collection (2)". A fixed uid is
+# what makes "the default" the same thing everywhere.
+DEFAULT_COLLECTION_UID = "00000000-0000-4000-8000-00000000d0cc"
 
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS collection_items (
@@ -62,6 +71,10 @@ _SCHEMA = [
     # being owned.
     """CREATE TABLE IF NOT EXISTS collections (
         collection_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        -- Stable across devices. The integer id above is a local fact: two
+        -- devices editing offline both mint 2, and on sync each would think
+        -- the other meant its own collection.
+        collection_uid TEXT NOT NULL DEFAULT '',
         name TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'collection',
         notes TEXT NOT NULL DEFAULT '',
@@ -71,6 +84,8 @@ _SCHEMA = [
     )""",
     """CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_name
        ON collections(name COLLATE NOCASE)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_uid
+       ON collections(collection_uid)""",
     # The stack key. Same printing in a different box — or in a different
     # named collection — is a different stack, so both are part of identity
     # rather than free-text afterthoughts.
@@ -208,6 +223,7 @@ class CollectionStore:
             self._migrate_collections(conn)
             for stmt in _SCHEMA:
                 conn.execute(stmt)
+            self._migrate_collection_uids(conn)
             self._ensure_default_collection(conn)
             conn.commit()
 
@@ -235,6 +251,25 @@ class CollectionStore:
         # The old index would reject the same printing in two collections.
         conn.execute("DROP INDEX IF EXISTS idx_ci_stack")
 
+    def _migrate_collection_uids(self, conn) -> None:
+        """Backfill UUIDs onto collections that predate syncing."""
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type=\'table\'").fetchall()}
+        if "collections" not in tables:
+            return
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(collections)").fetchall()}
+        if "collection_uid" not in columns:
+            conn.execute("ALTER TABLE collections "
+                         "ADD COLUMN collection_uid TEXT NOT NULL DEFAULT \'\'")
+        rows = conn.execute(
+            "SELECT collection_id FROM collections "
+            "WHERE collection_uid IS NULL OR collection_uid = \'\'").fetchall()
+        for (collection_id,) in rows:
+            conn.execute("UPDATE collections SET collection_uid = ? "
+                         "WHERE collection_id = ?",
+                         (str(uuid.uuid4()), collection_id))
+
     def _ensure_default_collection(self, conn) -> int:
         """The collection everything lands in when nothing else is chosen."""
         row = conn.execute(
@@ -245,10 +280,10 @@ class CollectionStore:
         else:
             now = _now()
             cur = conn.execute(
-                """INSERT INTO collections (name, kind, is_default, created_at,
-                                            updated_at)
-                   VALUES (?, 'collection', 1, ?, ?)""",
-                (DEFAULT_COLLECTION_NAME, now, now))
+                """INSERT INTO collections (collection_uid, name, kind,
+                                            is_default, created_at, updated_at)
+                   VALUES (?, ?, 'collection', 1, ?, ?)""",
+                (DEFAULT_COLLECTION_UID, DEFAULT_COLLECTION_NAME, now, now))
             default_id = cur.lastrowid
         # Anything migrated from before collections existed, or inserted with
         # no collection, belongs to the default one.
@@ -374,7 +409,7 @@ class CollectionStore:
             return collection_id
 
     def create_collection(self, name: str, *, kind: str = "collection",
-                          notes: str = "") -> dict:
+                          notes: str = "", uid: str = "") -> dict:
         """A new named group. Names are unique, case-insensitively.
 
         Returns the existing collection when the name is already taken rather
@@ -393,10 +428,58 @@ class CollectionStore:
             if row:
                 return self._collection_row(conn, row[0])
             cur = conn.execute(
-                """INSERT INTO collections (name, kind, notes, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?)""", (name, kind, notes, now, now))
+                """INSERT INTO collections (collection_uid, name, kind, notes,
+                                            created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (uid or str(uuid.uuid4()), name, kind, notes, now, now))
             conn.commit()
             return self._collection_row(conn, cur.lastrowid)
+
+
+    def collection_by_uid(self, uid: str) -> dict:
+        """Find a collection by the identity that survives crossing devices."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT collection_id FROM collections WHERE collection_uid = ?",
+                (uid,)).fetchone()
+            return self._collection_row(conn, row[0]) if row else {}
+
+    def collection_uid(self, collection_id: int) -> str:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT collection_uid FROM collections WHERE collection_id = ?",
+                (collection_id,)).fetchone()
+            return row[0] if row else ""
+
+    def ensure_collection_uid(self, uid: str, *, name: str,
+                              kind: str = "collection", notes: str = "") -> int:
+        """The local id for a collection a peer told us about, creating it if new.
+
+        Name collisions across devices are resolved by keeping BOTH — a
+        suffix is added rather than merging — because two people (or one
+        person twice) meaning different boxes by "Bulk" is likelier than
+        meaning the same one, and merging is not reversible while renaming is.
+        """
+        existing = self.collection_by_uid(uid)
+        if existing:
+            return existing["collection_id"]
+        candidate = (name or "Collection").strip()
+        with self._connect() as conn:
+            self._ensure_default_collection(conn)
+            attempt, suffix = candidate, 2
+            while conn.execute(
+                    "SELECT 1 FROM collections WHERE name = ? COLLATE NOCASE",
+                    (attempt,)).fetchone():
+                attempt = f"{candidate} ({suffix})"
+                suffix += 1
+            now = _now()
+            cur = conn.execute(
+                """INSERT INTO collections (collection_uid, name, kind, notes,
+                                            created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (uid, attempt, kind, notes, now, now))
+            conn.commit()
+            return cur.lastrowid
 
     def rename_collection(self, collection_id: int, name: str) -> bool:
         name = (name or "").strip()
@@ -597,7 +680,7 @@ class CollectionStore:
             conn.commit()
             rows = conn.execute(
                 """SELECT c.collection_id, c.name, c.kind, c.notes, c.is_default,
-                          c.created_at,
+                          c.created_at, c.collection_uid,
                           COALESCE(SUM(i.quantity), 0) AS cards,
                           COUNT(DISTINCT i.printing_id) AS unique_printings
                    FROM collections c
@@ -608,18 +691,20 @@ class CollectionStore:
             ).fetchall()
         return [{"collection_id": r[0], "name": r[1], "kind": r[2], "notes": r[3],
                  "is_default": bool(r[4]), "created_at": r[5],
-                 "cards": r[6], "unique_printings": r[7]} for r in rows]
+                 "collection_uid": r[6], "cards": r[7],
+                 "unique_printings": r[8]} for r in rows]
 
     def _collection_row(self, conn, collection_id: int) -> dict:
         r = conn.execute(
-            """SELECT collection_id, name, kind, notes, is_default, created_at
+            """SELECT collection_id, name, kind, notes, is_default, created_at,
+                      collection_uid
                FROM collections WHERE collection_id = ?""",
             (collection_id,)).fetchone()
         if not r:
             return {}
         return {"collection_id": r[0], "name": r[1], "kind": r[2], "notes": r[3],
                 "is_default": bool(r[4]), "created_at": r[5],
-                "cards": 0, "unique_printings": 0}
+                "collection_uid": r[6], "cards": 0, "unique_printings": 0}
 
     def remove_copies(self, printing_id: str, card_name: str, *, quantity: int = 1, **kwargs):
         """Convenience inverse of add_copies."""
