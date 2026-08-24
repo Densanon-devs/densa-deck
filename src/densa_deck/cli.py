@@ -355,6 +355,115 @@ def main():
     iter_history.add_argument("deck_id", type=str, help="Deck identifier used at accept time")
     iter_history.add_argument("--limit", type=int, default=25)
 
+    # collection command — track the physical cards you actually own
+    collection_parser = subparsers.add_parser(
+        "collection",
+        help="Track the physical cards you own (per printing, finish and condition)",
+    )
+    collection_subs = collection_parser.add_subparsers(dest="collection_action")
+
+    col_status = collection_subs.add_parser(
+        "status", help="Collection totals + printing-catalogue state")
+    col_status.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_sync = collection_subs.add_parser(
+        "sync", help="Download the printing + price catalogue (~74 MB, opt-in)")
+    col_sync.add_argument("--force", action="store_true",
+                          help="Re-download even if present (this is also the price refresh)")
+    col_sync.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_remove = collection_subs.add_parser(
+        "remove-printings", help="Delete the printing catalogue (your collection is kept)")
+    col_remove.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_add = collection_subs.add_parser("add", help="Add copies of a card you own")
+    col_add.add_argument("card", type=str, help="Card name")
+    col_add.add_argument("--set", dest="set_code", type=str, default=None,
+                         help="Set code — required when the card has several printings")
+    col_add.add_argument("--number", type=str, default=None, help="Collector number")
+    col_add.add_argument("--quantity", "-n", type=int, default=1, help="Copies (default 1)")
+    col_add.add_argument("--finish", choices=["nonfoil", "foil", "etched"], default="nonfoil")
+    col_add.add_argument("--condition", choices=["NM", "LP", "MP", "HP", "DMG"], default="NM")
+    col_add.add_argument("--location", type=str, default="", help="Where it physically lives")
+    col_add.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_rm = collection_subs.add_parser("remove", help="Remove copies you no longer own")
+    col_rm.add_argument("card", type=str, help="Card name")
+    col_rm.add_argument("--set", dest="set_code", type=str, default=None, help="Set code")
+    col_rm.add_argument("--number", type=str, default=None, help="Collector number")
+    col_rm.add_argument("--quantity", "-n", type=int, default=1, help="Copies to remove")
+    col_rm.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_list = collection_subs.add_parser("list", help="List what you own")
+    col_list.add_argument("query", nargs="?", default=None, help="Filter by card name")
+    col_list.add_argument("--limit", type=int, default=50)
+    col_list.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_printings = collection_subs.add_parser(
+        "printings", help="Every printing of a card, with how many you own")
+    col_printings.add_argument("card", type=str, help="Card name")
+    col_printings.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_appraise = collection_subs.add_parser(
+        "appraise",
+        help="Estimate resale proceeds and a target purchase price for a pile of cards")
+    col_appraise.add_argument("--acquisition", type=int, default=None,
+                              help="Appraise one acquisition instead of everything")
+    col_appraise.add_argument("--offer", type=float, default=None,
+                              help="Model a specific purchase price")
+    col_appraise.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_scan = collection_subs.add_parser(
+        "scan", help="Identify a card from its printed set code + collector number")
+    col_scan.add_argument("text", type=str,
+                          help="OCR text, or just the card's bottom-left corner "
+                               "(e.g. '0079/0249 M SOM * EN')")
+    col_scan.add_argument("--add", action="store_true",
+                          help="Add it when the match is unambiguous")
+    col_scan.add_argument("--finish", choices=["nonfoil", "foil", "etched"],
+                          default="nonfoil")
+    col_scan.add_argument("--condition", choices=["NM", "LP", "MP", "HP", "DMG"],
+                          default="NM")
+    col_scan.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_value = collection_subs.add_parser(
+        "value", help="Estimated market value of everything you own")
+    col_value.add_argument("--raw", action="store_true",
+                           help="Skip the condition discount (sticker price)")
+    col_value.add_argument("--no-capture", action="store_true",
+                           help="Don't record today's prices to history")
+    col_value.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_check = collection_subs.add_parser(
+        "check", help="What a decklist needs that you don't have available")
+    col_check.add_argument("deck", type=str, help="Deck file")
+    col_check.add_argument("--deck-id", type=str, default=None,
+                           help="Exclude this saved deck from committed totals")
+    col_check.add_argument("--db", type=str, default=None, help="Card database path")
+
+    col_deck = collection_subs.add_parser(
+        "deck-value", help="Deck value, build value, and cost to complete")
+    col_deck.add_argument("deck", type=str, help="Deck file")
+    col_deck.add_argument("--deck-id", type=str, default=None,
+                          help="Exclude this saved deck from committed totals")
+    col_deck.add_argument("--shopping-list", action="store_true",
+                          help="Print only the missing cards, ready to paste")
+    col_deck.add_argument("--db", type=str, default=None, help="Card database path")
+
+    # phone command — scan from a phone over Tailscale
+    phone_parser = subparsers.add_parser(
+        "phone", help="Scan cards from your phone over Tailscale")
+    phone_subs = phone_parser.add_subparsers(dest="phone_action")
+    ph_status = phone_subs.add_parser(
+        "status", help="Is this machine ready to share to a phone?")
+    ph_status.add_argument("--db", type=str, default=None, help="Card database path")
+    ph_status.add_argument("--https-help", action="store_true",
+                           help="Explain the optional HTTPS route (live phone camera)")
+    ph_serve = phone_subs.add_parser(
+        "serve", help="Share to your phone until you press Ctrl-C")
+    ph_serve.add_argument("--port", type=int, default=8791)
+    ph_serve.add_argument("--db", type=str, default=None, help="Card database path")
+
     # playgroup command — store/manage pod profiles for tuning recommendations
     playgroup_parser = subparsers.add_parser(
         "playgroup",
@@ -592,6 +701,10 @@ def main():
         cmd_playgroup(args)
     elif command == "iterate":
         cmd_iterate(args)
+    elif command == "collection":
+        cmd_collection(args)
+    elif command == "phone":
+        cmd_phone(args)
 
 
 def _get_db(args) -> CardDatabase:
@@ -4192,6 +4305,645 @@ def _load_pod_context(name: str | None):
     except Exception as e:
         console.print(f"[yellow]Could not load pod '{name}': {e}[/yellow]")
         return None
+
+
+def _resolve_one_printing(db, card_name: str, set_code: str | None, number: str | None):
+    """Pin a card name down to a single printing, or explain why we can't.
+
+    Returns (printing_dict, error_message). Ambiguity is reported rather than
+    guessed at: silently picking a printing would put the wrong object in the
+    user's collection, and with Sol Ring spanning $1.22 to $1657 that is not a
+    harmless mistake.
+    """
+    if set_code and number:
+        hit = db.find_printing_by_set_number(set_code, number)
+        if not hit:
+            return None, f"No printing {set_code.upper()} #{number}."
+        # Set + collector number identifies a printing on its own, so the
+        # name is redundant — but if the two disagree, one of them is a typo
+        # and guessing puts the WRONG CARD in someone's collection. Refuse.
+        if card_name and hit["name"].lower() != card_name.strip().lower():
+            return None, (
+                f"{set_code.upper()} #{number} is '{hit['name']}', not "
+                f"'{card_name}'. Check the set or the collector number."
+            )
+        return hit, None
+
+    printings = db.printings_for_card(card_name)
+    if not printings:
+        if db.printing_count() == 0:
+            return None, ("No printing catalogue yet. Run: densa-deck collection sync")
+        return None, f"No printings found for '{card_name}'."
+
+    if set_code:
+        printings = [p for p in printings if p["set_code"].lower() == set_code.lower()]
+        if not printings:
+            return None, f"'{card_name}' has no printing in set {set_code.upper()}."
+
+    if len(printings) == 1:
+        return printings[0], None
+
+    sample = ", ".join(
+        f"{p['set_code'].upper()} #{p['collector_number']}" for p in printings[:6]
+    )
+    more = f" (+{len(printings) - 6} more)" if len(printings) > 6 else ""
+    return None, (
+        f"'{card_name}' has {len(printings)} printings — pick one with "
+        f"--set and --number.\n  {sample}{more}"
+    )
+
+
+def cmd_phone(args):
+    """Share a scanning surface to your phone over Tailscale."""
+    import time
+
+    from densa_deck.app.api import AppApi
+    from densa_deck.app.phone import (
+        build_serve_command,
+        https_guidance,
+        phone_url,
+        serve_status,
+        tailscale_status,
+    )
+
+    action = getattr(args, "phone_action", None) or "status"
+    ts = tailscale_status()
+    serve = serve_status()
+
+    console.print()
+    if not ts.get("installed"):
+        console.print("[yellow]Tailscale isn't installed.[/yellow] It's what lets "
+                      "your phone reach this machine without exposing anything "
+                      "to the internet.")
+        console.print("[dim]https://tailscale.com/download[/dim]")
+        console.print()
+        return
+    if not ts.get("running"):
+        console.print(f"[yellow]Tailscale isn't connected[/yellow] "
+                      f"(state: {ts.get('backend_state', 'unknown')}). Sign in first.")
+        console.print()
+        return
+
+    console.print(f"[bold]This machine:[/bold] {ts.get('dns_name', '?')}")
+    phones = ts.get("phones_online") or []
+    if phones:
+        console.print("[bold]Phone online:[/bold] " +
+                      ", ".join(p["name"] for p in phones))
+    else:
+        console.print("[yellow]No phone on your tailnet right now[/yellow] — "
+                      "open the Tailscale app on your phone.")
+
+    if serve.get("configured"):
+        console.print("[green]Ready over HTTPS[/green] - the live phone camera "
+                      "will work too.")
+    else:
+        # No HTTPS is the normal, supported path: the phone reaches this
+        # machine directly on its tailnet address over plain HTTP. WireGuard
+        # already encrypts that hop; a certificate would only buy a browser
+        # secure-context (i.e. a live viewfinder) at the cost of publishing
+        # this machine's name to the public CT log forever.
+        console.print("[green]Ready[/green] - your phone connects straight over "
+                      "Tailscale, no certificate needed.")
+        console.print("[dim]Type a card, or use your phone's normal camera app. "
+                      "A live viewfinder would need HTTPS; run "
+                      "`densa-deck phone status --https-help` if you ever want "
+                      "it.[/dim]")
+
+    if action == "status":
+        if getattr(args, "https_help", False) and not serve.get("configured"):
+            guide = https_guidance(ts, getattr(args, "port", 8791))
+            console.print()
+            console.print("[bold]Optional: live camera viewfinder[/bold]")
+            console.print("[dim]Everything already works without this.[/dim]")
+            if guide["state"] == "https_not_enabled":
+                console.print(f"  1. {guide['headline']}: {guide['admin_url']}")
+                console.print(f"     [dim]{guide['cost']}[/dim]")
+                console.print(f"  2. Then run: [bold]{build_serve_command(getattr(args, 'port', 8791))}[/bold]")
+            elif guide["command"]:
+                console.print(f"  Run: [bold]{guide['command']}[/bold]")
+        console.print()
+        return
+
+    # --- serve ---
+    api = AppApi(db_path=args.db) if args.db else AppApi()
+    try:
+        if api._get_db().printing_count() == 0:
+            console.print()
+            console.print("[yellow]No printing data — cards can't be identified. "
+                          "Run: densa-deck collection sync[/yellow]")
+            console.print()
+            return
+
+        bridge = api._get_phone_bridge()
+        bridge.port = int(args.port)
+        result = bridge.start()
+        if not result.get("ok"):
+            console.print(f"[red]{result.get('error')}[/red]")
+            return
+
+        url = phone_url(ts.get("dns_name", ""), bridge.token)
+        console.print()
+        console.print("[bold green]Sharing.[/bold green] Open this on your phone:")
+        console.print(f"  [bold]{url or bridge.status()['local_url']}[/bold]")
+        console.print()
+        console.print("[dim]Listening on 127.0.0.1 only — reachable through "
+                      "Tailscale, never the local network.[/dim]")
+        console.print("[dim]Ctrl-C to stop sharing (the link dies with it).[/dim]")
+        console.print()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            console.print()
+            console.print("[green]Stopped sharing.[/green] That link no longer works.")
+    finally:
+        api.close()
+
+
+def cmd_collection(args):
+    """Track the physical cards you own."""
+    from densa_deck.collection import CollectionStore, ownership_for_deck
+    from densa_deck.data.printings import printings_status
+
+    action = getattr(args, "collection_action", None)
+    db = _get_db(args)
+    store = CollectionStore(db_path=Path(db.db_path).parent / "collection.db")
+
+    if action is None or action == "status":
+        summary = store.summary()
+        st = printings_status(db)
+        console.print()
+        console.print("[bold]Your collection[/bold]")
+        console.print(f"  {summary.total_cards:,} cards  •  "
+                      f"{summary.unique_cards:,} unique  •  "
+                      f"{summary.unique_printings:,} printings")
+        if summary.by_finish:
+            console.print("  " + "  ".join(
+                f"{k}: {v:,}" for k, v in sorted(summary.by_finish.items())))
+        console.print()
+        console.print("[bold]Printing catalogue[/bold]")
+        if st["ready"]:
+            console.print(f"  {st['printing_count']:,} printings, synced {st['synced_at']}")
+            if st["prices_stale"]:
+                # Scryfall's own bulk docs call prices "dangerously stale
+                # after 24 hours" — say so rather than showing an old number
+                # as if it were current.
+                age = st["price_age_hours"]
+                age_txt = f"{age:.0f}h old" if age is not None else "age unknown"
+                console.print(f"  [yellow]Prices are {age_txt} — refresh with "
+                              f"`densa-deck collection sync --force`.[/yellow]")
+        else:
+            console.print("  [dim]Not downloaded. Run: densa-deck collection sync[/dim]")
+        console.print()
+        return
+
+    if action == "sync":
+        import asyncio
+
+        from densa_deck.data.printings import ingest_printings
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(ingest_printings(
+                db, force=args.force,
+                progress=lambda pct, msg: console.print(f"  [dim]{msg}[/dim]"),
+            ))
+            if result.get("skipped"):
+                console.print(f"[yellow]Already have {result['printings']:,} printings. "
+                              f"Use --force to refresh prices.[/yellow]")
+            else:
+                console.print(f"[green]Stored {result['printings']:,} printings.[/green]")
+        finally:
+            loop.close()
+        return
+
+    if action == "remove-printings":
+        removed = printings_remove_cli(db)
+        console.print(f"[green]Removed {removed:,} printings.[/green] "
+                      f"Your {store.summary().total_cards:,} owned cards are untouched.")
+        return
+
+    if action in ("add", "remove"):
+        printing, err = _resolve_one_printing(
+            db, args.card, getattr(args, "set_code", None), getattr(args, "number", None))
+        if err:
+            console.print(f"[yellow]{err}[/yellow]")
+            return
+        qty = abs(args.quantity) * (1 if action == "add" else -1)
+
+        if action == "add":
+            finishes = [f for f in (printing["finishes"] or "").split(",") if f]
+            if finishes and args.finish not in finishes:
+                console.print(
+                    f"[yellow]{printing['set_code'].upper()} #{printing['collector_number']} "
+                    f"was never printed in {args.finish} (available: "
+                    f"{', '.join(finishes)}).[/yellow]")
+                return
+
+        item = store.add_copies(
+            printing["printing_id"], printing["name"], quantity=qty,
+            oracle_id=printing["oracle_id"],
+            finish=getattr(args, "finish", "nonfoil"),
+            condition=getattr(args, "condition", "NM"),
+            location=getattr(args, "location", ""),
+            reason="cli",
+        )
+        verb = "Added" if action == "add" else "Removed"
+        console.print(
+            f"[green]{verb} {abs(qty)}x {printing['name']} "
+            f"({printing['set_code'].upper()} #{printing['collector_number']})[/green] "
+            f"— you now own {store.owned_count(printing['name'])}")
+        if item.quantity == 0:
+            console.print("[dim]Stack emptied and removed.[/dim]")
+        return
+
+    if action == "list":
+        items, total = store.list_items(name_like=args.query, limit=args.limit)
+        if not items:
+            console.print("[dim]Nothing here yet. Add with: "
+                          "densa-deck collection add \"Sol Ring\" --set cmm --number 410[/dim]")
+            return
+        table = Table(title=f"Collection ({total:,} stacks)")
+        table.add_column("Qty", justify="right")
+        table.add_column("Card")
+        table.add_column("Set")
+        table.add_column("Finish")
+        table.add_column("Cond")
+        table.add_column("Value", justify="right")
+        for item in items:
+            printing = db.get_printing(item.printing_id)
+            if printing:
+                key = {"foil": "price_usd_foil", "etched": "price_usd_etched"}.get(
+                    item.finish.value, "price_usd")
+                item.unit_price_usd = printing.get(key)
+                set_txt = f"{printing['set_code'].upper()} #{printing['collector_number']}"
+            else:
+                set_txt = "[dim]?[/dim]"
+            value = item.stack_value_usd
+            table.add_row(
+                str(item.quantity), item.card_name, set_txt,
+                item.finish.value, item.condition.value,
+                f"${value:,.2f}" if value is not None else "[dim]—[/dim]",
+            )
+        console.print(table)
+        if total > len(items):
+            console.print(f"[dim]Showing {len(items)} of {total}. Use --limit.[/dim]")
+        return
+
+    if action == "printings":
+        printings = db.printings_for_card(args.card)
+        if not printings:
+            console.print(f"[yellow]No printings for '{args.card}'.[/yellow]"
+                          if db.printing_count()
+                          else "[yellow]Run `densa-deck collection sync` first.[/yellow]")
+            return
+        table = Table(title=f"{printings[0]['name']} — {len(printings)} printings")
+        table.add_column("Set")
+        table.add_column("#", justify="right")
+        table.add_column("Released")
+        table.add_column("Finishes")
+        table.add_column("USD", justify="right")
+        table.add_column("Foil", justify="right")
+        table.add_column("Owned", justify="right")
+        for p in printings:
+            owned = sum(i.quantity for i in
+                        store.list_items(printing_id=p["printing_id"], limit=300)[0])
+            table.add_row(
+                p["set_code"].upper(), p["collector_number"], p["released_at"],
+                (p["finishes"] or "").replace(",", ", "),
+                f"${p['price_usd']:,.2f}" if p["price_usd"] is not None else "[dim]—[/dim]",
+                f"${p['price_usd_foil']:,.2f}" if p["price_usd_foil"] is not None else "[dim]—[/dim]",
+                str(owned) if owned else "[dim]0[/dim]",
+            )
+        console.print(table)
+        return
+
+    if action == "appraise":
+        from densa_deck.collection.prices import price_age_hours
+        from densa_deck.collection.reseller import (
+            DEFAULT_FEES,
+            analyze_acquisition,
+            collection_resale_lines,
+        )
+        from densa_deck.data.printings import META_SYNCED_AT
+
+        if db.printing_count() == 0:
+            console.print("[yellow]No price data. Run: densa-deck collection sync[/yellow]")
+            return
+        lines = collection_resale_lines(store, db, acquisition_id=args.acquisition)
+        if not lines:
+            console.print("[yellow]Nothing to appraise.[/yellow]")
+            return
+
+        age = price_age_hours(db.get_metadata(META_SYNCED_AT) or "")
+        a = analyze_acquisition(lines, DEFAULT_FEES, price_age_hours=age)
+
+        console.print()
+        console.print(f"[bold]Appraisal[/bold] — {a['total_cards']:,} cards")
+        console.print()
+        console.print(f"  Market value           ${a['market_value_usd']:,.2f}")
+        console.print(f"    sellable singles     ${a['sellable_value_usd']:,.2f} "
+                      f"({a['sellable_cards']:,} cards)")
+        if a["bulk_cards"]:
+            console.print(f"    bulk                 ${a['bulk_value_usd']:,.2f} "
+                          f"({a['bulk_cards']:,} cards at bulk rate)")
+        console.print(f"  Selling fees          -${a['marketplace_fees_usd']:,.2f}")
+        console.print(f"  Payment processing    -${a['payment_fees_usd']:,.2f}")
+        console.print(f"  Shipping              -${a['shipping_usd']:,.2f}")
+        console.print(f"  [bold]Estimated net proceeds ${a['net_proceeds_usd']:,.2f}[/bold]")
+        console.print()
+
+        t = a["target_prices"]
+        table = Table(title="Target purchase price")
+        table.add_column("Stance")
+        table.add_column("Offer", justify="right")
+        table.add_column("Est. profit", justify="right")
+        table.add_column("Est. ROI", justify="right")
+        for label, key, pct in (("Conservative", "conservative_usd", a["margins"]["conservative"]),
+                                ("Normal", "normal_usd", a["margins"]["normal"]),
+                                ("Aggressive", "aggressive_usd", a["margins"]["aggressive"])):
+            offer = t[key]
+            profit = a["net_proceeds_usd"] - offer
+            roi = (profit / offer * 100) if offer > 0 else 0
+            table.add_row(f"{label} ({pct:.0%})", f"${offer:,.2f}",
+                          f"${profit:,.2f}", f"{roi:.0f}%")
+        console.print(table)
+
+        if args.offer is not None:
+            profit = a["net_proceeds_usd"] - args.offer
+            roi = (profit / args.offer * 100) if args.offer > 0 else 0
+            colour = "green" if profit > 0 else "red"
+            console.print()
+            console.print(f"  At [bold]${args.offer:,.2f}[/bold]: "
+                          f"[{colour}]${profit:,.2f} estimated profit "
+                          f"({roi:.0f}% ROI)[/{colour}]")
+
+        console.print()
+        console.print(f"  Price coverage: {a['price_coverage_pct']:.1f}%  "
+                      f"Confidence: [bold]{a['confidence']}[/bold]")
+        console.print()
+        # Caveats are data, not decoration — the estimate must never render
+        # without them.
+        for note in a["caveats"]:
+            console.print(f"  [dim]• {note}[/dim]")
+        console.print()
+        console.print("[yellow]This is an estimate, not a valuation or an offer. "
+                      "You are deciding, not the tool.[/yellow]")
+        console.print()
+        return
+
+    if action == "scan":
+        from densa_deck.collection.scanner import identify_card
+
+        if db.printing_count() == 0:
+            console.print("[yellow]No printing data. Run: densa-deck collection sync[/yellow]")
+            return
+        result = identify_card(args.text, db)
+        idn = result.identity
+
+        console.print()
+        read = []
+        if idn.name:
+            read.append(f"name '{idn.name}'")
+        if idn.set_code:
+            read.append(f"set {idn.set_code.upper()}")
+        if idn.collector_number:
+            read.append(f"#{idn.collector_number}")
+        console.print(f"[dim]Read: {', '.join(read) if read else '(nothing)'}[/dim]")
+
+        if not result.candidates:
+            console.print("[yellow]No match. Try the card's name, or its set code "
+                          "and collector number.[/yellow]")
+            return
+
+        if result.auto_addable:
+            p = result.best
+            console.print(f"[green]{result.confidence.upper()}[/green]  {p['name']} — "
+                          f"{p['set_code'].upper()} #{p['collector_number']} "
+                          f"({p['set_name']})")
+            if args.add:
+                finishes = [f for f in (p["finishes"] or "").split(",") if f]
+                if finishes and args.finish not in finishes:
+                    console.print(f"[yellow]That printing was never made in "
+                                  f"{args.finish} (available: {', '.join(finishes)}).[/yellow]")
+                    return
+                store.add_copies(p["printing_id"], p["name"], quantity=1,
+                                 oracle_id=p["oracle_id"], finish=args.finish,
+                                 condition=args.condition, reason="scan")
+                console.print(f"[green]Added.[/green] You now own "
+                              f"{store.owned_count(p['name'])}.")
+            else:
+                console.print("[dim]Pass --add to put it in your collection.[/dim]")
+            console.print()
+            return
+
+        # Ambiguous: show the options and refuse to guess. Filing the wrong
+        # card silently is the one failure the user can't see or correct.
+        console.print(f"[yellow]Not certain — {len(result.candidates)} "
+                      f"possibilit{'y' if len(result.candidates) == 1 else 'ies'}:[/yellow]")
+        table = Table()
+        table.add_column("Card")
+        table.add_column("Set")
+        table.add_column("#", justify="right")
+        table.add_column("USD", justify="right")
+        for c in result.candidates[:12]:
+            p = c.printing
+            table.add_row(
+                p["name"], p["set_code"].upper(), p["collector_number"],
+                f"${p['price_usd']:,.2f}" if p["price_usd"] is not None else "[dim]—[/dim]",
+            )
+        console.print(table)
+        console.print("[dim]Add the one you have with: densa-deck collection add "
+                      "\"<name>\" --set <code> --number <n>[/dim]")
+        console.print()
+        return
+
+    if action == "value":
+        from densa_deck.collection.prices import (
+            capture_price_snapshot,
+            value_collection,
+            value_deltas,
+        )
+        if db.printing_count() == 0:
+            console.print("[yellow]No price data. Run: densa-deck collection sync[/yellow]")
+            return
+        if not args.no_capture:
+            capture_price_snapshot(store, db)
+        v = value_collection(store, db, condition_adjusted=not args.raw)
+
+        console.print()
+        console.print(f"[bold]Estimated market value:[/bold] "
+                      f"[green]${v['total_value_usd']:,.2f}[/green]")
+        console.print(f"  {v['total_copies']:,} cards in {v['total_stacks']:,} stacks"
+                      + ("" if args.raw else "  [dim](condition-adjusted)[/dim]"))
+        if v["unpriced_copies"]:
+            # Say what isn't in the number. A total that hides its own gaps
+            # is the most misleading thing this command could print.
+            console.print(f"  [yellow]{v['unpriced_copies']:,} cards have no price[/yellow] "
+                          f"and are not included above")
+
+        deltas = value_deltas(store, db)
+        if deltas.get("available"):
+            shown = [(k, d) for k, d in deltas["deltas"].items() if d]
+            if shown:
+                console.print()
+                for key, d in shown:
+                    arrow = "+" if d["delta_usd"] >= 0 else "-"
+                    color = "green" if d["delta_usd"] >= 0 else "red"
+                    pct = f" ({d['pct']:+.1f}%)" if d["pct"] is not None else ""
+                    console.print(f"  {key:>4}  [{color}]{arrow}${abs(d['delta_usd']):,.2f}"
+                                  f"{pct}[/{color}]")
+
+        if v["most_valuable"]:
+            table = Table(title="Most valuable")
+            table.add_column("Card")
+            table.add_column("Set")
+            table.add_column("Qty", justify="right")
+            table.add_column("Each", justify="right")
+            table.add_column("Total", justify="right")
+            for m in v["most_valuable"]:
+                extra = "" if m["finish"] == "nonfoil" else f" [{m['finish']}]"
+                table.add_row(
+                    m["card_name"] + extra,
+                    f"{(m['set_code'] or '?').upper()} #{m['collector_number']}",
+                    str(m["quantity"]),
+                    f"${m['unit_value_usd']:,.2f}" if m["unit_value_usd"] else "—",
+                    f"${m['stack_value_usd']:,.2f}",
+                )
+            console.print(table)
+
+        console.print()
+        if v["prices_stale"]:
+            age = v["price_age_hours"]
+            age_txt = f"{age:.0f}h" if age is not None else "unknown age"
+            console.print(f"[yellow]Prices are {age_txt} old — "
+                          f"refresh with `densa-deck collection sync --force`.[/yellow]")
+        console.print(f"[dim]{v['attribution']}[/dim]")
+        console.print()
+        return
+
+    if action == "deck-value":
+        from densa_deck.collection.deck_value import shopping_list_text, value_deck
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.models import Deck
+        from densa_deck.versioning.storage import VersionStore
+
+        path = Path(args.deck)
+        if not path.exists():
+            console.print(f"[red]No such deck file: {args.deck}[/red]")
+            return
+        entries = parse_decklist(path.read_text(encoding="utf-8"))
+        if not entries:
+            console.print("[yellow]No cards parsed from that file.[/yellow]")
+            return
+        if db.printing_count() == 0:
+            console.print("[yellow]No price data. Run: densa-deck collection sync[/yellow]")
+            return
+
+        deck = Deck(name=path.stem, entries=entries)
+        vstore = VersionStore(db_path=Path(db.db_path).parent / "versions.db")
+        v = value_deck(deck, store, db, vstore, deck_id=args.deck_id)
+
+        if args.shopping_list:
+            text = shopping_list_text(v)
+            console.print(text if text else "[green]Nothing missing.[/green]")
+            return
+
+        console.print()
+        console.print(f"[bold]{v['deck_name']}[/bold] — {v['total_cards']} cards")
+        console.print()
+        console.print(f"  Owned            {v['owned_distinct']} / {v['distinct_cards']}")
+        console.print(f"  Deck value       [green]${v['deck_value_usd']:,.2f}[/green]"
+                      "  [dim](your copies)[/dim]")
+        console.print(f"  Build value      [green]${v['build_value_usd']:,.2f}[/green]"
+                      "  [dim](cheapest printings)[/dim]")
+        if v["missing_distinct"]:
+            console.print(f"  Missing          {v['missing_distinct']} cards "
+                          f"({v['missing_copies']} copies)")
+            console.print(f"  Cost to complete [yellow]"
+                          f"${v['cost_to_complete_usd']:,.2f}[/yellow]")
+        else:
+            console.print("  [green]Nothing missing.[/green]")
+        if v["blocked_distinct"]:
+            console.print(f"  [yellow]In other decks   {v['blocked_distinct']}[/yellow] "
+                          "(owned, already sleeved)")
+
+        unpriced = max(v["deck_value_unpriced"], v["build_value_unpriced"])
+        if unpriced:
+            console.print(f"  [dim]{unpriced} card(s) have no price and are "
+                          f"excluded from these totals.[/dim]")
+
+        if v["shopping_list"]:
+            table = Table(title="Shopping list")
+            table.add_column("Card")
+            table.add_column("Need", justify="right")
+            table.add_column("Each", justify="right")
+            table.add_column("Cost", justify="right")
+            for row in v["shopping_list"][:30]:
+                each = row["cheapest_unit_usd"]
+                table.add_row(
+                    row["card_name"], str(row["missing"]),
+                    f"${each:,.2f}" if each is not None else "[dim]—[/dim]",
+                    f"${row['line_to_complete_usd']:,.2f}" if each is not None
+                    else "[dim]—[/dim]",
+                )
+            console.print(table)
+            if len(v["shopping_list"]) > 30:
+                console.print(f"[dim]+{len(v['shopping_list']) - 30} more — "
+                              f"use --shopping-list for the full paste-ready list.[/dim]")
+        console.print()
+        return
+
+    if action == "check":
+        from densa_deck.deck.parser import parse_decklist
+        from densa_deck.models import Deck
+        from densa_deck.versioning.storage import VersionStore
+
+        path = Path(args.deck)
+        if not path.exists():
+            console.print(f"[red]No such deck file: {args.deck}[/red]")
+            return
+        entries = parse_decklist(path.read_text(encoding="utf-8"))
+        if not entries:
+            console.print("[yellow]No cards parsed from that file.[/yellow]")
+            return
+        # Parsed, not resolved — ownership is a name-level question and must
+        # not require the oracle card ingest.
+        deck = Deck(name=path.stem, entries=entries)
+        vstore = VersionStore(db_path=Path(db.db_path).parent / "versions.db")
+        result = ownership_for_deck(deck, store, vstore, deck_id=args.deck_id)
+        console.print()
+        console.print(f"[bold]{deck.name}[/bold] — {result['distinct_cards']} distinct cards")
+        console.print(f"  Owned:   {result['owned_distinct']}")
+        console.print(f"  Missing: {result['missing_distinct']} "
+                      f"({result['missing_copies']} copies)")
+        if result["blocked_distinct"]:
+            console.print(f"  [yellow]In other decks: {result['blocked_distinct']}[/yellow] "
+                          f"(owned, but already sleeved elsewhere)")
+        gaps = [c for c in result["cards"] if c["missing"] or c["blocked"]]
+        if gaps:
+            table = Table(title="Not available")
+            table.add_column("Card")
+            table.add_column("Need", justify="right")
+            table.add_column("Own", justify="right")
+            table.add_column("Free", justify="right")
+            table.add_column("Status")
+            for c in gaps[:40]:
+                status = ("[red]buy[/red]" if c["missing"]
+                          else "[yellow]unsleeve[/yellow]")
+                table.add_row(c["card_name"], str(c["needed"]), str(c["owned"]),
+                              str(c["available"]), status)
+            console.print(table)
+            if len(gaps) > 40:
+                console.print(f"[dim]+{len(gaps) - 40} more[/dim]")
+        else:
+            console.print("  [green]Every card is available.[/green]")
+        console.print()
+        return
+
+
+def printings_remove_cli(db) -> int:
+    from densa_deck.data.printings import remove_printings
+    return remove_printings(db)
 
 
 def cmd_playgroup(args):

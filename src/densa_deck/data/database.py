@@ -56,6 +56,48 @@ CREATE TABLE IF NOT EXISTS card_aliases (
     oracle_name TEXT NOT NULL,
     added_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- card_printings holds one row per PHYSICAL printing, joined to `cards` on
+-- oracle_id. The `cards` table is ingested from Scryfall's `oracle_cards`
+-- bulk (one row per unique card, an arbitrary representative printing), which
+-- cannot express "I own the Scars of Mirrodin one, foil, lightly played".
+-- This table is populated by the separate opt-in `default_cards` ingest in
+-- data/printings.py and is empty until the user asks for it.
+--
+-- Deliberately slim — no data_json blob (that is what makes `cards` 4 KB/row)
+-- and no image columns, because legal.scryfall_image_url() derives the image
+-- URL from the printing id and works unchanged here. ~107k paper printings
+-- land in roughly 35 MB.
+--
+-- Prices are per-printing AND per-finish. The `cards.price_usd` column
+-- collapses usd/usd_foil/usd_etched into one float via a fallback chain, so a
+-- card whose only printings are foil reports its foil price as if it were the
+-- normal price. Valuing real cardboard needs the three kept apart.
+CREATE TABLE IF NOT EXISTS card_printings (
+    printing_id TEXT PRIMARY KEY,
+    oracle_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    set_code TEXT NOT NULL DEFAULT '',
+    set_name TEXT NOT NULL DEFAULT '',
+    collector_number TEXT NOT NULL DEFAULT '',
+    rarity TEXT NOT NULL DEFAULT '',
+    lang TEXT NOT NULL DEFAULT 'en',
+    released_at TEXT NOT NULL DEFAULT '',
+    finishes TEXT NOT NULL DEFAULT '',
+    frame TEXT NOT NULL DEFAULT '',
+    border_color TEXT NOT NULL DEFAULT '',
+    promo_types TEXT NOT NULL DEFAULT '',
+    tcgplayer_id INTEGER,
+    price_usd REAL,
+    price_usd_foil REAL,
+    price_usd_etched REAL,
+    prices_synced_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_printings_oracle ON card_printings(oracle_id);
+CREATE INDEX IF NOT EXISTS idx_printings_name ON card_printings(name COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS idx_printings_setnum
+    ON card_printings(set_code, collector_number);
 """
 
 # Lightweight migrations for schemas that pre-date a column. Run idempotently
@@ -158,6 +200,163 @@ class CardDatabase:
             )
             conn.commit()
 
+    # ------------------------------------------------------------------
+    # Printings — physical, per-set rows. Empty until the opt-in
+    # `default_cards` ingest runs (see data/printings.py).
+    # ------------------------------------------------------------------
+
+    def attach_collection(self, collection_db_path) -> bool:
+        """Attach collection.db to this thread's connection as `collection`.
+
+        Lets card search filter on ownership without pulling a few thousand
+        owned card names into Python and back out as host parameters (which
+        would also blow SQLite's per-statement parameter cap).
+
+        Idempotent per thread and per path: re-attaching the same file is a
+        no-op, and switching files detaches first. Returns False when the
+        collection database doesn't exist yet, so callers can degrade to an
+        unfiltered search rather than failing.
+        """
+        from pathlib import Path as _Path
+        path = _Path(collection_db_path)
+        if not path.exists():
+            return False
+        conn = self.connect()
+        current = getattr(self._local, "collection_attached", None)
+        if current == str(path):
+            return True
+        if current:
+            try:
+                conn.execute("DETACH DATABASE collection")
+            except sqlite3.OperationalError:
+                pass
+        try:
+            conn.execute("ATTACH DATABASE ? AS collection", (str(path),))
+        except sqlite3.OperationalError:
+            return False
+        self._local.collection_attached = str(path)
+        return True
+
+    def printing_count(self) -> int:
+        conn = self.connect()
+        row = conn.execute("SELECT COUNT(*) FROM card_printings").fetchone()
+        return row[0] if row else 0
+
+    def upsert_printings(self, rows: list[tuple], batch_size: int = 10000):
+        """Bulk-insert printing rows.
+
+        Rows are plain tuples in `_PRINTING_COLUMNS` order rather than model
+        objects — at ~107k printings the Pydantic round-trip costs more than
+        the entire rest of the ingest, and nothing downstream needs a model
+        here. Callers build them with `printing_row_from_scryfall`.
+        """
+        conn = self.connect()
+        placeholders = ", ".join("?" * len(_PRINTING_COLUMNS))
+        sql = (
+            f"INSERT OR REPLACE INTO card_printings ({', '.join(_PRINTING_COLUMNS)}) "
+            f"VALUES ({placeholders})"
+        )
+        for i in range(0, len(rows), batch_size):
+            conn.executemany(sql, rows[i : i + batch_size])
+            conn.commit()
+
+    def get_printing(self, printing_id: str) -> dict | None:
+        conn = self.connect()
+        row = conn.execute(
+            f"SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings WHERE printing_id = ?",
+            (printing_id,),
+        ).fetchone()
+        return dict(zip(_PRINTING_COLUMNS, row)) if row else None
+
+    def printings_for_card(self, name: str) -> list[dict]:
+        """Every printing of a card, newest release first.
+
+        Matched on name rather than oracle_id so this works before/without a
+        `cards` row — the collection must stay browsable even if the oracle
+        ingest is stale or the card was never in it.
+        """
+        conn = self.connect()
+        rows = conn.execute(
+            f"""SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings
+                WHERE name = ? COLLATE NOCASE
+                ORDER BY released_at DESC, set_code ASC, collector_number ASC""",
+            (name,),
+        ).fetchall()
+        return [dict(zip(_PRINTING_COLUMNS, r)) for r in rows]
+
+    def printings_for_oracle(self, oracle_id: str) -> list[dict]:
+        conn = self.connect()
+        rows = conn.execute(
+            f"""SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings
+                WHERE oracle_id = ?
+                ORDER BY released_at DESC, set_code ASC, collector_number ASC""",
+            (oracle_id,),
+        ).fetchall()
+        return [dict(zip(_PRINTING_COLUMNS, r)) for r in rows]
+
+    def find_printing_by_set_number(self, set_code: str, collector_number: str) -> dict | None:
+        """Exact printing lookup from the two things printed on the card itself.
+
+        This is the scanner's fast path: cards from Magic 2015 onward carry
+        their set code and collector number in the bottom-left corner, so
+        reading those two fields identifies the exact printing with no image
+        matching at all.
+        """
+        conn = self.connect()
+        row = conn.execute(
+            f"""SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings
+                WHERE set_code = ? COLLATE NOCASE
+                  AND collector_number = ? COLLATE NOCASE
+                LIMIT 1""",
+            (set_code.strip().lower(), collector_number.strip()),
+        ).fetchone()
+        return dict(zip(_PRINTING_COLUMNS, row)) if row else None
+
+    def cheapest_prices_for_names(self, names: list[str]) -> dict[str, float]:
+        """Lowercased card name -> cheapest non-foil price across all printings.
+
+        The basis for "build value" and "cost to complete": what this deck
+        would cost someone buying the cheapest legal printing of each card,
+        as opposed to what the specific copies in it are worth.
+
+        Batched because a 100-card deck would otherwise be 100 round trips,
+        and chunked at 400 because SQLite caps host parameters per statement.
+        Names with no priced printing are simply absent — unknown, not free.
+        """
+        out: dict[str, float] = {}
+        if not names:
+            return out
+        conn = self.connect()
+        uniq = sorted({(n or "").strip() for n in names if (n or "").strip()})
+        for i in range(0, len(uniq), 400):
+            chunk = uniq[i : i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"""SELECT LOWER(name), MIN(price_usd) FROM card_printings
+                    WHERE price_usd IS NOT NULL
+                      AND LOWER(name) IN ({placeholders})
+                    GROUP BY LOWER(name)""",
+                [c.lower() for c in chunk],
+            ).fetchall()
+            for name, price in rows:
+                out[name] = price
+        return out
+
+    def cheapest_printing_for_card(self, name: str) -> dict | None:
+        """Lowest-priced non-foil printing — the "build value" basis.
+
+        NULL prices sort last rather than counting as free, consistent with
+        the NULL-means-unknown convention the rest of the codebase holds.
+        """
+        conn = self.connect()
+        row = conn.execute(
+            f"""SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings
+                WHERE name = ? COLLATE NOCASE AND price_usd IS NOT NULL
+                ORDER BY price_usd ASC LIMIT 1""",
+            (name,),
+        ).fetchone()
+        return dict(zip(_PRINTING_COLUMNS, row)) if row else None
+
     def lookup_by_name(self, name: str) -> Card | None:
         conn = self.connect()
         row = conn.execute(
@@ -234,6 +433,7 @@ class CardDatabase:
         format_legal: str | None = None,
         rarity: str | None = None,
         max_price: float | None = None,
+        ownership: str | None = None,
         set_code: str | None = None,
         limit: int = 60,
         offset: int = 0,
@@ -301,6 +501,18 @@ class CardDatabase:
             # still surface new cards Scryfall hasn't priced yet.
             conditions.append("(price_usd IS NULL OR price_usd <= ?)")
             params.append(float(max_price))
+
+        if ownership in ("owned", "unowned"):
+            # Correlated EXISTS against the attached collection database.
+            # Requires attach_collection() to have succeeded; callers that
+            # skip it get an unfiltered search rather than an error, since a
+            # missing collection means "you own nothing", which would render
+            # an empty and confusing result page.
+            owned_expr = (
+                "EXISTS (SELECT 1 FROM collection.collection_items ci "
+                "WHERE ci.quantity > 0 AND ci.card_name = cards.name COLLATE NOCASE)"
+            )
+            conditions.append(owned_expr if ownership == "owned" else f"NOT {owned_expr}")
 
         # Types: each token matches the PRIMARY type portion of type_line
         # only — i.e. the substring before the em-dash subtype delimiter.
@@ -418,6 +630,87 @@ class CardDatabase:
             # semantic content, so collision risk is a non-issue.
             out[oid] = f"{name}\n{text or ''}\n{tl or ''}\n{legs or ''}\n{cost or ''}"
         return out
+
+
+# Column order for card_printings. Every read and write goes through this
+# tuple so a schema change lands in exactly one place.
+_PRINTING_COLUMNS = (
+    "printing_id",
+    "oracle_id",
+    "name",
+    "set_code",
+    "set_name",
+    "collector_number",
+    "rarity",
+    "lang",
+    "released_at",
+    "finishes",
+    "frame",
+    "border_color",
+    "promo_types",
+    "tcgplayer_id",
+    "price_usd",
+    "price_usd_foil",
+    "price_usd_etched",
+    "prices_synced_at",
+)
+
+# Finishes a physical card can have. Stored as a CSV string on the printing
+# because it is a tiny closed set and we only ever membership-test it.
+VALID_FINISHES = ("nonfoil", "foil", "etched")
+
+
+def _price_or_none(prices: dict, key: str) -> float | None:
+    """One price field as a float, or None when absent/unparseable.
+
+    None means "unknown", never "free" — the same convention the rest of the
+    codebase holds. A card we have no price for must never be counted as $0
+    in a collection total.
+    """
+    raw = prices.get(key)
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def printing_row_from_scryfall(raw: dict, synced_at: str) -> tuple | None:
+    """Build a card_printings row from a raw Scryfall `default_cards` record.
+
+    Returns None for records that can't be physically owned — digital-only
+    printings (Arena/MTGO) have no cardboard, so they'd only ever be noise in
+    a physical collection.
+    """
+    printing_id = raw.get("id")
+    if not printing_id:
+        return None
+    if "paper" not in (raw.get("games") or []):
+        return None
+
+    prices = raw.get("prices") or {}
+    tcg_id = raw.get("tcgplayer_id")
+    return (
+        printing_id,
+        raw.get("oracle_id") or "",
+        raw.get("name") or "",
+        (raw.get("set") or "").lower(),
+        raw.get("set_name") or "",
+        raw.get("collector_number") or "",
+        raw.get("rarity") or "",
+        raw.get("lang") or "en",
+        raw.get("released_at") or "",
+        ",".join(raw.get("finishes") or []),
+        raw.get("frame") or "",
+        raw.get("border_color") or "",
+        ",".join(raw.get("promo_types") or []),
+        int(tcg_id) if isinstance(tcg_id, (int, float)) else None,
+        _price_or_none(prices, "usd"),
+        _price_or_none(prices, "usd_foil"),
+        _price_or_none(prices, "usd_etched"),
+        synced_at,
+    )
 
 
 def _card_to_row(card: Card) -> tuple:

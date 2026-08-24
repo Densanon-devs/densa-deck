@@ -2096,3 +2096,397 @@ code {
 .verdict-solid { color: var(--color-accent-green); font-weight: 600; }
 .verdict-thin { color: var(--color-warning); font-weight: 600; }
 .verdict-short { color: var(--color-primary); font-weight: 600; }
+
+/* ============  v0.7.0: Collection view (physical card tracking)  ============ */
+
+.collection-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.collection-totals {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.collection-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.collection-stat-value {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--color-text, #e4e6eb);
+  line-height: 1.1;
+}
+
+.collection-stat-value-money .collection-stat-value {
+  color: var(--color-accent-green, #48bb78);
+}
+
+.collection-stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted, #8a8f9c);
+}
+
+/* Filters left, list right — same proportion as the Build view's search
+   column so the two browsing surfaces feel like one app. */
+.view.active .collection-body {
+  display: grid;
+  grid-template-columns: 26% 74%;
+  gap: 16px;
+  align-items: start;
+}
+
+.collection-list-wrap {
+  min-height: 240px;
+}
+
+.collection-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--color-border, #2d3142);
+}
+
+.collection-row:last-child {
+  border-bottom: none;
+}
+
+.collection-card {
+  flex: 1;
+  min-width: 0;
+}
+
+.collection-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-set {
+  font-size: 0.8rem;
+}
+
+.collection-value {
+  min-width: 76px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-accent-green, #48bb78);
+}
+
+.collection-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--color-surface-raised, #232837);
+  color: var(--color-text-muted, #8a8f9c);
+}
+
+.collection-tag-foil {
+  background: linear-gradient(90deg, #c084fc, #818cf8);
+  color: #10121a;
+  font-weight: 600;
+}
+
+.collection-tag-etched {
+  background: #e8a33b33;
+  color: #e8a33b;
+}
+
+.collection-tag-loc {
+  background: transparent;
+  border: 1px solid var(--color-border, #2d3142);
+}
+
+.collection-tag-owned {
+  background: #48bb7833;
+  color: var(--color-accent-green, #48bb78);
+}
+
+/* Printing picker rows */
+.modal-panel-wide {
+  max-width: 760px;
+  width: 90vw;
+}
+
+.printings-controls {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border, #2d3142);
+}
+
+.printing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border, #2d3142);
+}
+
+.printing-row:last-child {
+  border-bottom: none;
+}
+
+.printing-ident {
+  min-width: 0;
+}
+
+.printing-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Ownership badge on Build-tab search tiles. Mirrors
+   .card-tile-completer-badge but pinned to the opposite corner so it can
+   never collide with the + button (top-right) or the combo badge
+   (top-left). */
+.card-tile-owned-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: #48bb78e6;
+  color: #0f1117;
+  pointer-events: none;
+}
+
+/* Links inside hint text — the default UA blue is unreadable on the dark
+   panel background. */
+.collection-header .panel-hint a,
+.collection-list-wrap .panel-hint a,
+.modal-body .panel-hint a {
+  color: var(--color-accent, #4a90e2);
+  text-decoration: underline;
+}
+
+/* "unpriced" sits in the value column but is not a value — don't let it
+   inherit the money green and read as a price. */
+.collection-value .subtle {
+  color: var(--color-text-muted, #8a8f9c);
+  font-style: italic;
+}
+
+/* ============  v0.8.0: collection valuation + price deltas  ============ */
+
+.collection-deltas {
+  display: flex;
+  gap: 18px;
+  align-items: flex-end;
+  padding-bottom: 2px;
+}
+
+.collection-delta {
+  display: flex;
+  flex-direction: column;
+}
+
+.collection-delta .delta-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted, #8a8f9c);
+}
+
+.collection-delta .delta-value {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.delta-up .delta-value { color: var(--color-accent-green, #48bb78); }
+.delta-down .delta-value { color: #ff9999; }
+.delta-flat .delta-value { color: var(--color-text-muted, #8a8f9c); }
+
+/* ============  v0.9.0: deck vs collection panel (Build tab)  ============ */
+
+.build-collection-panel {
+  margin-bottom: 18px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border, #2d3142);
+}
+
+.build-collection-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.build-collection-label {
+  color: var(--color-text-muted, #8a8f9c);
+  font-size: 0.85rem;
+}
+
+.build-collection-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+#build-copy-shopping {
+  margin-top: 8px;
+  width: 100%;
+}
+
+/* ============  v0.10.0: Scan view  ============ */
+
+.view.active .scan-body {
+  display: grid;
+  grid-template-columns: 28% 42% 30%;
+  gap: 16px;
+  align-items: start;
+}
+
+.scan-textarea {
+  width: 100%;
+  min-height: 90px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  padding: 8px;
+  background: var(--color-bg, #0f1117);
+  color: var(--color-text, #e4e6eb);
+  border: 1px solid var(--color-border, #2d3142);
+  border-radius: var(--radius, 6px);
+  resize: vertical;
+}
+
+.scan-totals {
+  gap: 20px;
+  margin-bottom: 8px;
+}
+
+.scan-log {
+  margin: 10px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.scan-log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--color-border, #2d3142);
+  font-size: 0.85rem;
+}
+
+.scan-log-row:last-child { border-bottom: none; }
+
+.scan-log-mark {
+  color: var(--color-accent-green, #48bb78);
+  width: 12px;
+}
+
+.scan-log-skipped { opacity: 0.55; }
+.scan-log-skipped .scan-log-mark { color: var(--color-text-muted, #8a8f9c); }
+
+.scan-log-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-log-price {
+  font-variant-numeric: tabular-nums;
+  color: var(--color-accent-green, #48bb78);
+}
+
+/* Confidence tiers drive behaviour, so they get distinct colours rather
+   than one generic status style. */
+.conf-exact { color: var(--color-accent-green, #48bb78); font-weight: 600; }
+.conf-likely { color: var(--color-accent-green, #48bb78); }
+.conf-ambiguous { color: var(--color-warning, #ecc94b); }
+.conf-unknown { color: var(--color-text-muted, #8a8f9c); }
+
+.scan-appraisal { margin-top: 10px; }
+
+.scan-caveats {
+  margin: 8px 0 0 0;
+  padding-left: 16px;
+  color: var(--color-text-muted, #8a8f9c);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.scan-caveats li { margin-bottom: 4px; }
+
+/* ============  v0.11.0: phone scanning over Tailscale  ============ */
+
+.phone-share-grid {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+/* White quiet-zone around the QR — phone cameras struggle to lock onto a
+   code sitting directly on a dark background. */
+.phone-qr {
+  background: #fff;
+  padding: 8px;
+  border-radius: var(--radius, 6px);
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.phone-share-detail { flex: 1; min-width: 260px; }
+
+#phone-url {
+  width: 100%;
+  font-family: 'Consolas', monospace;
+  font-size: 0.82rem;
+  background: var(--color-bg, #0f1117);
+  color: var(--color-text, #e4e6eb);
+  border: 1px solid var(--color-border, #2d3142);
+  padding: 8px;
+  border-radius: 4px;
+}
+
+#phone-status-card > div { margin-bottom: 4px; }
+#phone-status-card > div:last-child { margin-bottom: 0; }
+
+/* ============  banner button overlap fix  ============ */
+
+/* `.banner-close` is absolutely positioned so a lone "×" can sit in the
+   banner's right edge. But inside `.banner-actions` — which is itself
+   absolutely positioned at the SAME right/top — it anchors to that box and
+   lands on top of its sibling button rather than flowing beside it.
+   Reported as "Update everything and Later overlapping".
+   Inside a flex row it must be an ordinary flex item. */
+.banner-actions .banner-close {
+  position: static;
+  transform: none;
+  right: auto;
+  top: auto;
+}
+
+/* A text "Later" needs button metrics, not the 1.3rem glyph sizing the "×"
+   was given. */
+.banner-actions .banner-close {
+  font-size: 0.85rem;
+  line-height: 1.4;
+  padding: 5px 12px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius, 6px);
+  white-space: nowrap;
+}

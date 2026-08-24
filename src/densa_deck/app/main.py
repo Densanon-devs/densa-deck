@@ -61,7 +61,159 @@ def run(debug: bool = False):
         api.close()
 
     window.events.closing += _on_closing
-    webview.start(debug=debug)
+
+    # Bring phone scanning back up if it was on when the app last closed.
+    # Without this, the phone is paired but nothing is listening, so scanning
+    # from a shop still needs a trip to the desktop — which is the situation
+    # persistent pairing exists to remove. Failure here is never fatal: the
+    # desktop app works perfectly well with no phone attached.
+    try:
+        api.start_phone_bridge_if_enabled()
+    except Exception as exc:                                  # pragma: no cover
+        print(f"Phone scanning could not start: {exc}", file=sys.stderr)
+
+    # Window + taskbar icon.
+    #
+    # pywebview's `start(icon=...)` is documented "Supported only on GTK/QT",
+    # so on Windows it does nothing at all. The winforms backend instead does:
+    #
+    #     icon_handle = windll.shell32.ExtractIconW(handle, sys.executable, 0)
+    #
+    # i.e. it takes the icon from whatever executable is hosting it. Frozen,
+    # that's densa-deck.exe and we get the right icon for free. Run from
+    # source it's python.exe — which is why a dev run wears the Python icon
+    # no matter what we pass to start().
+    #
+    # So pass `icon` for GTK/QT where it works, and on Windows overwrite the
+    # form's icon ourselves once the window exists.
+    _set_windows_app_id()
+    icon = _icon_path()
+
+    def _after_start():
+        _apply_windows_icon(icon)
+
+    try:
+        if icon:
+            webview.start(_after_start, debug=debug, icon=str(icon))
+        else:
+            webview.start(_after_start, debug=debug)
+    except TypeError:
+        # Older pywebview builds don't accept `icon`. Losing it is not worth
+        # failing to launch over.
+        webview.start(_after_start, debug=debug)
+
+
+def _apply_windows_icon(icon_path, *, timeout: float = 8.0) -> bool:
+    """Force our icon onto the window via Win32, after the form exists.
+
+    winforms sets `Form.Icon` from `sys.executable` while constructing the
+    window, so anything we do beforehand is overwritten. WM_SETICON on the
+    live HWND is the only thing that sticks, and it drives both the titlebar
+    and the taskbar button.
+
+    Polls for the window because `start()`'s callback can fire fractionally
+    before the HWND is realised. Returns whether it succeeded — cosmetic, so
+    every failure path is swallowed rather than raised.
+    """
+    if sys.platform != "win32" or not icon_path:
+        return False
+    try:
+        import ctypes
+        import time
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        WM_SETICON, ICON_SMALL, ICON_BIG = 0x0080, 0, 1
+        IMAGE_ICON, LR_LOADFROMFILE, LR_DEFAULTSIZE = 1, 0x00000010, 0x00000040
+
+        user32.FindWindowW.restype = wintypes.HWND
+        deadline = time.time() + timeout
+        hwnd = 0
+        while time.time() < deadline:
+            # The title carries the version, so match on the class pywebview
+            # uses rather than an exact caption.
+            hwnd = user32.FindWindowW("WindowsForms10.Window.8.app.0.141b42a_r6_ad1", None)
+            if not hwnd:
+                hwnd = _find_window_by_prefix("Densa Deck")
+            if hwnd:
+                break
+            time.sleep(0.15)
+        if not hwnd:
+            return False
+
+        applied = False
+        for size_flag, wparam in ((16, ICON_SMALL), (32, ICON_BIG)):
+            handle = user32.LoadImageW(None, str(icon_path), IMAGE_ICON,
+                                       size_flag, size_flag,
+                                       LR_LOADFROMFILE | LR_DEFAULTSIZE)
+            if handle:
+                user32.SendMessageW(hwnd, WM_SETICON, wparam, handle)
+                applied = True
+        return applied
+    except Exception:
+        return False
+
+
+def _find_window_by_prefix(prefix: str) -> int:
+    """First top-level window whose title starts with `prefix`, or 0."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _enum(hwnd, _lparam):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value.startswith(prefix):
+                    found.append(hwnd)
+                    return False
+            return True
+
+        user32.EnumWindows(_enum, 0)
+        return found[0] if found else 0
+    except Exception:
+        return 0
+
+
+def _icon_path():
+    """Locate densa-deck.ico in a source checkout or a frozen bundle."""
+    here = Path(__file__).resolve()
+    candidates = [
+        # Frozen: PyInstaller unpacks datas next to the executable.
+        Path(getattr(sys, "_MEIPASS", "")) / "assets" / "densa-deck.ico",
+        # Source checkout: src/densa_deck/app/main.py -> repo root/assets
+        here.parents[3] / "assets" / "densa-deck.ico",
+        here.parent / "static" / "densa-deck.ico",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate and candidate.is_file():
+                return candidate
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _set_windows_app_id() -> None:
+    """Give Windows an explicit AppUserModelID.
+
+    Without one, a python.exe-hosted window inherits the interpreter's
+    identity: the taskbar shows the Python icon and groups Densa Deck with
+    every other Python process. Harmless no-op off Windows.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "Densanon.DensaDeck")
+    except Exception:
+        pass  # cosmetic only — never block launch
 
 
 def _print_install_hint():

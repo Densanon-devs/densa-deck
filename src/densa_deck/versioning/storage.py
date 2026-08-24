@@ -46,6 +46,14 @@ class DeckSnapshot:
 
     version_id: int = 0
     deck_id: str = ""
+    # name/format live on the `decks` row, not on the version row, but every
+    # consumer of a snapshot needs them: analyst compare, duel, and the CLI
+    # deck loader all read snap.name / snap.format. Leaving them off made
+    # those paths raise AttributeError, which @_safe swallowed into a generic
+    # {ok: false} — so two shipped features failed for every user on every
+    # call with no visible cause. Joined in by the getters below.
+    name: str = ""
+    format: str = ""
     version_number: int = 0
     saved_at: str = ""
     notes: str = ""
@@ -176,8 +184,12 @@ class VersionStore:
         """Load a specific version of a deck."""
         conn = self.connect()
         row = conn.execute(
-            """SELECT version_id, version_number, saved_at, notes, decklist_json, scores_json, metrics_json
-               FROM deck_versions WHERE deck_id = ? AND version_number = ?""",
+            """SELECT v.version_id, v.version_number, v.saved_at, v.notes,
+                      v.decklist_json, v.scores_json, v.metrics_json,
+                      d.name, d.format
+               FROM deck_versions v
+               LEFT JOIN decks d ON d.deck_id = v.deck_id
+               WHERE v.deck_id = ? AND v.version_number = ?""",
             (deck_id, version_number),
         ).fetchone()
         if not row:
@@ -188,9 +200,13 @@ class VersionStore:
         """Load the most recent version of a deck."""
         conn = self.connect()
         row = conn.execute(
-            """SELECT version_id, version_number, saved_at, notes, decklist_json, scores_json, metrics_json
-               FROM deck_versions WHERE deck_id = ?
-               ORDER BY version_number DESC LIMIT 1""",
+            """SELECT v.version_id, v.version_number, v.saved_at, v.notes,
+                      v.decklist_json, v.scores_json, v.metrics_json,
+                      d.name, d.format
+               FROM deck_versions v
+               LEFT JOIN decks d ON d.deck_id = v.deck_id
+               WHERE v.deck_id = ?
+               ORDER BY v.version_number DESC LIMIT 1""",
             (deck_id,),
         ).fetchone()
         if not row:
@@ -201,9 +217,13 @@ class VersionStore:
         """Load all versions of a deck."""
         conn = self.connect()
         rows = conn.execute(
-            """SELECT version_id, version_number, saved_at, notes, decklist_json, scores_json, metrics_json
-               FROM deck_versions WHERE deck_id = ?
-               ORDER BY version_number ASC""",
+            """SELECT v.version_id, v.version_number, v.saved_at, v.notes,
+                      v.decklist_json, v.scores_json, v.metrics_json,
+                      d.name, d.format
+               FROM deck_versions v
+               LEFT JOIN decks d ON d.deck_id = v.deck_id
+               WHERE v.deck_id = ?
+               ORDER BY v.version_number ASC""",
             (deck_id,),
         ).fetchall()
         return [_row_to_snapshot(deck_id, r) for r in rows]
@@ -281,9 +301,14 @@ def diff_versions(a: DeckSnapshot, b: DeckSnapshot) -> DeckDiff:
 
 def _row_to_snapshot(deck_id: str, row: tuple) -> DeckSnapshot:
     dl = json.loads(row[4])
+    # Rows from the joined getters carry name/format at 7/8. Tolerate shorter
+    # rows so any other caller degrades to empty strings rather than blowing
+    # up on an index — the old failure mode was invisible enough already.
     return DeckSnapshot(
         version_id=row[0],
         deck_id=deck_id,
+        name=(row[7] if len(row) > 7 and row[7] else ""),
+        format=(row[8] if len(row) > 8 and row[8] else ""),
         version_number=row[1],
         saved_at=row[2],
         notes=row[3],

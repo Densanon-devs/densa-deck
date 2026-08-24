@@ -54,6 +54,12 @@ FEATURE_TIERS: dict[str, Tier] = {
     "compare_decks": Tier.PRO,       # Two-deck analyst narration
     "playgroup": Tier.FREE,          # Pod profile CRUD — local-only data
     "iterate": Tier.FREE,            # Rule-engine proposals + preview — no LLM
+    # Your own collection is your data, not our card data — same call as
+    # playgroup. Free ownership tracking is also what makes the app sticky;
+    # the money layer on top (portfolio analytics, scanner, reseller P&L) is
+    # where Pro earns its keep. Every gate stays a capability gate, never a
+    # gate on card access or anything resembling in-game power.
+    "collection": Tier.FREE,
 }
 
 # Map CLI command names to feature keys
@@ -86,6 +92,8 @@ COMMAND_FEATURES: dict[str, str] = {
     "rulings": "card_search",    # rulings are card data — never paywalled
     "playgroup": "playgroup",    # pod CRUD — always available
     "iterate": "iterate",        # iteration loop — propose/preview/history
+    "collection": "collection",  # physical collection CRUD — local-only data
+    "phone": "collection",       # phone scanning — same local-only data
 }
 
 _CONFIG_PATH = Path.home() / ".densa-deck" / "config.json"

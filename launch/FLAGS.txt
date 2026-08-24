@@ -1,0 +1,39 @@
+========================================================================
+FLAGS — read before posting. Verify-or-fix items only.
+========================================================================
+
+BLOCKER (fix before you drive ANY traffic):
+• The live product page (toolkit.densanon.com/densa-deck.html) STILL advertises
+  the expired LAUNCH promo: "$39.99 launch … use code LAUNCH … ends May 1."
+  Today is 2026-07-07 — that coupon is 2+ months dead. A Reddit clicker will
+  land on a page pushing a code that fails at Stripe checkout = worst-possible
+  first impression. FIX EITHER WAY before posting:
+    (a) update the page to plain "$49.99 one-time" (my drafts assume this), OR
+    (b) re-issue the LAUNCH coupon in Stripe with a new end date + refresh the
+        "ends" date on the page, and I'll switch the drafts to lead with the
+        promo price. Your call — but don't post over a stale promo.
+
+COULD-NOT-VERIFY (Reddit blocked from my fetch tools):
+• I could NOT read either sub's live rules. Both drafts have a "READ BEFORE
+  POSTING" compliance block up top written to the STRICTEST plausible reading.
+  You must confirm r/EDH's current self-promo/mod-approval rule yourself before
+  a top-level post — it is the real risk of the two.
+
+VERIFIED against the repo (v0.5.0), safe to claim:
+• $49.99 one-time; MCP server runs on the FREE tier (17 free tools / 11 Pro);
+  free desktop app = all free-tier features, no license; combo detection is free
+  (Commander Spellbook); goldfish/gauntlet/analyst/coach/save/diff are Pro.
+  Windows-only, unsigned (SmartScreen). All claims in the drafts trace to this.
+
+ONE CLAIM I DELIBERATELY DID NOT MAKE (ambiguous in the repo):
+• The ranked "what cards should I ADD" suggester is Pro on the MCP surface
+  (suggest_deckbuild_additions gates on Pro), but the v0.5.0 desktop "Suggest"
+  modal is described as free. To avoid overclaiming, the drafts only sell the
+  clearly-free add hook — NEAR-MISS COMBOS ("add this 1 card to unlock a combo").
+  If you confirm the desktop budget-suggest ranker is truly free, you can add
+  "free budget-aware add suggestions" to the free list — but verify first.
+
+MINOR:
+• Drafts say "17 free / 11 Pro MCP tools" — matches tools.py exactly today.
+  If you curate the surface with --tools for the demo, the count differs; the
+  posts describe the default full surface.

@@ -136,6 +136,10 @@ function switchView(view) {
   if (view === "decks") refreshDeckList();
   if (view === "settings") refreshSettings();
   if (view === "coach") refreshCoachView();
+  // collection.js owns this view; it registers the hook on load so app.js
+  // doesn't need to know anything about it.
+  if (view === "collection" && window.__collectionActivate) window.__collectionActivate();
+  if (view === "scan" && window.__scanActivate) window.__scanActivate();
 }
 
 // Exposed for tour.js — lets a tour step switch tabs before highlighting.
@@ -227,13 +231,13 @@ async function bootstrap() {
     });
   });
 
-  // Global keyboard shortcuts: Ctrl+1..5 switches tabs.
+  // Global keyboard shortcuts: Ctrl+1..7 switches tabs.
   // MUST stay in sync with the .app-tabs nav order in index.html — adding
   // a tab in HTML without bumping this list silently shifts every later
   // shortcut to the wrong view.
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-      const views = ["analyze", "build", "decks", "coach", "settings"];
+      const views = ["analyze", "build", "collection", "scan", "decks", "coach", "settings"];
       const idx = parseInt(e.key, 10);
       if (idx >= 1 && idx <= views.length) {
         e.preventDefault();
@@ -486,6 +490,9 @@ async function maybePromptStaleCombos() {
     if (localStorage.getItem(dismissKey)) return;
   } catch (e) { /* localStorage may be disabled — fall through and prompt anyway */ }
 
+  // RETIRED — same reason as the card-database banner above. Combo
+  // freshness is one of the items the content banner reports.
+  if (!window.__legacyBannersEnabled) return;
   els.combo_stale_banner_body.innerHTML =
     `<strong>Combo data is ${Math.floor(daysAgo)} days old.</strong> ` +
     `Commander Spellbook adds new variants weekly — refresh to keep detection accurate.`;
@@ -556,6 +563,12 @@ function showCardDbUpdateBanner(info, opts) {
   const body = (opts && opts.autoMode)
     ? `<strong>Updating card database in background</strong>${size}${when}`
     : `<strong>Card database update available</strong>${size}${when}`;
+  // RETIRED. The consolidated content banner (content-update.js) reports
+  // card-database updates alongside everything else behind one button.
+  // Leaving this one live meant three banners stacked on launch, each with
+  // its own "Later" — exactly the pick-the-right-button problem the
+  // consolidated banner exists to remove.
+  if (!window.__legacyBannersEnabled) return;
   els.card_db_update_banner_body.innerHTML = body;
   // Hide the "Update now" button when we're already updating automatically.
   if (els.card_db_update_now_btn) {
@@ -1756,6 +1769,7 @@ async function refreshSettings() {
     await loadComboStatus();
     await loadRulingsStatus();
     await loadMcpStatus();
+  if (window.__phonePanelRefresh) await window.__phonePanelRefresh();
   } catch (e) {
     toast("Settings refresh failed: " + e.message, "error");
   }

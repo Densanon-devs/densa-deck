@@ -92,6 +92,14 @@ class AppApi:
             "ingest": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
             "analyst_pull": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
             "combo_refresh": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
+            # Seeded so the Collection view can poll before a download has
+            # ever started — _read_progress indexes directly and would
+            # otherwise KeyError on the first poll.
+            "printings": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
+            "scan_install": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
+            # One-click "bring everything up to date" — the user should not
+            # have to notice what is missing or pick the right button.
+            "content_update": {"pct": 0, "message": "idle", "done": True, "error": None, "running": False},
         }
         # Lazily resolved by _get_combo_store() on first combo call.
         self._combo_store = None
@@ -235,6 +243,16 @@ class AppApi:
         # next checkpoint so we don't yank the DB / model file out from
         # under an in-flight write.
         self._shutdown_event.set()
+        # Stop sharing to the phone first. Sharing must never outlive the
+        # window the user closed — a listening socket and a live pairing
+        # token with no visible UI is exactly the kind of thing nobody
+        # remembers is running.
+        bridge = getattr(self, "_phone_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
         # Best-effort join of any live background threads. Bounded to a
         # generous-but-finite timeout so a stuck thread can't prevent the
         # app from closing — the user's Alt-F4 still wins, we just get one
@@ -665,7 +683,18 @@ class AppApi:
         """Delete a saved deck + all its versions. Destructive — the frontend
         should confirm before calling."""
         self._get_vstore().delete_deck(deck_id)
-        return {"deleted": deck_id}
+        # Free any physical copies earmarked for it. Without this the cards
+        # stay allocated to a deck that no longer exists and read as
+        # permanently unavailable, with nothing in the UI to explain why.
+        freed = 0
+        try:
+            from densa_deck.collection.allocation import clear_deck_allocations
+            freed = clear_deck_allocations(self._get_collection_store(), deck_id)
+        except Exception:
+            # Collection is an optional layer; never let it block a deletion
+            # the user explicitly asked for.
+            freed = 0
+        return {"deleted": deck_id, "copies_freed": freed}
 
     @_safe
     def diff_deck_versions(self, deck_id: str, version_a: int, version_b: int) -> dict:
@@ -1104,6 +1133,18 @@ class AppApi:
 
         limit = min(int(query.get("limit") or 60), 120)
         offset = max(int(query.get("offset") or 0), 0)
+
+        # Ownership filtering runs in SQL against the attached collection
+        # database, so "owned only" narrows the whole 34k-card table rather
+        # than just the page you happen to be looking at. If the attach fails
+        # (no collection yet), fall through unfiltered instead of returning
+        # an empty page the user can't explain.
+        ownership = query.get("ownership") or None
+        if ownership in ("owned", "unowned"):
+            store = self._get_collection_store()
+            if not db.attach_collection(store.db_path):
+                ownership = None
+
         cards, total = db.search_structured(
             name=query.get("name"),
             colors=query.get("colors"),
@@ -1115,6 +1156,7 @@ class AppApi:
             rarity=query.get("rarity"),
             max_price=query.get("max_price"),
             set_code=query.get("set_code"),
+            ownership=ownership,
             limit=limit,
             offset=offset,
         )
@@ -1651,7 +1693,11 @@ class AppApi:
     def _get_iteration_store(self):
         if getattr(self, "_iter_store", None) is None:
             from densa_deck.iteration import IterationStore
-            self._iter_store = IterationStore()
+            # Scoped off the card DB path like every other store. Without
+            # this, tests and custom installs wrote iterations.db into the
+            # real ~/.densa-deck.
+            path = Path(self._db_path).parent / "iterations.db" if self._db_path else None
+            self._iter_store = IterationStore(db_path=path) if path else IterationStore()
         return self._iter_store
 
     @_safe
@@ -1859,7 +1905,9 @@ class AppApi:
         """
         if getattr(self, "_pg_store", None) is None:
             from densa_deck.playgroup import PlaygroupStore
-            self._pg_store = PlaygroupStore()
+            # Same scoping fix as the iteration store above.
+            path = Path(self._db_path).parent / "playgroup.db" if self._db_path else None
+            self._pg_store = PlaygroupStore(db_path=path) if path else PlaygroupStore()
         return self._pg_store
 
     @staticmethod
@@ -2276,6 +2324,1348 @@ class AppApi:
             "attribution": RULINGS_ATTRIBUTION,
         }
 
+    # ------------------------------------------------------------- collection
+
+    def _get_collection_store(self):
+        """CollectionStore scoped to this AppApi, beside the card DB.
+
+        Scoped off `self._db_path` rather than defaulting to the real home
+        directory so tests and custom installs stay isolated — the same
+        mistake `_get_iteration_store` and `_get_playgroup_store` currently
+        make, which is why their tests leak into ~/.densa-deck.
+        """
+        from densa_deck.collection import CollectionStore
+        if getattr(self, "_collection_store", None) is None:
+            path = Path(self._db_path).parent / "collection.db" if self._db_path else None
+            self._collection_store = CollectionStore(db_path=path)
+        return self._collection_store
+
+    def _enrich_collection_items(self, items: list) -> list[dict]:
+        """Attach set / price data from card_printings to owned stacks.
+
+        Enrichment is best-effort on purpose. A stack whose printing isn't in
+        the local catalogue — because printings were never downloaded, or the
+        printing is newer than the last sync — still renders with everything
+        the collection itself knows (name, quantity, finish, condition). The
+        collection is usable before any printing download has happened.
+        """
+        db = self._get_db()
+        out: list[dict] = []
+        for item in items:
+            printing = None
+            try:
+                printing = db.get_printing(item.printing_id)
+            except Exception:
+                printing = None
+
+            unit_price = None
+            if printing:
+                # Value the finish you actually own, not whichever price
+                # happened to be non-null first.
+                if item.finish.value == "foil":
+                    unit_price = printing.get("price_usd_foil")
+                elif item.finish.value == "etched":
+                    unit_price = printing.get("price_usd_etched")
+                else:
+                    unit_price = printing.get("price_usd")
+
+            item.unit_price_usd = unit_price
+            if printing:
+                item.set_code = printing.get("set_code") or ""
+                item.set_name = printing.get("set_name") or ""
+                item.collector_number = printing.get("collector_number") or ""
+                item.rarity = printing.get("rarity") or ""
+
+            out.append({
+                "item_id": item.item_id,
+                "printing_id": item.printing_id,
+                "oracle_id": item.oracle_id,
+                "card_name": item.card_name,
+                "finish": item.finish.value,
+                "condition": item.condition.value,
+                "language": item.language,
+                "quantity": item.quantity,
+                "location": item.location,
+                "notes": item.notes,
+                "set_code": item.set_code,
+                "set_name": item.set_name,
+                "collector_number": item.collector_number,
+                "rarity": item.rarity,
+                "unit_price_usd": unit_price,
+                "condition_adjusted_price": item.condition_adjusted_price,
+                "stack_value_usd": item.stack_value_usd,
+                "image_url": _image_url_safe(item.printing_id),
+                "known_printing": printing is not None,
+            })
+        return out
+
+    @_safe
+    def get_collection_status(self) -> dict:
+        """Collection counts plus the state of the printings catalogue.
+
+        Free-tier. Never triggers a download — the Collection view renders an
+        opt-in prompt from `printings.ready` being False.
+        """
+        from densa_deck.data.printings import printings_status
+        store = self._get_collection_store()
+        summary = store.summary()
+        return {
+            "collection": {
+                "total_cards": summary.total_cards,
+                "unique_cards": summary.unique_cards,
+                "unique_printings": summary.unique_printings,
+                "by_finish": summary.by_finish,
+                "by_condition": summary.by_condition,
+            },
+            "printings": printings_status(self._get_db()),
+            "locations": store.locations(),
+        }
+
+    @_safe
+    def printings_download_start(self, force: bool = False) -> dict:
+        """Begin the opt-in printing/price download in the background.
+
+        `force=True` re-runs against a populated catalogue, which is also how
+        prices get refreshed — the same bulk file carries both.
+        """
+        with self._progress_lock:
+            current = self._progress.get("printings", {})
+            existing = self._threads.get("printings")
+            if current.get("running") or (existing and existing.is_alive()):
+                return {"ok": False, "error": "Printing download already running"}
+            self._progress["printings"] = {
+                "pct": 0, "message": "Starting...", "done": False,
+                "error": None, "running": True,
+            }
+            t = threading.Thread(target=self._do_printings_download,
+                                 args=(force,), daemon=True)
+            self._threads["printings"] = t
+            t.start()
+        return {"ok": True, "started": True}
+
+    @_safe
+    def printings_download_progress(self) -> dict:
+        return self._read_progress("printings")
+
+    def _do_printings_download(self, force: bool = False):
+        import asyncio
+
+        from densa_deck.data.printings import ingest_printings
+        db = self._get_db()
+        loop = asyncio.new_event_loop()
+        try:
+            def on_progress(pct: int, message: str):
+                if self._shutdown_event.is_set():
+                    return
+                self._update_progress("printings", pct=pct, message=message)
+
+            result = loop.run_until_complete(
+                ingest_printings(db, force=force, progress=on_progress)
+            )
+            count = result.get("printings", 0)
+            msg = (f"Already installed ({count:,} printings)."
+                   if result.get("skipped")
+                   else f"{count:,} printings installed.")
+            self._update_progress("printings", pct=100, message=msg,
+                                  done=True, running=False)
+        except Exception as exc:
+            self._update_progress("printings", message="Printing download failed",
+                                  error=str(exc), done=True, running=False)
+        finally:
+            loop.close()
+
+    @_safe
+    def printings_remove(self) -> dict:
+        """Delete the printing catalogue — opting back out.
+
+        Your collection is untouched: it lives in a different database and
+        keeps every card name, quantity, finish and condition. Only the set
+        and price detail goes dark until you re-download.
+        """
+        from densa_deck.data.printings import remove_printings
+        removed = remove_printings(self._get_db())
+        return {"removed": removed}
+
+    @_safe
+    def list_collection(self, query: dict | None = None) -> dict:
+        """Owned stacks, filtered, sorted and paginated. Free-tier.
+
+        Keys: name_like, finish, condition, location, set_code, rarity,
+        min_price, max_price, unpriced_only, sort, limit (capped at 300),
+        offset.
+
+        Runs through the price-aware search so filtering and sorting happen
+        in SQL across both databases rather than over a fetched page — sorting
+        by value only means anything if it sorts the whole collection.
+        """
+        from densa_deck.collection.query import search_collection
+        query = query or {}
+        store = self._get_collection_store()
+        limit = min(int(query.get("limit", 100) or 100), 300)
+        offset = int(query.get("offset", 0) or 0)
+
+        items, total, page_totals = search_collection(
+            store, self._get_db(),
+            name_like=query.get("name_like") or None,
+            finish=query.get("finish") or None,
+            condition=query.get("condition") or None,
+            location=query.get("location") or None,
+            set_code=query.get("set_code") or None,
+            rarity=query.get("rarity") or None,
+            min_price=_opt_float(query.get("min_price")),
+            max_price=_opt_float(query.get("max_price")),
+            unpriced_only=bool(query.get("unpriced_only")),
+            sort=query.get("sort") or "name",
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "items": self._enrich_collection_items(items),
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "page_value_usd": page_totals["value_usd"],
+            "page_copies": page_totals["copies"],
+            "page_unpriced": page_totals["unpriced_stacks"],
+        }
+
+    @_safe
+    def get_collection_value(self, capture: bool = True) -> dict:
+        """What the whole collection is worth, plus how it has moved.
+
+        `capture=True` records today's prices for owned printings before
+        valuing. That is how price history accumulates — no scheduler, no
+        background job; opening the Collection tab is the trigger. The write
+        is idempotent per day, so opening it five times still stores one
+        snapshot.
+
+        This matters because price history is the one thing here that cannot
+        be rebuilt: Scryfall serves today's prices and nothing else, so a day
+        that isn't captured is gone.
+        """
+        from densa_deck.collection.prices import (
+            capture_price_snapshot,
+            value_collection,
+            value_deltas,
+        )
+        store = self._get_collection_store()
+        db = self._get_db()
+
+        captured = 0
+        if capture:
+            try:
+                captured = capture_price_snapshot(store, db)
+            except Exception:
+                # Never let history-keeping break the valuation the user
+                # actually asked for.
+                captured = 0
+
+        value = value_collection(store, db)
+        value["captured_today"] = captured
+        value["history"] = value_deltas(store, db)
+        return value
+
+    @_safe
+    def get_collection_sets(self, limit: int = 100) -> dict:
+        """Sets represented in the collection, most-owned first."""
+        from densa_deck.collection.query import collection_sets
+        return {"sets": collection_sets(self._get_collection_store(),
+                                        self._get_db(), limit=min(int(limit), 500))}
+
+    @_safe
+    def get_price_history(self, printing_id: str, finish: str = "nonfoil",
+                          limit: int = 365) -> dict:
+        """Captured price points for one printing, oldest first.
+
+        Empty until snapshots have accumulated — this is local history, not a
+        backfill. Scryfall does not serve past prices.
+        """
+        from densa_deck.collection.prices import price_history_for_printing
+        points = price_history_for_printing(
+            self._get_collection_store(), printing_id, finish, limit=min(int(limit), 2000))
+        return {"printing_id": printing_id, "finish": finish,
+                "points": points, "count": len(points)}
+
+    @_safe
+    def get_card_printings(self, card_name: str) -> dict:
+        """Every printing of a card, annotated with how many you own.
+
+        This is the "View printings" drill-down: one row per physical version,
+        so the user picks the actual object they have rather than a card.
+        """
+        db = self._get_db()
+        store = self._get_collection_store()
+        printings = db.printings_for_card(card_name)
+        if not printings:
+            return {
+                "card_name": card_name, "printings": [], "owned_total": 0,
+                "catalogue_ready": db.printing_count() > 0,
+            }
+
+        owned_by_printing: dict[str, int] = {}
+        for pid in {p["printing_id"] for p in printings}:
+            items, _ = store.list_items(printing_id=pid, limit=300)
+            for item in items:
+                owned_by_printing[pid] = owned_by_printing.get(pid, 0) + item.quantity
+
+        rows = []
+        for p in printings:
+            rows.append({
+                "printing_id": p["printing_id"],
+                "oracle_id": p["oracle_id"],
+                "name": p["name"],
+                "set_code": p["set_code"],
+                "set_name": p["set_name"],
+                "collector_number": p["collector_number"],
+                "rarity": p["rarity"],
+                "released_at": p["released_at"],
+                # Which finishes this printing was actually made in. The UI
+                # uses it to stop you recording an etched copy of a printing
+                # that never existed in etched.
+                "finishes": [f for f in (p["finishes"] or "").split(",") if f],
+                "price_usd": p["price_usd"],
+                "price_usd_foil": p["price_usd_foil"],
+                "price_usd_etched": p["price_usd_etched"],
+                "owned": owned_by_printing.get(p["printing_id"], 0),
+                "image_url": _image_url_safe(p["printing_id"]),
+            })
+        return {
+            "card_name": printings[0]["name"],
+            "printings": rows,
+            "owned_total": sum(owned_by_printing.values()),
+            "catalogue_ready": True,
+        }
+
+    @_safe
+    def add_to_collection(
+        self,
+        printing_id: str,
+        card_name: str,
+        quantity: int = 1,
+        finish: str = "nonfoil",
+        condition: str = "NM",
+        language: str = "en",
+        location: str = "",
+        notes: str = "",
+        oracle_id: str = "",
+    ) -> dict:
+        """Add copies of a printing. Negative quantity removes. Free-tier."""
+        store = self._get_collection_store()
+        db = self._get_db()
+
+        # Fill in identity from the catalogue when the caller didn't supply
+        # it, so a stack always carries enough to stay meaningful on its own.
+        if not oracle_id or not card_name:
+            printing = db.get_printing(printing_id)
+            if printing:
+                oracle_id = oracle_id or printing.get("oracle_id", "")
+                card_name = card_name or printing.get("name", "")
+
+        item = store.add_copies(
+            printing_id, card_name, quantity=int(quantity), oracle_id=oracle_id,
+            finish=finish, condition=condition, language=language,
+            location=location, notes=notes,
+        )
+        return {
+            "item_id": item.item_id,
+            "card_name": item.card_name,
+            "quantity": item.quantity,
+            "owned_total": store.owned_count(item.card_name),
+        }
+
+    @_safe
+    def set_collection_item_quantity(self, item_id: int, quantity: int) -> dict:
+        store = self._get_collection_store()
+        if not store.set_item_quantity(int(item_id), int(quantity)):
+            return {"ok": False, "error": "No such collection item.",
+                    "error_type": "NotFound"}
+        return {"item_id": int(item_id), "quantity": max(0, int(quantity))}
+
+    @_safe
+    def update_collection_item(self, item_id: int, fields: dict) -> dict:
+        store = self._get_collection_store()
+        if not store.update_item(int(item_id), **(fields or {})):
+            return {"ok": False, "error": "Nothing updated.", "error_type": "NotFound"}
+        return {"item_id": int(item_id), "updated": True}
+
+    @_safe
+    def delete_collection_item(self, item_id: int) -> dict:
+        store = self._get_collection_store()
+        return {"deleted": store.delete_item(int(item_id))}
+
+    @_safe
+    def get_card_ownership(self, card_names: list[str]) -> dict:
+        """Owned / committed / available for a batch of card names.
+
+        One call for a whole search page or decklist — the badge renderer
+        would otherwise fire a request per tile.
+        """
+        from densa_deck.collection import ownership_rows
+        store = self._get_collection_store()
+        rows = ownership_rows(store, self._get_vstore(), names=list(card_names or []))
+        return {
+            "ownership": {
+                key: {"owned": r.owned, "committed": r.committed,
+                      "available": r.available, "shortfall": r.shortfall}
+                for key, r in rows.items()
+            }
+        }
+
+    @_safe
+    def get_deck_ownership(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Unnamed Deck",
+        deck_id: str | None = None,
+    ) -> dict:
+        """Owned / missing / blocked for a whole decklist. Free-tier.
+
+        `deck_id` excludes the deck from its own committed totals — without
+        it, a saved deck reports every one of its own cards as unavailable.
+        """
+        from densa_deck.collection import ownership_for_deck
+        from densa_deck.models import Deck
+
+        # Parsed but deliberately NOT resolved. Ownership is a name-level
+        # question — it reads card_name and quantity and nothing else — so
+        # routing it through _build_deck would gate "do I own these cards"
+        # on the 250 MB oracle ingest for no benefit. The collection has to
+        # work on a fresh install, before any card data exists.
+        if not (decklist_text or "").strip():
+            return {"ok": False, "error": "Decklist is empty."}
+        entries = parse_auto(decklist_text)
+        if not entries:
+            return {"ok": False, "error": "No cards parsed from the decklist."}
+        deck = Deck(name=name, entries=entries)
+
+        store = self._get_collection_store()
+        result = ownership_for_deck(deck, store, self._get_vstore(), deck_id=deck_id)
+        result["deck_name"] = deck.name
+        return result
+
+    @_safe
+    def get_deck_collection_value(
+        self,
+        decklist_text: str,
+        format_: str | None = None,
+        name: str = "Unnamed Deck",
+        deck_id: str | None = None,
+    ) -> dict:
+        """Deck value, build value and cost to complete. Free-tier.
+
+        Three different numbers on purpose:
+          deck_value  — what your copies are worth (insurance)
+          build_value — cheapest legal printings (what it costs someone else)
+          cost_to_complete — cheapest printings of what you're missing (the list)
+
+        Like get_deck_ownership, this parses without resolving so it works
+        before the oracle card database is installed.
+        """
+        from densa_deck.collection.deck_value import shopping_list_text, value_deck
+        from densa_deck.models import Deck
+
+        if not (decklist_text or "").strip():
+            return {"ok": False, "error": "Decklist is empty."}
+        entries = parse_auto(decklist_text)
+        if not entries:
+            return {"ok": False, "error": "No cards parsed from the decklist."}
+
+        result = value_deck(
+            Deck(name=name, entries=entries),
+            self._get_collection_store(),
+            self._get_db(),
+            self._get_vstore(),
+            deck_id=deck_id,
+        )
+        result["shopping_list_text"] = shopping_list_text(result)
+        return result
+
+    # -------------------------------------------------------- content upkeep
+
+    @_safe
+    def get_content_status(self) -> dict:
+        """Everything that is missing, stale, or half-finished, in one call.
+
+        The app knows perfectly well when its data needs attention — the user
+        should not have to notice, work out which of four buttons applies, and
+        click the right one. This is the single question behind a single
+        "Update everything" action.
+
+        Read-only. Deliberately fails soft per item: one unreachable service
+        must not hide the other three.
+        """
+        from densa_deck.data.printings import printings_status
+
+        db = self._get_db()
+        items: list[dict] = []
+
+        # --- card database -------------------------------------------------
+        count = db.card_count()
+        if count == 0:
+            items.append({"key": "cards", "label": "Card database",
+                          "needed": True, "severity": "required",
+                          "detail": "Not installed — nothing works without it.",
+                          "size_mb": 250})
+        else:
+            try:
+                upd = self.check_card_db_update()
+                upd = upd.get("data", upd) if isinstance(upd, dict) else {}
+                if upd.get("available"):
+                    items.append({"key": "cards", "label": "Card database",
+                                  "needed": True, "severity": "update",
+                                  "detail": "A newer card set is available.",
+                                  "size_mb": upd.get("size_mb") or 24})
+            except Exception:
+                pass
+
+        # --- printings + prices --------------------------------------------
+        pr = printings_status(db)
+        if not pr["ready"]:
+            items.append({"key": "printings", "label": "Printings & prices",
+                          "needed": True, "severity": "required",
+                          "detail": "Needed for the Collection and Scan tabs.",
+                          "size_mb": 74})
+        elif pr["prices_stale"]:
+            age = pr["price_age_hours"]
+            items.append({"key": "printings", "label": "Prices",
+                          "needed": True, "severity": "update",
+                          "detail": (f"{age:.0f} hours old." if age is not None
+                                     else "Age unknown."),
+                          "size_mb": 74})
+
+        # --- combos --------------------------------------------------------
+        try:
+            store = self._get_combo_store()
+            combo_count = store.combo_count()
+            partial = store.get_metadata("last_refresh_partial") == "1"
+            if combo_count == 0:
+                items.append({"key": "combos", "label": "Combo data",
+                              "needed": True, "severity": "update",
+                              "detail": "Not downloaded yet.", "size_mb": 12})
+            elif partial:
+                # The case that started this: a rate-limited refresh left a
+                # usable-but-incomplete store. Resuming should be automatic.
+                items.append({"key": "combos", "label": "Combo data",
+                              "needed": True, "severity": "update",
+                              "detail": f"Incomplete — {combo_count:,} saved, "
+                                        f"more to fetch.", "size_mb": 12})
+        except Exception:
+            pass
+
+        return {
+            "items": items,
+            "count": len(items),
+            "required": sum(1 for i in items if i["severity"] == "required"),
+            "total_mb": sum(i.get("size_mb") or 0 for i in items),
+        }
+
+    @_safe
+    def update_all_content_start(self) -> dict:
+        """One click: fetch everything `get_content_status` flagged.
+
+        Runs the needed steps in sequence on one background thread with one
+        progress bar, so the user sees a single operation rather than being
+        made project manager of four downloads.
+        """
+        with self._progress_lock:
+            current = self._progress.get("content_update", {})
+            existing = self._threads.get("content_update")
+            if current.get("running") or (existing and existing.is_alive()):
+                return {"ok": False, "error": "An update is already running."}
+            self._progress["content_update"] = {
+                "pct": 0, "message": "Starting...", "done": False,
+                "error": None, "running": True,
+            }
+            t = threading.Thread(target=self._do_content_update, daemon=True)
+            self._threads["content_update"] = t
+            t.start()
+        return {"ok": True, "started": True}
+
+    @_safe
+    def update_all_content_progress(self) -> dict:
+        return self._read_progress("content_update")
+
+    def _do_content_update(self):
+        """Sequentially bring every flagged item up to date.
+
+        Each step is independent: one failure is reported but does not abort
+        the rest, because a rate-limited combo API should not stop prices from
+        updating.
+        """
+        import asyncio
+
+        status = self.get_content_status()
+        items = status.get("data", status).get("items", [])
+        if not items:
+            self._update_progress("content_update", pct=100,
+                                  message="Everything is already up to date.",
+                                  done=True, running=False)
+            return
+
+        total = len(items)
+        failures: list[str] = []
+
+        for index, item in enumerate(items):
+            base = int((index / total) * 100)
+            span = int(100 / total)
+            key = item["key"]
+            label = item["label"]
+
+            def report(frac: float, note: str):
+                if self._shutdown_event.is_set():
+                    return
+                self._update_progress(
+                    "content_update",
+                    pct=min(99, base + int(span * max(0.0, min(1.0, frac)))),
+                    message=f"({index + 1}/{total}) {label}: {note}",
+                )
+
+            try:
+                if key == "cards":
+                    report(0.0, "downloading card data...")
+                    self._do_ingest(force=True)
+                    report(1.0, "done")
+
+                elif key == "printings":
+                    from densa_deck.data.printings import ingest_printings
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(ingest_printings(
+                            self._get_db(), force=True,
+                            progress=lambda pct, msg: report(pct / 100.0, msg)))
+                    finally:
+                        loop.close()
+
+                elif key == "combos":
+                    from densa_deck.combos import refresh_combo_snapshot
+                    from densa_deck.combos.data import PartialComboRefresh
+                    try:
+                        refresh_combo_snapshot(
+                            store=self._get_combo_store(),
+                            user_agent="DensaDeck/0.6.0 (combo-fetch)",
+                            progress_cb=lambda p, c, note=None: report(
+                                min(0.95, p / 130.0),
+                                note or f"{c:,} combos across {p} pages"),
+                        )
+                    except PartialComboRefresh as partial:
+                        # Usable data landed; say so and carry on.
+                        failures.append(
+                            f"{label}: saved {partial.combos_written:,}, "
+                            f"rate-limited before finishing")
+            except Exception as exc:
+                failures.append(f"{label}: {exc}")
+
+        if failures:
+            self._update_progress(
+                "content_update", pct=100,
+                message="Updated, with some items incomplete: "
+                        + "; ".join(failures),
+                done=True, running=False)
+        else:
+            self._update_progress(
+                "content_update", pct=100,
+                message="Everything is up to date.",
+                done=True, running=False)
+
+    # ---------------------------------------------------------- phone bridge
+
+    def _get_phone_bridge(self):
+        from densa_deck.app.phone import PhoneBridge
+        if getattr(self, "_phone_bridge", None) is None:
+            self._phone_bridge = PhoneBridge(self)
+        return self._phone_bridge
+
+    @_safe
+    def get_phone_status(self) -> dict:
+        """Whether phone scanning is on, and whether this machine can host it.
+
+        Read-only: asking never starts a server, provisions a certificate, or
+        changes any Tailscale configuration.
+        """
+        from densa_deck.app.phone import (
+            build_serve_command,
+            https_guidance,
+            pairing_url,
+            qr_matrix,
+            serve_status,
+            tailscale_status,
+        )
+
+        bridge = self._get_phone_bridge()
+        status = bridge.status()
+        ts = tailscale_status()
+        serve = serve_status()
+
+        # Point at whatever is genuinely listening. Without `tailscale serve`
+        # there is nothing on 443, and an https:// URL there hangs the phone
+        # rather than erroring.
+        url = pairing_url(status, ts, serve, status.get("token", ""))
+        return {
+            "bridge": status,
+            "tailscale": ts,
+            "serve": serve,
+            "serve_command": build_serve_command(bridge.port),
+            # Three-state advice rather than a bare command: running
+            # `tailscale serve` before HTTPS certs are enabled hangs the
+            # terminal, so the order has to be surfaced.
+            "https": https_guidance(ts, bridge.port),
+            "phone_url": url,
+            # Matrix rather than an image: renders as SVG in the panel, needs
+            # no Pillow, and survives the pywebview JSON bridge. None when the
+            # optional qrcode package isn't present — the URL still works.
+            "qr": qr_matrix(url) if url else None,
+            # Ready means the phone can actually connect, with or without
+            # HTTPS — not "HTTPS is set up".
+            "ready": bool(url),
+            "uses_https": bool(serve.get("configured")),
+        }
+
+    @_safe
+    def phone_bridge_start(self, remember: bool = True) -> dict:
+        """Start the scan server, reusing the phone's existing pairing.
+
+        Binds 127.0.0.1 and this machine's tailnet address only — never a
+        public interface, so reaching it requires a device already enrolled on
+        your tailnet.
+
+        `remember` records that phone scanning is wanted, so the next launch
+        starts it without being asked. A scanner you must re-enable from the
+        desktop is unusable away from the desktop, which is the whole point.
+        """
+        result = self._get_phone_bridge().start()
+        if remember and result.get("ok"):
+            self._set_phone_autostart(True)
+        return result
+
+    @_safe
+    def phone_bridge_stop(self) -> dict:
+        """Stop serving. The phone stays paired — use `phone_unpair` to revoke."""
+        self._set_phone_autostart(False)
+        return self._get_phone_bridge().stop()
+
+    @_safe
+    def phone_unpair(self) -> dict:
+        """Revoke the pairing, so URLs already on a phone stop working."""
+        self._set_phone_autostart(False)
+        return self._get_phone_bridge().unpair()
+
+    def _set_phone_autostart(self, enabled: bool) -> None:
+        try:
+            prefs = _load_user_prefs()
+            prefs["phone_autostart"] = bool(enabled)
+            _save_user_prefs(prefs)
+        except Exception:
+            # A preference that won't save is not worth failing a scan over.
+            pass
+
+    def phone_autostart_enabled(self) -> bool:
+        try:
+            return bool(_load_user_prefs().get("phone_autostart"))
+        except Exception:
+            return False
+
+    def start_phone_bridge_if_enabled(self) -> dict:
+        """Bring the bridge up at launch when the user left it on.
+
+        Deliberately conditional: opening a listener, even a tailnet-only one,
+        is not something to do to someone who never asked for it.
+        """
+        if not self.phone_autostart_enabled():
+            return {"ok": True, "running": False, "autostart": False}
+        try:
+            return {**self._get_phone_bridge().start(), "autostart": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "autostart": True}
+
+    # ------------------------------------------------------- collections
+
+    @_safe
+    def list_collections(self) -> dict:
+        """Every named collection, plus the master totals they roll up into.
+
+        The master collection is not a row in the table — it is the sum of
+        everything owned. Returning it alongside keeps the distinction visible
+        in the UI instead of leaving "all my cards" to be inferred.
+        """
+        store = self._get_collection_store()
+        collections = store.list_collections()
+        summary = store.summary()
+        return {
+            "collections": collections,
+            "master": {
+                "cards": summary.total_cards,
+                "unique_cards": summary.unique_cards,
+                "unique_printings": summary.unique_printings,
+                "value_usd": summary.total_value_usd,
+            },
+            "default_collection_id": store.default_collection_id(),
+        }
+
+    @_safe
+    def create_collection(self, name: str, kind: str = "collection",
+                          notes: str = "") -> dict:
+        """Make a new grouping. Returns the existing one if the name is taken."""
+        try:
+            return {"collection": self._get_collection_store().create_collection(
+                name, kind=kind, notes=notes)}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @_safe
+    def rename_collection(self, collection_id: int, name: str) -> dict:
+        try:
+            renamed = self._get_collection_store().rename_collection(
+                int(collection_id), name)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not renamed:
+            return {"ok": False, "error": "No such collection."}
+        return {"renamed": True}
+
+    @_safe
+    def delete_collection(self, collection_id: int, move_to: int | None = None,
+                          discard_cards: bool = False) -> dict:
+        """Delete a collection in one of two senses.
+
+        Default: the grouping goes, the cards move to another collection and
+        stay in the master collection. With `discard_cards=True` the copies
+        are removed from the master collection as well — irreversible, so the
+        caller must ask for it explicitly and the UI must confirm it.
+        """
+        result = self._get_collection_store().delete_collection(
+            int(collection_id),
+            move_to=None if move_to is None else int(move_to),
+            discard_cards=bool(discard_cards))
+        if not result.get("deleted") and not result.get("emptied"):
+            return {"ok": False, "error": result.get("reason", "Could not delete.")}
+        return result
+
+    @_safe
+    def move_to_collection(self, item_id: int, collection_id: int,
+                           quantity: int | None = None) -> dict:
+        """Move copies of one stack into another collection."""
+        result = self._get_collection_store().move_copies(
+            int(item_id), int(collection_id),
+            quantity=None if quantity is None else int(quantity))
+        if not result.get("moved"):
+            return {"ok": False, "error": result.get("reason", "Nothing moved.")}
+        return result
+
+    # ------------------------------------------------------------ allocation
+
+    @_safe
+    def allocate_copy(self, deck_id: str, item_id: int, quantity: int = 1,
+                      zone: str = "mainboard") -> dict:
+        """Earmark a specific physical copy for a deck. Free-tier, opt-in.
+
+        Ownership maths works fine without this — decks can't express which
+        printing they want, so the default is oracle-level. This is for
+        people who care that the foil is in the Commander deck.
+        """
+        from densa_deck.collection.allocation import allocate
+        try:
+            return allocate(self._get_collection_store(), deck_id, int(item_id),
+                            quantity=int(quantity), zone=zone)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "error_type": "AllocationRefused"}
+
+    @_safe
+    def deallocate_copy(self, deck_id: str, item_id: int,
+                        zone: str = "mainboard") -> dict:
+        from densa_deck.collection.allocation import deallocate
+        return {"freed": deallocate(self._get_collection_store(), deck_id,
+                                    int(item_id), zone)}
+
+    @_safe
+    def get_deck_allocations(self, deck_id: str) -> dict:
+        from densa_deck.collection.allocation import allocations_for_deck
+        rows = allocations_for_deck(self._get_collection_store(), self._get_db(), deck_id)
+        known = [r["unit_price_usd"] for r in rows if r["unit_price_usd"] is not None]
+        return {
+            "deck_id": deck_id,
+            "allocations": rows,
+            "allocated_value_usd": round(sum(known), 2),
+            "unpriced": sum(1 for r in rows if r["unit_price_usd"] is None),
+        }
+
+    @_safe
+    def reconcile_allocations(self) -> dict:
+        """Drop allocations pointing at copies that no longer exist.
+
+        Stacks shrink and decks get deleted; stranded allocations would make
+        cards look permanently spoken for. Reports what it changed rather
+        than silently rewriting the user's data.
+        """
+        from densa_deck.collection.allocation import reconcile
+        return reconcile(self._get_collection_store())
+
+    # --------------------------------------------------------------- reseller
+
+    def _fee_model(self, fees: dict | None = None):
+        """Fee assumptions, from the caller or the saved preferences.
+
+        These are the user's assumptions about their own selling costs, not
+        facts we assert — which is why they're editable and why every
+        estimate that uses them echoes them back.
+        """
+        from densa_deck.collection.reseller import FeeModel
+        if fees:
+            return FeeModel.from_dict(fees)
+        prefs = _load_user_prefs().get("reseller_fees")
+        return FeeModel.from_dict(prefs)
+
+    @_safe
+    def get_fee_model(self) -> dict:
+        return {"fees": self._fee_model().as_dict()}
+
+    @_safe
+    def set_fee_model(self, fees: dict) -> dict:
+        from densa_deck.collection.reseller import FeeModel
+        model = FeeModel.from_dict(fees or {})
+        prefs = _load_user_prefs()
+        prefs["reseller_fees"] = model.as_dict()
+        _save_user_prefs(prefs)
+        return {"fees": model.as_dict()}
+
+    @_safe
+    def list_acquisitions(self) -> dict:
+        from densa_deck.collection.reseller import list_acquisitions
+        return {"acquisitions": list_acquisitions(self._get_collection_store())}
+
+    @_safe
+    def create_acquisition(self, name: str, purchase_price_usd: float,
+                           purchased_on: str | None = None,
+                           source: str = "", notes: str = "") -> dict:
+        from densa_deck.collection.reseller import create_acquisition
+        return create_acquisition(
+            self._get_collection_store(), name, purchase_price_usd,
+            purchased_on=purchased_on, source=source, notes=notes)
+
+    @_safe
+    def allocate_acquisition_basis(self, acquisition_id: int) -> dict:
+        from densa_deck.collection.reseller import allocate_cost_basis
+        return allocate_cost_basis(
+            self._get_collection_store(), self._get_db(), int(acquisition_id))
+
+    @_safe
+    def get_acquisition_summary(self, acquisition_id: int, fees: dict | None = None) -> dict:
+        from densa_deck.collection.reseller import acquisition_summary
+        return acquisition_summary(
+            self._get_collection_store(), self._get_db(),
+            int(acquisition_id), self._fee_model(fees))
+
+    @_safe
+    def record_sale(self, printing_id: str, card_name: str, sale_price_usd: float,
+                    quantity: int = 1, fees_usd: float = 0.0, shipping_usd: float = 0.0,
+                    platform: str = "", finish: str = "nonfoil", condition: str = "NM",
+                    item_id: int | None = None, notes: str = "") -> dict:
+        from densa_deck.collection.reseller import record_sale
+        return record_sale(
+            self._get_collection_store(), printing_id=printing_id,
+            card_name=card_name, sale_price_usd=float(sale_price_usd),
+            quantity=int(quantity), fees_usd=float(fees_usd or 0),
+            shipping_usd=float(shipping_usd or 0), platform=platform,
+            finish=finish, condition=condition,
+            item_id=int(item_id) if item_id else None, notes=notes)
+
+    @_safe
+    def list_sales(self, limit: int = 200) -> dict:
+        from densa_deck.collection.reseller import list_sales
+        return {"sales": list_sales(self._get_collection_store(), min(int(limit), 1000))}
+
+    @_safe
+    def get_reseller_dashboard(self, fees: dict | None = None) -> dict:
+        from densa_deck.collection.reseller import reseller_dashboard
+        return reseller_dashboard(
+            self._get_collection_store(), self._get_db(), self._fee_model(fees))
+
+    @_safe
+    def appraise_scan_session(self, fees: dict | None = None) -> dict:
+        """What the current scanning session's cards would be worth to resell.
+
+        This is the field tool: scan a stranger's box, get an estimate and a
+        target price band. Returns a model with its inputs visible and no
+        verdict — the price feed's publisher states it is unfit to power a
+        sales system, so the arithmetic is shown and the decision stays with
+        the person spending the money.
+        """
+        from densa_deck.collection.prices import price_age_hours
+        from densa_deck.collection.reseller import analyze_acquisition
+        from densa_deck.data.printings import META_SYNCED_AT
+
+        db = self._get_db()
+        session = self._get_scan_session()
+        lines = []
+        for entry in session.entries:
+            if not entry.get("added"):
+                continue
+            lines.append((entry.get("price_usd"), 1))
+
+        age = price_age_hours(db.get_metadata(META_SYNCED_AT) or "")
+        result = analyze_acquisition(lines, self._fee_model(fees), price_age_hours=age)
+        result["session"] = session.to_dict()
+        return result
+
+    @_safe
+    def appraise_collection(self, acquisition_id: int | None = None,
+                            fees: dict | None = None) -> dict:
+        """Resale appraisal of the whole collection, or one acquisition."""
+        from densa_deck.collection.prices import price_age_hours
+        from densa_deck.collection.reseller import (
+            analyze_acquisition,
+            collection_resale_lines,
+        )
+        from densa_deck.data.printings import META_SYNCED_AT
+
+        db = self._get_db()
+        lines = collection_resale_lines(
+            self._get_collection_store(), db,
+            acquisition_id=int(acquisition_id) if acquisition_id else None)
+        age = price_age_hours(db.get_metadata(META_SYNCED_AT) or "")
+        return analyze_acquisition(lines, self._fee_model(fees), price_age_hours=age)
+
+    # ---------------------------------------------------------------- scanner
+
+    def _get_scan_session(self):
+        from densa_deck.collection.scanner import ScanSession
+        if getattr(self, "_scan_session", None) is None:
+            self._scan_session = ScanSession()
+        return self._scan_session
+
+    @_safe
+    def get_scan_capabilities(self) -> dict:
+        """What scanning this machine can actually do. Free-tier.
+
+        Reported honestly rather than optimistically: camera capture needs
+        OpenCV (an optional ~50 MB install we deliberately don't bundle), OCR
+        prefers the engine already built into Windows, and manual entry
+        always works so the feature is never entirely unavailable.
+        """
+        import sys as _sys
+
+        from densa_deck.collection.scan_backends import scan_capabilities
+        caps = scan_capabilities()
+        caps["catalogue_ready"] = self._get_db().printing_count() > 0
+        # Photo scanning needs OpenCV on THIS machine. Report both whether it
+        # is present and whether we can fetch it in one click, so the UI can
+        # offer a button instead of a pip command — and can disable the
+        # "take a photo" action rather than letting someone photograph a card
+        # that cannot possibly be processed.
+        caps["photo_ready"] = bool(caps["camera"]["available"]) and             caps["active_ocr"] != "manual"
+        caps["can_auto_install"] = (not getattr(_sys, "frozen", False)) and             not caps["camera"]["available"]
+        caps["install_size_mb"] = 44
+        return caps
+
+    @_safe
+    def install_scan_support_start(self) -> dict:
+        """One click: install what photo scanning needs.
+
+        Photo scanning needs OpenCV on the desktop (~112 MB installed) to find
+        the card in a frame and flatten it. It is not bundled because it would
+        roughly double the installer for a feature many users never touch — so
+        it is one button instead.
+        """
+        with self._progress_lock:
+            current = self._progress.get("scan_install", {})
+            existing = self._threads.get("scan_install")
+            if current.get("running") or (existing and existing.is_alive()):
+                return {"ok": False, "error": "Install already running."}
+            self._progress["scan_install"] = {
+                "pct": 0, "message": "Starting...", "done": False,
+                "error": None, "running": True,
+            }
+            t = threading.Thread(target=self._do_scan_install, daemon=True)
+            self._threads["scan_install"] = t
+            t.start()
+        return {"ok": True, "started": True}
+
+    @_safe
+    def install_scan_support_progress(self) -> dict:
+        return self._read_progress("scan_install")
+
+    def _do_scan_install(self):
+        import subprocess
+        import sys as _sys
+
+        if getattr(_sys, "frozen", False):
+            # A frozen build has no pip and a locked interpreter, so there is
+            # nothing honest to do here except say so.
+            self._update_progress(
+                "scan_install",
+                message="This build can't add components after install. "
+                        "Typing a card's corner text still works.",
+                error="frozen", done=True, running=False)
+            return
+
+        self._update_progress("scan_install", pct=10,
+                              message="Downloading OpenCV (~44 MB)...")
+        try:
+            proc = subprocess.run(
+                [_sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                 "--retries", "5", "--timeout", "60", "opencv-python-headless"],
+                capture_output=True, text=True, timeout=900,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as exc:
+            self._update_progress("scan_install", message="Install failed",
+                                  error=str(exc), done=True, running=False)
+            return
+
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            self._update_progress(
+                "scan_install", message="Install failed",
+                error=(tail[-1] if tail else f"pip exited {proc.returncode}"),
+                done=True, running=False)
+            return
+
+        # Importing is the only proof that matters — a wheel can install and
+        # still fail to load (wrong ISA, missing runtime DLL).
+        self._update_progress("scan_install", pct=90, message="Verifying...")
+        try:
+            import importlib
+            importlib.invalidate_caches()
+            import cv2  # noqa: F401
+            import numpy as _np
+            cv2.Canny(cv2.cvtColor(_np.zeros((32, 32, 3), _np.uint8),
+                                   cv2.COLOR_BGR2GRAY), 40, 140)
+        except Exception as exc:
+            self._update_progress(
+                "scan_install", message="Installed, but OpenCV won't load",
+                error=f"{exc}. A restart of Densa Deck may be needed.",
+                done=True, running=False)
+            return
+
+        self._update_progress("scan_install", pct=100,
+                              message="Photo scanning is ready.",
+                              done=True, running=False)
+
+    @_safe
+    def scan_capture(self, camera_index: int = 0) -> dict:
+        """Grab one frame, find the card, OCR its corner, and identify it.
+
+        Returns the same shape as `scan_identify` plus a `capture` block, so
+        the frontend has one code path whether the text came from a camera or
+        from the keyboard.
+
+        Fails soft with a reason at every step — no camera, no OpenCV, no
+        card in frame, unreadable corner. A scanner that raises mid-box is
+        worse than one that says "try again".
+        """
+        from densa_deck.collection.capture import CameraCapture, capture_and_read
+        from densa_deck.collection.scan_backends import best_ocr_backend
+
+        db = self._get_db()
+        if db.printing_count() == 0:
+            return {"ok": False,
+                    "error": "Printing data not installed. Download it from the "
+                             "Collection tab first.",
+                    "error_type": "PrintingsRequired"}
+
+        backend = best_ocr_backend()
+        if backend.name == "manual":
+            return {"ok": False,
+                    "error": "No OCR engine available. Type the card's name, or "
+                             "its set code and collector number, instead.",
+                    "error_type": "OcrUnavailable"}
+
+        with CameraCapture(int(camera_index)) as cam:
+            if cam.read() is None:
+                return {"ok": False,
+                        "error": "No camera frame. Check the camera is connected "
+                                 "and not in use by another app.",
+                        "error_type": "CameraUnavailable"}
+            capture = capture_and_read(cam, backend)
+
+        if not capture.get("ok"):
+            return {"ok": False, "error": f"Could not read a card: {capture['reason']}",
+                    "error_type": "NoCardDetected"}
+
+        result = self.scan_identify(capture.get("text", ""))
+        if isinstance(result, dict) and result.get("ok") is False:
+            return result
+        data = result.get("data", result) if isinstance(result, dict) else result
+        data["capture"] = {
+            "text": capture.get("text", ""),
+            "area_fraction": capture.get("area_fraction"),
+            "ocr_backend": backend.name,
+        }
+        return data
+
+    @_safe
+    def scan_identify(self, text: str, name_hint: str = "") -> dict:
+        """Identify a card from OCR text (or anything the user typed).
+
+        Returns ranked candidates plus a confidence tier. Only `exact` and
+        `likely` are auto-addable; everything else needs a human, because a
+        wrong card filed silently is worse than no card at all — you won't
+        know to go looking for it.
+        """
+        from densa_deck.collection.scanner import identify_card
+        db = self._get_db()
+        if db.printing_count() == 0:
+            return {"ok": False,
+                    "error": "Printing data not installed. Download it from the "
+                             "Collection tab first.",
+                    "error_type": "PrintingsRequired"}
+
+        result = identify_card(text or "", db, name_hint=name_hint or "")
+        return {
+            "confidence": result.confidence,
+            "auto_addable": result.auto_addable,
+            # Read off the card, so the phone can preselect foil instead of
+            # silently filing a foil at the non-foil price.
+            "suggested_finish": result.suggested_finish,
+            "foil_detected": result.identity.foil_hint,
+            "identity": {
+                "name": result.identity.name,
+                "set_code": result.identity.set_code,
+                "collector_number": result.identity.collector_number,
+                "language": result.identity.language,
+            },
+            "candidates": [
+                {
+                    "printing_id": c.printing["printing_id"],
+                    "name": c.printing["name"],
+                    "set_code": c.printing["set_code"],
+                    "set_name": c.printing["set_name"],
+                    "collector_number": c.printing["collector_number"],
+                    "rarity": c.printing["rarity"],
+                    "finishes": [f for f in (c.printing["finishes"] or "").split(",") if f],
+                    "price_usd": c.printing["price_usd"],
+                    "price_usd_foil": c.printing["price_usd_foil"],
+                    "reason": c.reason,
+                    "image_url": _image_url_safe(c.printing["printing_id"]),
+                }
+                for c in result.candidates
+            ],
+        }
+
+    @_safe
+    def scan_commit(
+        self,
+        printing_id: str,
+        card_name: str,
+        finish: str = "nonfoil",
+        condition: str = "NM",
+        location: str = "",
+        confidence: str = "manual",
+        collection_id: int | None = None,
+    ) -> dict:
+        """Add a scanned card and update the running session totals.
+
+        `collection_id` says which named collection the run is filing into.
+        Omitted, it lands in the default one — a scan must never fail for want
+        of a grouping decision.
+        """
+        from densa_deck.collection.scanner import ScanCandidate, ScanResult
+        db = self._get_db()
+        printing = db.get_printing(printing_id)
+        if printing is None:
+            return {"ok": False, "error": "Unknown printing.", "error_type": "NotFound"}
+
+        store = self._get_collection_store()
+        store.add_copies(
+            printing_id, card_name or printing["name"],
+            quantity=1, oracle_id=printing.get("oracle_id", ""),
+            finish=finish, condition=condition, location=location,
+            collection_id=None if collection_id is None else int(collection_id),
+            reason="scan",
+        )
+
+        session = self._get_scan_session()
+        result = ScanResult(
+            identity=type("I", (), {"name": printing["name"]})(),
+            candidates=[ScanCandidate(printing, confidence, "committed", 1.0)],
+            confidence=confidence,
+        )
+        entry = session.record(result, added=True, finish=finish)
+        return {"entry": entry, "session": session.to_dict()}
+
+    @_safe
+    def scan_adjust(self, printing_id: str, delta: int = 1,
+                    finish: str = "nonfoil", condition: str = "NM",
+                    location: str = "", card_name: str = "",
+                    collection_id: int | None = None) -> dict:
+        """Add or take back one copy of a card already filed this run.
+
+        Boxes contain playsets, and hands slip. Rescanning the same card four
+        times is slower and less reliable than saying "four of these", and an
+        accidental add needs undoing on the spot rather than being hunted down
+        on the desktop afterwards.
+
+        Removal is bounded by what THIS session added: the phone can undo its
+        own work, but it cannot reach into the wider collection and delete
+        copies it never put there.
+        """
+        delta = int(delta or 0)
+        if delta == 0:
+            return {"ok": False, "error": "No change requested."}
+
+        db = self._get_db()
+        printing = db.get_printing(printing_id)
+        if printing is None:
+            return {"ok": False, "error": "Unknown printing.",
+                    "error_type": "NotFound"}
+
+        store = self._get_collection_store()
+        session = self._get_scan_session()
+        name = card_name or printing["name"]
+
+        if delta > 0:
+            store.add_copies(
+                printing_id, name, quantity=1,
+                oracle_id=printing.get("oracle_id", ""), finish=finish,
+                condition=condition, location=location,
+                collection_id=None if collection_id is None else int(collection_id),
+                reason="scan",
+            )
+            entry = session.record_extra_copy(printing, finish)
+            return {"entry": entry, "session": session.to_dict()}
+
+        undone = session.undo_copy(printing_id, finish)
+        if undone is None:
+            return {"ok": False,
+                    "error": "That card wasn't added in this scanning session.",
+                    "error_type": "NotInSession"}
+        # No `reason` here: remove_copies supplies its own and forwarding one
+        # would collide as a duplicate keyword.
+        store.remove_copies(printing_id, name, quantity=1, finish=finish,
+                            condition=condition, location=location,
+                            collection_id=None if collection_id is None
+                            else int(collection_id))
+        return {"entry": undone, "removed": True, "session": session.to_dict()}
+
+    @_safe
+    def scan_skip(self, reason: str = "unknown") -> dict:
+        """Record a card the user declined to add, keeping the count honest."""
+        from densa_deck.collection.scanner import CONFIDENCE_UNKNOWN, ScanResult
+        session = self._get_scan_session()
+        result = ScanResult(
+            identity=type("I", (), {"name": ""})(),
+            candidates=[],
+            confidence=CONFIDENCE_UNKNOWN if reason == "unknown" else reason,
+        )
+        session.record(result, added=False)
+        return {"session": session.to_dict()}
+
+    @_safe
+    def get_scan_session(self) -> dict:
+        return {"session": self._get_scan_session().to_dict()}
+
+    @_safe
+    def reset_scan_session(self) -> dict:
+        """Start a fresh scanning run — new box, new totals."""
+        self._scan_session = None
+        return {"session": self._get_scan_session().to_dict()}
+
+    @_safe
+    def collection_recent_events(self, limit: int = 50) -> dict:
+        """Recent adds/removes — the audit trail for 'where did these come from'."""
+        store = self._get_collection_store()
+        return {"events": store.recent_events(limit=min(int(limit), 200))}
+
     def _get_combo_store(self):
         """Lazily resolve a ComboStore instance scoped to this AppApi.
 
@@ -2301,18 +3691,22 @@ class AppApi:
         """
         try:
             from densa_deck.combos import refresh_combo_snapshot
+            from densa_deck.combos.data import PartialComboRefresh
             store = self._get_combo_store()
 
-            def _on_page(pages: int, combos_seen: int):
-                # The dataset is ~30k items at PAGE_SIZE=500 → ~60 pages.
-                # Cap reported pct at 95 until the upsert finishes so the
-                # bar visibly completes only when the data is actually
-                # written, not just downloaded.
-                est_pct = min(int((pages / 60.0) * 95), 95)
+            def _on_page(pages: int, combos_seen: int, note: str | None = None):
+                # ~130 pages at PAGE_SIZE=500 as of 2026-08. Cap reported pct
+                # at 95 until the upsert finishes so the bar visibly completes
+                # only when the data is actually written, not just downloaded.
+                est_pct = min(int((pages / 130.0) * 95), 95)
+                # `note` is a backoff message. Surface it verbatim: a progress
+                # bar that sits still for 30 seconds with no explanation is
+                # indistinguishable from a hang.
                 self._update_progress(
                     "combo_refresh",
                     pct=est_pct,
-                    message=f"Fetched {combos_seen} combos across {pages} pages...",
+                    message=(note or
+                             f"Fetched {combos_seen} combos across {pages} pages..."),
                 )
 
             written = refresh_combo_snapshot(
@@ -2324,6 +3718,19 @@ class AppApi:
                 "combo_refresh",
                 pct=100,
                 message=f"Done — {written} combos cached.",
+                done=True, running=False,
+            )
+        except PartialComboRefresh as partial:
+            # Not a failure. Commander Spellbook rate-limited us partway, but
+            # the combos we did get are saved and usable — reporting this as
+            # an error would tell the user to discard working data.
+            self._update_progress(
+                "combo_refresh",
+                pct=100,
+                message=(f"Saved {partial.combos_written:,} combos, but the refresh "
+                         f"didn't finish — Commander Spellbook rate-limited us. "
+                         f"Combo detection works with what's saved; run it again "
+                         f"later to fill the gaps."),
                 done=True, running=False,
             )
         except Exception as e:
@@ -3579,6 +4986,20 @@ def _duel_verdict(a_vs_b, b_vs_a, a_ctx: dict, b_ctx: dict) -> dict:
     }
 
 
+def _opt_float(value) -> float | None:
+    """Coerce a UI value to float, treating blank/garbage as 'no filter'.
+
+    Empty strings arrive from cleared number inputs; a float("") crash there
+    would take out the whole listing over a filter the user just unset.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _image_url_safe(scryfall_id: str) -> str:
     try:
         from densa_deck.legal import scryfall_image_url
@@ -3868,6 +5289,10 @@ def _snapshot_to_dict(snap: DeckSnapshot) -> dict:
     reconstructed editable text so the frontend can drop it in a textarea."""
     return {
         "deck_id": snap.deck_id,
+        # Carried through so the frontend stops falling back to deck_id for
+        # the title and hardcoding "commander" for the format.
+        "name": snap.name or snap.deck_id,
+        "format": snap.format or "",
         "version_number": snap.version_number,
         "saved_at": snap.saved_at,
         "notes": snap.notes,

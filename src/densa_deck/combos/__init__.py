@@ -22,6 +22,8 @@ attribution to Commander Spellbook on top of that.
 from densa_deck.combos.data import (
     DEFAULT_COMBO_DB_PATH,
     ComboStore,
+    PartialComboRefresh,
+    PartialComboWalk,
     refresh_combo_snapshot,
 )
 from densa_deck.combos.matcher import (
@@ -42,5 +44,7 @@ __all__ = [
     "detect_combos",
     "detect_near_miss_combos",
     "diff_combos",
+    "PartialComboRefresh",
+    "PartialComboWalk",
     "refresh_combo_snapshot",
 ]

@@ -17,6 +17,8 @@
     <nav class="app-tabs">
       <button class="tab-btn active" data-view="analyze">Analyze</button>
       <button class="tab-btn" data-view="build">Build</button>
+      <button class="tab-btn" data-view="collection">Collection</button>
+      <button class="tab-btn" data-view="scan">Scan</button>
       <button class="tab-btn" data-view="decks">My Decks</button>
       <button class="tab-btn" data-view="coach">Coach</button>
       <button class="tab-btn" data-view="settings">Settings</button>
@@ -34,6 +36,19 @@
       <button class="banner-close" data-target="card-db-update-banner" title="Later">Later</button>
     </span>
   </div>
+  <!-- One banner, one button. The app knows what's missing; the user
+       shouldn't have to work it out or pick between four downloads. -->
+  <div id="content-banner" class="update-banner hidden">
+    <span id="content-banner-body"></span>
+    <span class="banner-actions">
+      <button id="content-update-btn" class="btn btn-outline btn-slim">Update everything</button>
+      <button class="banner-close" data-target="content-banner" title="Later">Later</button>
+    </span>
+  </div>
+  <div id="content-progress" class="update-banner hidden">
+    <span id="content-progress-body"></span>
+  </div>
+
   <div id="setup-banner" class="setup-banner hidden">
     <span id="setup-banner-body"></span>
     <button class="banner-close" data-target="setup-banner" title="Dismiss">×</button>
@@ -202,6 +217,22 @@ Mainboard:
             </div>
 
             <div class="filter-group">
+              <label class="filter-label">Collection</label>
+              <label class="filter-inline">
+                <input type="radio" name="ownership-filter" value="" checked>
+                All cards
+              </label>
+              <label class="filter-inline">
+                <input type="radio" name="ownership-filter" value="owned">
+                Cards I own
+              </label>
+              <label class="filter-inline">
+                <input type="radio" name="ownership-filter" value="unowned">
+                Cards I don't own
+              </label>
+            </div>
+
+            <div class="filter-group">
               <button id="build-search-clear" class="btn btn-outline btn-slim">Clear filters</button>
             </div>
           </details>
@@ -260,10 +291,230 @@ Mainboard:
 
         <!-- Stats column -->
         <aside class="build-stats-col">
+          <div id="build-collection-panel" class="build-collection-panel hidden">
+            <h2>Your collection</h2>
+            <div id="build-collection-body"></div>
+          </div>
           <h2>Stats</h2>
           <div id="build-stats-body" class="build-stats-body">
             <p class="panel-hint">Add cards to see live stats.</p>
           </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ COLLECTION VIEW (v0.7.0) ============ -->
+    <section id="view-collection" class="view">
+      <!-- Opt-in gate. Shown until the printing catalogue is downloaded;
+           the collection itself works without it, but set/price detail
+           needs it, so we ask rather than downloading 74 MB unannounced. -->
+      <div id="collection-setup" class="panel hidden">
+        <h2>Track what you own</h2>
+        <p class="panel-hint">
+          Densa Deck can track your physical cards down to the exact printing —
+          which set, foil or not, what condition, and what it's worth.
+        </p>
+        <p class="panel-hint">
+          That needs the printing catalogue: about <strong>74 MB</strong> covering
+          every paper printing (~107,000), including current prices. It's a
+          separate, optional download and you can remove it in one click.
+        </p>
+        <div class="settings-subrow">
+          <button id="collection-sync-btn" class="btn btn-primary">Download printing data</button>
+          <button id="collection-skip-btn" class="btn btn-outline">Not now</button>
+        </div>
+        <div id="collection-progress-wrap" class="progress-wrap hidden">
+          <div class="progress-bar"><div id="collection-progress-fill" class="progress-fill"></div></div>
+          <p id="collection-progress-msg" class="panel-hint"></p>
+        </div>
+      </div>
+
+      <div id="collection-main" class="hidden">
+        <div class="panel collection-header">
+          <div class="collection-totals">
+            <div class="collection-stat">
+              <span id="collection-total-cards" class="collection-stat-value">0</span>
+              <span class="collection-stat-label">Cards</span>
+            </div>
+            <div class="collection-stat">
+              <span id="collection-unique-cards" class="collection-stat-value">0</span>
+              <span class="collection-stat-label">Unique</span>
+            </div>
+            <div class="collection-stat">
+              <span id="collection-unique-printings" class="collection-stat-value">0</span>
+              <span class="collection-stat-label">Printings</span>
+            </div>
+            <div class="collection-stat collection-stat-value-money">
+              <span id="collection-value" class="collection-stat-value">$0.00</span>
+              <span class="collection-stat-label">Est. market value</span>
+            </div>
+            <div id="collection-deltas" class="collection-deltas"></div>
+          </div>
+          <p id="collection-unpriced-note" class="panel-hint subtle"></p>
+          <p id="collection-price-age" class="panel-hint subtle"></p>
+        </div>
+
+        <div class="panel-row collection-body">
+          <aside class="collection-filters panel">
+            <h2>Find</h2>
+            <input type="text" id="collection-search" class="build-search-input"
+                   placeholder="Card name">
+            <div class="filter-group">
+              <label class="filter-label">Finish</label>
+              <select id="collection-filter-finish">
+                <option value="">(any)</option>
+                <option value="nonfoil">Non-foil</option>
+                <option value="foil">Foil</option>
+                <option value="etched">Etched</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">Condition</label>
+              <select id="collection-filter-condition">
+                <option value="">(any)</option>
+                <option value="NM">Near Mint</option>
+                <option value="LP">Lightly Played</option>
+                <option value="MP">Moderately Played</option>
+                <option value="HP">Heavily Played</option>
+                <option value="DMG">Damaged</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">Location</label>
+              <select id="collection-filter-location">
+                <option value="">(anywhere)</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">Value (USD)</label>
+              <div class="cmc-range">
+                <input type="number" id="collection-min-price" placeholder="min" min="0" step="0.5">
+                <span>to</span>
+                <input type="number" id="collection-max-price" placeholder="max" min="0" step="0.5">
+              </div>
+              <label class="filter-inline">
+                <input type="checkbox" id="collection-unpriced-only">
+                Only cards with no price
+              </label>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">Sort by</label>
+              <select id="collection-sort">
+                <option value="name">Name</option>
+                <option value="value_desc">Stack value — high to low</option>
+                <option value="value_asc">Stack value — low to high</option>
+                <option value="unit_desc">Card price — high to low</option>
+                <option value="unit_asc">Card price — low to high</option>
+                <option value="quantity_desc">Most copies</option>
+                <option value="set">Set &amp; number</option>
+                <option value="newest">Recently added</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <button id="collection-clear-filters" class="btn btn-outline btn-slim">Clear filters</button>
+            </div>
+            <div class="filter-group">
+              <label class="filter-label">Add a card</label>
+              <input type="text" id="collection-add-name" class="build-search-input"
+                     placeholder="Card name, then pick a printing">
+              <button id="collection-add-btn" class="btn btn-outline btn-slim">Find printings</button>
+            </div>
+          </aside>
+
+          <div class="collection-list-wrap panel">
+            <div class="sidebar-header">
+              <h2>Your cards</h2>
+              <span id="collection-count" class="status-text"></span>
+            </div>
+            <div id="collection-list"></div>
+            <div class="build-search-footer">
+              <button id="collection-more-btn" class="btn btn-outline btn-slim hidden">Load more</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ SCAN VIEW ============ -->
+    <section id="view-scan" class="view">
+      <div class="panel-row scan-body">
+        <div class="panel scan-input-col">
+          <h2>Add a card</h2>
+          <p class="panel-hint" id="scan-capability-note"></p>
+
+          <div class="filter-group">
+            <label class="filter-label">Card name, or its bottom-left corner</label>
+            <textarea id="scan-text" class="scan-textarea" rows="3"
+                      placeholder="Sol Ring&#10;&#10;— or —&#10;&#10;0079/0249 M&#10;SOM • EN"></textarea>
+            <p class="panel-hint subtle">
+              The set code and collector number printed in the card's bottom-left
+              corner identify the exact printing. A name alone usually can't.
+            </p>
+          </div>
+
+          <div class="settings-subrow">
+            <button id="scan-identify-btn" class="btn btn-primary">Identify</button>
+            <button id="scan-camera-btn" class="btn btn-outline" disabled>Use camera</button>
+          </div>
+
+          <div class="filter-group">
+            <label class="filter-label">Add as</label>
+            <div class="printings-controls">
+              <label class="filter-inline">
+                Condition
+                <select id="scan-condition">
+                  <option value="NM">Near Mint</option>
+                  <option value="LP">Lightly Played</option>
+                  <option value="MP">Moderately Played</option>
+                  <option value="HP">Heavily Played</option>
+                  <option value="DMG">Damaged</option>
+                </select>
+              </label>
+              <label class="filter-inline">
+                Location
+                <input type="text" id="scan-location" placeholder="(optional)">
+              </label>
+            </div>
+            <label class="filter-inline">
+              <input type="checkbox" id="scan-auto-add" checked>
+              Add automatically when the match is certain
+            </label>
+          </div>
+        </div>
+
+        <div class="panel scan-result-col">
+          <div class="sidebar-header">
+            <h2>Result</h2>
+            <span id="scan-confidence" class="status-text"></span>
+          </div>
+          <div id="scan-result"></div>
+        </div>
+
+        <aside class="panel scan-session-col">
+          <div class="sidebar-header">
+            <h2>This session</h2>
+            <button id="scan-reset-btn" class="btn-icon" title="Start a new session">↻</button>
+          </div>
+          <div class="collection-totals scan-totals">
+            <div class="collection-stat">
+              <span id="scan-count" class="collection-stat-value">0</span>
+              <span class="collection-stat-label">Scanned</span>
+            </div>
+            <div class="collection-stat">
+              <span id="scan-added" class="collection-stat-value">0</span>
+              <span class="collection-stat-label">Added</span>
+            </div>
+            <div class="collection-stat collection-stat-value-money">
+              <span id="scan-value" class="collection-stat-value">$0.00</span>
+              <span class="collection-stat-label">Est. value</span>
+            </div>
+          </div>
+          <p id="scan-session-note" class="panel-hint subtle"></p>
+          <div id="scan-log" class="scan-log"></div>
+          <button id="scan-appraise-btn" class="btn btn-outline btn-slim">
+            Appraise this session
+          </button>
+          <div id="scan-appraisal"></div>
         </aside>
       </div>
     </section>
@@ -535,6 +786,73 @@ Mainboard:
             </p>
           </div>
         </div>
+
+        <h2>Scan from your phone</h2>
+        <div class="settings-row">
+          <p class="panel-hint">
+            Use your phone as the camera and this machine as the brain. Cards you
+            add on the phone land in the same collection and the same scanning
+            session as the desktop Scan tab.
+          </p>
+          <p class="panel-hint subtle">
+            Sharing runs on <strong>127.0.0.1 only</strong> and is reachable
+            solely through Tailscale, so it is never exposed to the local
+            network. It needs a pairing code, is limited to scanning (no deck,
+            licence or purchase actions), and stops when you close Densa Deck.
+          </p>
+
+          <div id="phone-status-card" class="card"></div>
+
+          <div id="scan-install-row" class="settings-subrow hidden" style="margin-top:10px;">
+            <p class="panel-hint" id="scan-install-note"></p>
+            <button id="scan-install-btn" class="btn btn-outline">Enable photo scanning</button>
+            <div id="scan-install-progress" class="progress-wrap hidden">
+              <div class="progress-bar"><div id="scan-install-progress-fill" class="progress-fill"></div></div>
+              <p id="scan-install-progress-msg" class="panel-hint"></p>
+            </div>
+          </div>
+
+          <div class="setup-action-row" style="margin-top: 10px;">
+            <button id="phone-start-btn" class="btn btn-primary">Start sharing</button>
+            <button id="phone-stop-btn" class="btn btn-outline hidden">Stop sharing</button>
+            <!-- Stopping and revoking are different intentions. Stopping takes
+                 the listener down for now; unpairing invalidates the link the
+                 phone already holds, so it must be asked for deliberately. -->
+            <button id="phone-unpair-btn" class="btn btn-outline hidden">Unpair phone</button>
+            <span id="phone-status-text" class="status-text"></span>
+          </div>
+
+          <div id="phone-share-block" class="hidden" style="margin-top: 12px;">
+            <div class="phone-share-grid">
+              <div id="phone-qr" class="phone-qr"></div>
+              <div class="phone-share-detail">
+                <p class="panel-hint" style="margin-top:0">
+                  Scan this with your phone's camera, or open the link below on
+                  a device signed in to your tailnet.
+                </p>
+                <input type="text" id="phone-url" readonly>
+                <div class="setup-action-row" style="margin-top:6px;">
+                  <button id="phone-copy-btn" class="btn btn-outline btn-slim">Copy link</button>
+                  <span id="phone-copy-status" class="status-text"></span>
+                </div>
+              </div>
+            </div>
+            <div id="phone-serve-hint" class="hidden" style="margin-top:12px;">
+              <div id="phone-serve-body"></div>
+              <div id="phone-serve-cmd-wrap" class="hidden">
+                <textarea id="phone-serve-cmd" readonly rows="1"
+                  style="width:100%; font-family:'Consolas', monospace; font-size:0.85rem; background:var(--color-bg); color:var(--color-text); border:1px solid var(--color-border); padding:8px; border-radius:4px;"></textarea>
+                <div class="setup-action-row" style="margin-top:6px;">
+                  <button id="phone-copy-cmd-btn" class="btn btn-outline btn-slim">Copy command</button>
+                </div>
+              </div>
+              <p class="panel-hint subtle" style="margin-top:8px;">
+                A live viewfinder is the only thing this unlocks. Typing a card
+                and "Take a photo" work on the phone either way.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -702,6 +1020,39 @@ Mainboard:
     </div>
   </div>
 
+  <!-- Printing picker: one row per physical version of a card, so the user
+       records the object they actually have rather than a card name. -->
+  <div id="printings-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel modal-panel-wide">
+      <div class="modal-header">
+        <h2 id="printings-modal-title">Printings</h2>
+        <button id="printings-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="printings-controls">
+          <label class="filter-inline">
+            Condition
+            <select id="printings-condition">
+              <option value="NM">Near Mint</option>
+              <option value="LP">Lightly Played</option>
+              <option value="MP">Moderately Played</option>
+              <option value="HP">Heavily Played</option>
+              <option value="DMG">Damaged</option>
+            </select>
+          </label>
+          <label class="filter-inline">
+            Location
+            <input type="text" id="printings-location" placeholder="(optional)">
+          </label>
+        </div>
+        <div id="printings-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="printings-done-btn" class="btn btn-outline">Done</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <!-- First-run tour overlay. Hidden by default; activated by tour.js -->
@@ -724,5 +1075,9 @@ Mainboard:
   <script src="tour.js"></script>
   <script src="app.js"></script>
   <script src="builder.js"></script>
+  <script src="collection.js"></script>
+  <script src="scan.js"></script>
+  <script src="phone-panel.js"></script>
+  <script src="content-update.js"></script>
 </body>
 </html>

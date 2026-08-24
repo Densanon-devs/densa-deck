@@ -1,0 +1,1452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Densa Deck — Scan</title>
+<style>
+/* Self-contained on purpose: one file the desktop serves, no build step and
+   nothing to fetch from a CDN a phone might not reach. */
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --raised: #232837; --border: #2d3142;
+  --text: #e4e6eb; --muted: #8a8f9c; --primary: #e53e3e; --green: #48bb78;
+  --warn: #ecc94b; --radius: 10px;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  font-size: 16px;   /* keeps iOS from zooming on input focus */
+}
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; background: var(--bg); z-index: 5;
+}
+h1 { font-size: 1.05rem; margin: 0; }
+main { padding: 16px; padding-bottom: 96px; }
+.card { background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+label { display: block; font-size: .8rem; color: var(--muted);
+        text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+input[type=text], textarea, select {
+  width: 100%; padding: 12px; font-size: 1rem; font-family: inherit;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+textarea { min-height: 78px; resize: vertical; }
+/* Big tap targets — this is used one-handed with the other hand full of cards. */
+button {
+  font-family: inherit; font-size: 1rem; padding: 14px 16px;
+  border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--raised); color: var(--text); cursor: pointer;
+  min-height: 48px;
+}
+button.primary { background: var(--primary); border-color: var(--primary);
+                 color: #fff; font-weight: 600; }
+button.wide { width: 100%; }
+button:disabled { opacity: .45; }
+.row { display: flex; gap: 10px; }
+.row > * { flex: 1; }
+.muted { color: var(--muted); font-size: .85rem; line-height: 1.45; }
+.totals { display: flex; gap: 22px; }
+.stat b { display: block; font-size: 1.5rem; line-height: 1.1; }
+.stat span { font-size: .7rem; color: var(--muted); text-transform: uppercase; }
+.money b { color: var(--green); }
+.pick { display: flex; justify-content: space-between; align-items: center;
+        gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.pick:last-child { border-bottom: none; }
+.pick .name { font-weight: 600; }
+.pick .sub { font-size: .8rem; color: var(--muted); }
+.pick .acts { display: flex; gap: 6px; flex-shrink: 0; }
+.pick .acts button { padding: 10px 12px; font-size: .85rem; min-height: 42px; }
+/* The set symbol is the thing people actually recognise on a card, so give it
+   real size rather than treating it as decoration next to the name. Scryfall
+   serves these as black SVGs, which vanish on a dark background — invert. */
+.pick .seticon, .pick .seticon-fallback {
+        width: 34px; height: 34px; flex-shrink: 0; object-fit: contain;
+        filter: invert(1) brightness(1.6); }
+.pick .seticon-fallback { display: flex; align-items: center; filter: none;
+        justify-content: center; font-size: .7rem; font-weight: 700;
+        color: var(--muted); border: 1px solid var(--border); border-radius: 6px; }
+.pick .setname { opacity: .65; }
+.pick.none .name { color: var(--muted); }
+.conf { font-size: .8rem; padding: 3px 10px; border-radius: 12px;
+        background: var(--raised); }
+.conf.exact, .conf.likely { color: var(--green); }
+.conf.ambiguous { color: var(--warn); }
+.conf.unknown { color: var(--muted); }
+video, #shot { width: 100%; border-radius: var(--radius); background: #000;
+               display: block; }
+.hidden { display: none !important; }
+.log { max-height: 46vh; overflow-y: auto; }
+.log .item { display: flex; gap: 8px; align-items: baseline; padding: 7px 0;
+             border-bottom: 1px solid var(--border); font-size: .9rem; }
+.log .item:last-child { border-bottom: none; }
+.log .tick { color: var(--green); }
+.log .nm { flex: 1; overflow: hidden; text-overflow: ellipsis;
+           white-space: nowrap; }
+.log .pr { color: var(--green); }
+.log .skipped { opacity: .5; }
+.log .nm em { font-style: normal; color: var(--warn); font-size: .8rem; }
+/* Thumb-sized: these are pressed while holding a stack of cards. */
+.log .qty { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.log .qty button { width: 40px; min-height: 40px; padding: 0; font-size: 1.3rem;
+                   line-height: 1; }
+.log .qty b { min-width: 1.4em; text-align: center; }
+#toast {
+  position: fixed; left: 16px; right: 16px; bottom: 20px; padding: 14px;
+  border-radius: var(--radius); background: var(--raised);
+  border: 1px solid var(--border); text-align: center; z-index: 20;
+  transition: opacity .2s;
+}
+#toast.err { border-color: var(--primary); }
+#toast.ok { border-color: var(--green); }
+.banner { background: #ecc94b22; border: 1px solid var(--warn);
+          color: var(--warn); padding: 12px; border-radius: var(--radius);
+          font-size: .85rem; margin-bottom: 14px; line-height: 1.45; }
+/* A card being filed is the one event that must never be missed. A toast in
+   the corner is not enough while looking at a viewfinder with both hands
+   full of cards — six copies of the same card were added without being
+   noticed. This takes the whole screen for a moment instead. */
+#flash { position: fixed; inset: 0; z-index: 50; display: flex;
+         flex-direction: column; align-items: center; justify-content: center;
+         gap: 10px; text-align: center; padding: 24px;
+         background: rgba(56, 161, 105, .93); color: #fff;
+         opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+#flash.show { opacity: 1; }
+#flash .big { font-size: 1.6rem; font-weight: 700; line-height: 1.2; }
+#flash .meta { font-size: 1rem; opacity: .92; }
+#flash .tick { font-size: 3rem; line-height: 1; }
+#flash.dupe { background: rgba(214, 158, 46, .95); }
+/* Lens picker: what each camera sees, not what the browser calls it. */
+.lensgrid { display: grid; gap: 8px; margin-top: 8px;
+            grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.lensgrid button { display: flex; flex-direction: column; gap: 4px;
+                   padding: 8px 6px; font-size: .72rem; line-height: 1.25;
+                   align-items: stretch; text-align: left; }
+.lensgrid button.active { border-color: var(--green); color: var(--green); }
+.lensgrid button:disabled { opacity: .45; }
+.lensgrid .shot { width: 100%; aspect-ratio: 3/4; object-fit: cover;
+                  border-radius: 6px; background: #000; }
+.lensgrid .blank { width: 100%; aspect-ratio: 3/4; border-radius: 6px;
+                   background: var(--raised); display: flex;
+                   align-items: center; justify-content: center;
+                   font-size: 1.6rem; opacity: .5; }
+.lensgrid .score { opacity: .75; }
+.lensgrid .best { color: var(--green); font-weight: 700; }
+.lensopt { display: flex; align-items: center; gap: 8px; margin-top: 10px;
+           text-transform: none; letter-spacing: 0; font-size: .9rem;
+           color: var(--text); }
+.lensopt input { width: 20px; height: 20px; }
+/* Long printing lists are picked from by symbol, not read line by line. */
+.iconpick { display: grid; gap: 8px; margin-top: 10px;
+            grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); }
+.iconpick button { display: flex; flex-direction: column; align-items: center;
+                   gap: 4px; padding: 10px 4px; min-height: 78px;
+                   font-size: .7rem; line-height: 1.2; }
+.iconpick img { width: 30px; height: 30px; object-fit: contain;
+                filter: invert(1) brightness(1.6); }
+.iconpick .num { opacity: .7; }
+</style>
+</head>
+<body>
+
+<div id="flash" aria-live="assertive">
+  <div class="tick">✓</div>
+  <div class="big" id="flash-name"></div>
+  <div class="meta" id="flash-meta"></div>
+</div>
+
+<header>
+  <h1>Densa Deck — Scan</h1>
+  <span id="conf" class="conf"></span>
+</header>
+
+<main>
+  <div id="insecure" class="banner hidden">
+    <b>Take a photo</b> and typing both work normally. Only the <i>live
+    viewfinder</i> needs an HTTPS connection, which isn't set up &mdash; and
+    doesn't need to be.
+  </div>
+
+  <div class="card">
+    <label>Scanning into</label>
+    <div class="row">
+      <select id="collection-select"></select>
+      <button id="collection-new-btn" style="flex:0 0 auto">New</button>
+    </div>
+    <div id="collection-new" class="hidden" style="margin-top:10px">
+      <input type="text" id="collection-name" placeholder="Trade box, Modern binder…"
+             autocomplete="off">
+      <div class="row" style="margin-top:8px">
+        <button id="collection-create-btn" class="primary">Create</button>
+        <button id="collection-cancel-btn">Cancel</button>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:8px">
+      Every card you scan goes into your master collection. A collection is a
+      grouping inside it &mdash; you can move cards between them later.
+    </p>
+  </div>
+
+  <div class="card">
+    <label>Camera</label>
+    <video id="video" class="hidden" playsinline muted></video>
+    <img id="shot" class="hidden" alt="">
+    <div class="row" style="margin-top:10px">
+      <button id="cam-btn" class="primary">Start camera</button>
+      <button id="snap-btn" class="hidden">Capture</button>
+    </div>
+    <!-- Camera setup is a once-per-phone decision, so it collapses out of the
+         way. Screen space during a scanning run belongs to the viewfinder and
+         the result, not to controls that have already done their job. -->
+    <button id="cam-settings-btn" class="wide hidden" style="margin-top:10px">
+      Camera settings</button>
+    <div id="cam-settings" class="hidden">
+      <!-- A phone's main camera cannot focus close enough to fill the frame
+           with a card; the telephoto can, because the same card size puts you
+           further away. Which lens is which is not discoverable from the web,
+           so the choice is the user's. -->
+      <div id="lens-row" class="hidden" style="margin-top:10px">
+        <label>Lens</label>
+        <!-- A dropdown of device IDs is unusable: browsers hand out labels
+             like "camera2 0, facing back", which say nothing about which one
+             can focus on a card — and they lie often enough that filtering on
+             them hid one of three back cameras. So every camera is listed,
+             and what it can do is found out by opening it. -->
+        <div id="lens-grid" class="lensgrid"></div>
+        <p id="lens-status" class="muted" style="margin-top:8px"></p>
+        <button id="lens-test-btn" class="wide" style="margin-top:8px">
+          Test each lens</button>
+        <p class="muted" style="margin-top:6px">
+          Hold a card in view and tap <b>Test each lens</b>. Each camera is
+          opened in turn <i>at the same zoom</i>, so the pictures are
+          comparable &mdash; tap whichever looks sharpest. The card
+          doesn&rsquo;t need to fill the frame.
+        </p>
+      </div>
+      <!-- The lens probe decodes into this. It must be rendered, not
+           display:none: a hidden or detached video is never decoded on
+           mobile, which is why every test thumbnail came back blank. -->
+      <div id="lens-probe" aria-hidden="true"
+           style="position:absolute;left:-9999px;width:1px;height:1px;
+                  overflow:hidden;opacity:0;pointer-events:none"></div>
+      <div id="zoom-row" class="hidden" style="margin-top:10px">
+        <label>Zoom <span id="zoom-value" class="muted"></span></label>
+        <input type="range" id="zoom" style="width:100%">
+      </div>
+      <!-- Blur is the single biggest cause of a failed scan and it is hard to
+           judge on a small screen. Showing the measurement lets the lens and
+           the distance be compared directly instead of guessed at. -->
+      <p id="focus-meter" class="muted hidden" style="margin-top:8px"></p>
+      <button id="cam-settings-done" class="wide" style="margin-top:10px">
+        Done</button>
+    </div>
+    <label class="filter-inline hidden" id="auto-row"
+           style="display:flex;align-items:center;gap:10px;margin-top:12px;
+                  text-transform:none;letter-spacing:0;font-size:.95rem;color:var(--text)">
+      <input type="checkbox" id="auto-scan" style="width:22px;height:22px">
+      Keep scanning &mdash; hold up each card in turn
+    </label>
+    <p id="auto-status" class="muted hidden" style="margin-top:6px"></p>
+    <!-- Works over plain HTTP: hands off to the OS camera app rather than
+         asking for a live stream, so a phone without HTTPS is not stuck. -->
+    <input type="file" id="file-input" accept="image/*" capture="environment"
+           class="hidden">
+    <button id="file-btn" class="wide" style="margin-top:10px">Take a photo</button>
+    <p id="photo-note" class="muted hidden" style="margin-top:8px"></p>
+  </div>
+
+  <!-- Typing and the condition/location fields are both occasional: most
+       scans need neither. They open on demand so the running screen stays
+       short enough to take in at a glance. -->
+  <div class="card">
+    <button id="type-btn" class="wide">Type the card instead</button>
+    <div id="type-panel" class="hidden" style="margin-top:12px">
+      <textarea id="text" rows="4" placeholder="Sol Ring
+— or the bottom-left corner —
+0079/0249 M
+SOM &bull; EN"></textarea>
+      <p class="muted">The set code and collector number in the corner identify
+        the exact printing. A name alone usually can't.</p>
+      <button id="id-btn" class="primary wide">Identify</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <button id="addas-btn" class="wide">Add as: <span id="addas-summary">Near Mint</span></button>
+    <div id="addas-panel" class="hidden" style="margin-top:12px">
+      <div class="row">
+        <select id="condition">
+          <option value="NM">Near Mint</option>
+          <option value="LP">Lightly Played</option>
+          <option value="MP">Moderately Played</option>
+          <option value="HP">Heavily Played</option>
+          <option value="DMG">Damaged</option>
+        </select>
+        <input type="text" id="location" placeholder="Location (optional)">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="result-card">
+    <label>Result</label>
+    <div id="result" class="muted">Nothing scanned yet.</div>
+  </div>
+
+  <div class="card">
+    <label>This session</label>
+    <div class="totals">
+      <div class="stat"><b id="t-scanned">0</b><span>Scanned</span></div>
+      <div class="stat"><b id="t-added">0</b><span>Added</span></div>
+      <div class="stat money"><b id="t-value">$0.00</b><span>Value</span></div>
+    </div>
+    <p id="t-note" class="muted"></p>
+    <div id="log" class="log"></div>
+  </div>
+</main>
+
+<div id="toast" class="hidden"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // The token comes from the pairing URL the first time, then from storage.
+  // Keeping it here means the page can be bookmarked or added to the home
+  // screen and reopened later without the token in the address — which is
+  // what makes "open it at the shop and start scanning" possible, and keeps
+  // the token out of a URL that gets shared or screenshotted.
+  const TOKEN_KEY = "densa-deck-token";
+  const urlToken = new URLSearchParams(location.search).get("t") || "";
+  if (urlToken) {
+    try { localStorage.setItem(TOKEN_KEY, urlToken); } catch (e) { /* private mode */ }
+  }
+  let storedToken = "";
+  try { storedToken = localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { /* ignore */ }
+  const TOKEN = urlToken || storedToken;
+
+  // The token deliberately STAYS in the address bar. Stripping it looked
+  // tidier and broke the main way this gets used: "Add to Home Screen"
+  // captures whatever URL is showing, so a stripped one produced a shortcut
+  // with no token — and a home-screen shortcut opens in its own storage
+  // context, where the copy saved above isn't visible either. The result was
+  // a shortcut that could never pair.
+  //
+  // So the URL carries the token. The tailnet is the perimeter that keeps
+  // strangers off this port at all, and Unpair on the desktop rotates the
+  // token if that URL ever ends up somewhere it shouldn't.
+  const $ = (id) => document.getElementById(id);
+  let stream = null;
+  let imageCapture = null;
+  let lastPreview = null;
+  let lastStillPrint = null;
+  let stillsAreStale = false;
+  // Which lens the user picked, remembered per phone. Nobody wants to
+  // rediscover that the main camera can't focus on a card every session.
+  const LENS_KEY = "densa-deck-lens";
+  // Mean per-pixel change between consecutive preview frames. A phone resting
+  // on a table differs only by sensor noise, a few levels at most; a phone
+  // being carried changes most of the frame. Set well above the noise floor
+  // so it only suppresses unmistakable movement — a scan that fires one tick
+  // late costs nothing, one that never fires is a broken feature.
+  const MOTION_CEILING = 12;
+  let last = null;
+  let busy = false;
+
+  function toast(msg, kind) {
+    const t = $("toast");
+    t.textContent = msg;
+    t.className = kind || "";
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => t.classList.add("hidden"), 3200);
+  }
+
+  async function api(route, payload) {
+    const r = await fetch("/api/" + route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Densa-Token": TOKEN },
+      body: JSON.stringify(payload || {}),
+    });
+    if (r.status === 403) {
+      // A stored token that stops working means it was revoked on the
+      // desktop. Clear it so the page doesn't keep retrying a dead token.
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+      throw new Error("This phone was unpaired — scan the QR code again.");
+    }
+    const data = await r.json();
+    if (data && data.ok === false) throw new Error(data.error || "Failed");
+    return data;
+  }
+
+  // ------------------------------------------------------------- camera
+
+  // getUserMedia simply does not exist outside a secure context, so check
+  // rather than letting the button fail with a confusing error.
+  const canStream = window.isSecureContext &&
+                    navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+  if (!canStream) {
+    $("insecure").classList.remove("hidden");
+    $("cam-btn").disabled = true;
+  }
+
+  $("cam-btn").addEventListener("click", async () => {
+    if (stream) { stopCamera(); return; }
+    await startCamera(localStorage.getItem(LENS_KEY) || "");
+  });
+
+  // Every camera the browser will admit to, plus whatever we learn by
+  // actually opening it. Nothing here is inferred from the device label:
+  // labels lie often enough that filtering on them hid one of three back
+  // cameras and offered four "front" ones on a phone that has a single front
+  // camera.
+  let lenses = [];
+
+  $("lens-grid").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button[data-dev]");
+    if (!b || b.disabled) return;
+    await selectLens(b.dataset.dev);
+  });
+
+  $("lens-test-btn").addEventListener("click", testLenses);
+
+  async function selectLens(deviceId) {
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    const ok = await startCamera(deviceId);
+    if (ok) {
+      localStorage.setItem(LENS_KEY, deviceId);
+    } else {
+      // Say so, rather than silently reverting to the default camera — which
+      // is indistinguishable from the tap having done nothing at all.
+      const lens = lenses.find(l => l.deviceId === deviceId);
+      if (lens) lens.broken = true;
+      toast("That lens wouldn't open — try another", "err");
+    }
+    renderLensGrid();
+    lensStatus();
+  }
+
+  async function listLenses() {
+    if (!navigator.mediaDevices.enumerateDevices) return;
+    let devices = [];
+    try { devices = await navigator.mediaDevices.enumerateDevices(); }
+    catch (e) { return; }
+
+    const seen = new Set();
+    const next = [];
+    for (const d of devices.filter(d => d.kind === "videoinput")) {
+      if (!d.deviceId || seen.has(d.deviceId)) continue;   // some phones repeat
+      seen.add(d.deviceId);
+      const prior = lenses.find(l => l.deviceId === d.deviceId);
+      next.push(prior || { deviceId: d.deviceId, label: d.label || "",
+                           facing: "", thumb: "", focus: 0, broken: false,
+                           zoom: null, width: 0, height: 0 });
+    }
+    lenses = next;
+    if (lenses.length < 2) return;
+    $("lens-row").classList.remove("hidden");
+    renderLensGrid();
+    lensStatus();
+  }
+
+  // A name for a camera we may know nothing about yet. Facing comes from the
+  // track once tested, which is the only source that has proved trustworthy.
+  function lensName(lens, index) {
+    if (lens.facing === "user") return "Front";
+    const raw = (lens.label || "").toLowerCase();
+    if (/tele/.test(raw)) return "Telephoto";
+    if (/ultra/.test(raw)) return "Ultra-wide";
+    if (lens.facing === "environment") return "Back " + (index + 1);
+    return "Camera " + (index + 1);
+  }
+
+  function renderLensGrid() {
+    const current = currentDeviceId();
+    const best = Math.max(0, ...lenses.map(l => l.focus || 0));
+    $("lens-grid").innerHTML = lenses.map((l, i) => {
+      const isBest = best > 0 && l.focus === best;
+      const size = l.width ? l.width + "\u00d7" + l.height : "";
+      return "<button data-dev='" + esc(l.deviceId) + "'"
+        + (l.deviceId === current ? " class='active'" : "")
+        + (l.broken ? " disabled" : "") + ">"
+        + (l.thumb ? "<img class='shot' src='" + l.thumb + "' alt=''>"
+                   : "<span class='blank'>\ud83d\udcf7</span>")
+        + "<span>" + esc(lensName(l, i)) + "</span>"
+        + (l.broken ? "<span class='score'>unavailable</span>"
+           : l.focus ? "<span class='score" + (isBest ? " best" : "") + "'>focus "
+                       + Math.round(l.focus) + (isBest ? " \u2713" : "") + "</span>"
+           : "<span class='score'>untested</span>")
+        + (size ? "<span class='score'>" + size + "</span>" : "")
+        + "</button>";
+    }).join("");
+  }
+
+  // What is live right now, read back from the track rather than assumed.
+  // Without this the picker gave no sign that a tap had changed anything.
+  function lensStatus() {
+    const el = $("lens-status");
+    if (!el) return;
+    const track = stream && stream.getVideoTracks()[0];
+    if (!track) { el.textContent = "Camera off."; return; }
+    const set = (track.getSettings && track.getSettings()) || {};
+    const index = lenses.findIndex(l => l.deviceId === set.deviceId);
+    const lens = index >= 0 ? lenses[index] : null;
+    const bits = ["Using " + (lens ? lensName(lens, index) : "camera")];
+    if (set.width) bits.push(set.width + "\u00d7" + set.height);
+    if (set.zoom != null) bits.push("zoom " + Number(set.zoom).toFixed(1) + "\u00d7");
+    el.textContent = bits.join(" \u00b7 ");
+  }
+
+  let testing = false;
+  async function testLenses() {
+    if (testing) return;
+    testing = true;
+    const restore = currentDeviceId() || localStorage.getItem(LENS_KEY) || "";
+    const btn = $("lens-test-btn");
+    btn.disabled = true;
+    try {
+      for (let i = 0; i < lenses.length; i++) {
+        const lens = lenses[i];
+        btn.textContent = "Testing " + lensName(lens, i)
+                        + " (" + (i + 1) + "/" + lenses.length + ")\u2026";
+        Object.assign(lens, await probeLens(lens.deviceId));
+        renderLensGrid();
+      }
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Test each lens";
+      testing = false;
+      await startCamera(restore);
+      renderLensGrid();
+      lensStatus();
+    }
+  }
+
+  async function probeLens(deviceId) {
+    const dead = { thumb: "", focus: 0, broken: true, facing: "", width: 0,
+                   height: 0, zoom: null };
+    let probe = null;
+    try {
+      probe = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId },
+                 width: { ideal: 1920 }, height: { ideal: 1080 },
+                 advanced: [{ focusMode: "continuous" }] },
+      });
+    } catch (e) {
+      return dead;
+    }
+
+    // The video element MUST be in the document. A detached one is never
+    // decoded on mobile, so videoWidth stays 0 and every thumbnail comes out
+    // blank — which is exactly what "test cameras doesn't show a preview"
+    // was. Parked off-screen rather than display:none, which would stop the
+    // decoding just as effectively.
+    const holder = $("lens-probe");
+    const v = document.createElement("video");
+    v.playsInline = true; v.muted = true; v.autoplay = true;
+    v.setAttribute("playsinline", "");
+    holder.appendChild(v);
+    try {
+      v.srcObject = probe;
+      await playQuietly(v);
+      const track = probe.getVideoTracks()[0];
+      const caps = (track.getCapabilities && track.getCapabilities()) || {};
+
+      // Normalise zoom before looking. Each camera opens at its own default,
+      // so untouched thumbnails were framed differently and couldn't be
+      // compared — which defeats the point of showing them side by side.
+      if (caps.zoom) {
+        try { await track.applyConstraints({ zoom: caps.zoom.min }); }
+        catch (e) { /* best effort */ }
+      }
+      // Autofocus and exposure both need a moment; sampling immediately
+      // measures a camera that hasn't finished waking up.
+      await new Promise(r => setTimeout(r, 1100));
+      for (let wait = 0; wait < 20 && !v.videoWidth; wait++) {
+        await new Promise(r => setTimeout(r, 100));
+      }
+      if (!v.videoWidth) return dead;
+
+      const c = document.createElement("canvas");
+      c.width = v.videoWidth;
+      c.height = v.videoHeight;
+      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+      const thumb = document.createElement("canvas");
+      thumb.width = 200;
+      thumb.height = Math.max(1, Math.round(c.height * 200 / c.width));
+      thumb.getContext("2d").drawImage(c, 0, 0, thumb.width, thumb.height);
+      const set = (track.getSettings && track.getSettings()) || {};
+      return {
+        thumb: thumb.toDataURL("image/jpeg", 0.7),
+        focus: sharpnessOf(c),
+        broken: false,
+        facing: set.facingMode || (caps.facingMode || [])[0] || "",
+        width: set.width || c.width,
+        height: set.height || c.height,
+        zoom: caps.zoom || null,
+      };
+    } catch (e) {
+      return dead;
+    } finally {
+      probe.getTracks().forEach(t => t.stop());
+      v.srcObject = null;
+      v.remove();
+    }
+  }
+
+  function esc(v) {
+    return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function money(v) {
+    return v == null ? "" : "$" + Number(v).toFixed(2);
+  }
+
+  // HTMLMediaElement.play() returns undefined on older engines rather than a
+  // promise, so awaiting `.catch` on it throws. Autoplay rejections are also
+  // routine and harmless here — the stream is already live.
+  function playQuietly(video) {
+    try {
+      const result = video.play();
+      return result && result.catch ? result.catch(() => {}) : Promise.resolve();
+    } catch (e) {
+      return Promise.resolve();
+    }
+  }
+
+  function currentDeviceId() {
+    const track = stream && stream.getVideoTracks()[0];
+    return (track && track.getSettings && track.getSettings().deviceId) || "";
+  }
+
+  // Returns whether the camera actually opened, so a caller that asked for a
+  // SPECIFIC lens can report the failure instead of silently ending up on the
+  // default one — which was indistinguishable from the tap doing nothing.
+  async function startCamera(deviceId) {
+    try {
+      // Ask for far more than 1080p and for continuous autofocus. A preview
+      // stream defaults to something modest and does not necessarily focus on
+      // its own. The browser clamps both to what the sensor can deliver.
+      const video = {
+        width: { ideal: 3840 }, height: { ideal: 2160 },
+        advanced: [{ focusMode: "continuous" }],
+      };
+      if (deviceId) video.deviceId = { exact: deviceId };
+      else video.facingMode = { ideal: "environment" };
+      stream = await navigator.mediaDevices.getUserMedia({ video });
+    } catch (err) {
+      stream = null;
+      if (!deviceId) toast("Camera unavailable: " + err.message, "err");
+      return false;
+    }
+
+    try {
+      const track = stream.getVideoTracks()[0];
+      if (track && track.getCapabilities) {
+        const caps = track.getCapabilities() || {};
+        if ((caps.focusMode || []).includes("continuous")) {
+          await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+        }
+        // Full-resolution stills from the same track, no page navigation.
+        if (window.ImageCapture) {
+          try { imageCapture = new ImageCapture(track); }
+          catch (e) { imageCapture = null; }
+        }
+        setupZoom(track, caps);
+      }
+    } catch (e) { /* focus, zoom and stills are all best-effort */ }
+
+    const v = $("video");
+    v.srcObject = stream;
+    await playQuietly(v);
+    v.classList.remove("hidden");
+    $("shot").classList.add("hidden");
+    $("snap-btn").classList.remove("hidden");
+    $("auto-row").classList.remove("hidden");
+    $("cam-btn").textContent = "Stop camera";
+    $("cam-settings-btn").classList.remove("hidden");
+    lastStillPrint = null;
+    stillsAreStale = false;
+    await listLenses();
+    startFocusMeter();
+    lensStatus();
+    return true;
+  }
+
+  // Zoom, applied as a plain constraint rather than inside `advanced`:
+  // `advanced` is best-effort by specification and phones routinely ignore it.
+  // The number shown is READ BACK from the track afterwards, so it reflects
+  // what the camera actually did — previously the slider moved, the label
+  // followed the slider, and neither reflected reality.
+  function setupZoom(track, caps) {
+    const row = $("zoom-row"), slider = $("zoom");
+    if (!caps || !caps.zoom) { row.classList.add("hidden"); return; }
+    slider.min = caps.zoom.min;
+    slider.max = caps.zoom.max;
+    slider.step = caps.zoom.step || 0.1;
+    const settings = (track.getSettings && track.getSettings()) || {};
+    slider.value = settings.zoom != null ? settings.zoom : caps.zoom.min;
+    showZoom(track, caps);
+    row.classList.remove("hidden");
+    slider.oninput = async () => {
+      const want = Number(slider.value);
+      try { await track.applyConstraints({ zoom: want }); }
+      catch (e) { /* the phone may refuse mid-stream */ }
+      showZoom(track, caps, want);
+      lensStatus();
+    };
+  }
+
+  function showZoom(track, caps, requested) {
+    const actual = ((track.getSettings && track.getSettings()) || {}).zoom;
+    const range = caps && caps.zoom
+      ? " (" + Number(caps.zoom.min).toFixed(1) + "\u2013"
+        + Number(caps.zoom.max).toFixed(1) + "\u00d7)" : "";
+    if (actual == null) {
+      $("zoom-value").textContent = "not reported by this camera";
+      return;
+    }
+    let text = Number(actual).toFixed(1) + "\u00d7" + range;
+    // Be explicit when the camera refuses, rather than showing a number that
+    // implies something happened.
+    if (requested != null && Math.abs(requested - actual) > 0.05) {
+      text += " \u2014 this lens won't go to " + requested.toFixed(1) + "\u00d7";
+    }
+    $("zoom-value").textContent = text;
+  }
+
+  function stopCamera() {
+    stopAuto();
+    stopFocusMeter();
+    $("zoom-row").classList.add("hidden");
+    $("lens-row").classList.add("hidden");
+    $("cam-settings").classList.add("hidden");
+    $("cam-settings-btn").classList.add("hidden");
+    $("cam-settings-btn").textContent = "Camera settings";
+    lastStillPrint = null;
+    stillsAreStale = false;
+    const auto = $("auto-scan");
+    if (auto) auto.checked = false;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    imageCapture = null;
+    lastPreview = null;
+    $("video").classList.add("hidden");
+    $("snap-btn").classList.add("hidden");
+    $("auto-row").classList.add("hidden");
+    $("cam-btn").textContent = "Start camera";
+  }
+
+  // ------------------------------------------------------- collections
+
+  // What this run is filing into. The master collection always receives the
+  // card; this only decides which grouping inside it. Remembered per phone so
+  // a run continues where it left off after the screen locks.
+  const COLLECTION_KEY = "densa-deck-collection";
+  let collections = [];
+
+  async function loadCollections() {
+    let data;
+    try { data = await api("collections", {}); }
+    catch (e) { return; }
+    collections = data.collections || [];
+    const saved = localStorage.getItem(COLLECTION_KEY) || "";
+    const known = collections.some(c => String(c.collection_id) === saved);
+    const chosen = known ? saved : String(data.default_collection_id || "");
+    const select = $("collection-select");
+    select.innerHTML = collections.map(c =>
+      "<option value='" + c.collection_id + "'"
+      + (String(c.collection_id) === chosen ? " selected" : "") + ">"
+      + esc(c.name) + " (" + c.cards + ")"
+      + (c.is_default ? " \u2014 default" : "") + "</option>").join("");
+    localStorage.setItem(COLLECTION_KEY, chosen);
+  }
+
+  function currentCollectionId() {
+    const value = $("collection-select").value;
+    return value ? Number(value) : null;
+  }
+
+  $("collection-select").addEventListener("change", () => {
+    localStorage.setItem(COLLECTION_KEY, $("collection-select").value);
+  });
+
+  $("collection-new-btn").addEventListener("click", () => {
+    $("collection-new").classList.toggle("hidden");
+    if (!$("collection-new").classList.contains("hidden")) $("collection-name").focus();
+  });
+
+  $("collection-cancel-btn").addEventListener("click", () => {
+    $("collection-new").classList.add("hidden");
+    $("collection-name").value = "";
+  });
+
+  $("collection-create-btn").addEventListener("click", async () => {
+    const name = ($("collection-name").value || "").trim();
+    if (!name) { toast("Give the collection a name", "err"); return; }
+    let made;
+    try { made = await api("new-collection", { name: name }); }
+    catch (err) { toast(err.message, "err"); return; }
+    $("collection-new").classList.add("hidden");
+    $("collection-name").value = "";
+    const id = made.collection && made.collection.collection_id;
+    if (id) localStorage.setItem(COLLECTION_KEY, String(id));
+    await loadCollections();
+    toast("Scanning into " + name, "ok");
+  });
+
+  // ------------------------------------------------------- frame sampling
+
+  function videoCanvas() {
+    const v = $("video");
+    if (!v.videoWidth) return null;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    return c;
+  }
+
+  // A small greyscale copy, for comparing one frame to the next.
+  function previewGrey(canvas) {
+    const w = 96, h = Math.max(1, Math.round(canvas.height * w / canvas.width));
+    const small = document.createElement("canvas");
+    small.width = w; small.height = h;
+    const ctx = small.getContext("2d");
+    ctx.drawImage(canvas, 0, 0, w, h);
+    const px = ctx.getImageData(0, 0, w, h).data;
+    const grey = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      grey[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+    }
+    return grey;
+  }
+
+  // Variance of a 4-neighbour Laplacian: high on crisp detail, near zero on a
+  // smear. Reported rather than thresholded — measured across real scans, the
+  // absolute value depends on lens, light and subject, so there is no honest
+  // universal cutoff. Comparing two lenses on the same card is what it IS
+  // good for.
+  function sharpnessOf(canvas) {
+    const w = 96, h = Math.max(1, Math.round(canvas.height * w / canvas.width));
+    const grey = previewGrey(canvas);
+    let sum = 0, sumSq = 0, n = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const lap = 4 * grey[i] - grey[i - 1] - grey[i + 1]
+                                - grey[i - w] - grey[i + w];
+        sum += lap; sumSq += lap * lap; n++;
+      }
+    }
+    if (!n) return 0;
+    const mean = sum / n;
+    return Math.max(0, sumSq / n - mean * mean);
+  }
+
+  // How much the scene changed since the last tick. This is deliberately NOT
+  // a sharpness measure: measured on real scans, preview sharpness of frames
+  // holding a card (157-536) overlapped completely with frames of the floor
+  // taken while walking (244-435), so no threshold on it separates the two.
+  // Frame-to-frame change can: a still scene differs only by sensor noise.
+  function motionSince(canvas) {
+    const grey = previewGrey(canvas);
+    const previous = lastPreview;
+    lastPreview = grey;
+    if (!previous || previous.length !== grey.length) return 0;
+    let total = 0;
+    for (let i = 0; i < grey.length; i++) total += Math.abs(grey[i] - previous[i]);
+    return total / grey.length;
+  }
+
+  let focusTimer = null;
+  let focusBest = 0;
+
+  function startFocusMeter() {
+    stopFocusMeter();
+    focusBest = 0;
+    $("focus-meter").classList.remove("hidden");
+    focusTimer = setInterval(() => {
+      const canvas = videoCanvas();
+      if (!canvas) return;
+      const value = sharpnessOf(canvas);
+      focusBest = Math.max(focusBest, value);
+      const pct = focusBest > 0 ? Math.round(100 * value / focusBest) : 0;
+      const word = pct >= 80 ? "sharp" : pct >= 50 ? "soft" : "blurred";
+      $("focus-meter").textContent =
+        "Focus " + Math.round(value) + " (" + word + ", best "
+        + Math.round(focusBest) + ") \u2014 higher is sharper; try another lens "
+        + "or move further away to raise it.";
+    }, 400);
+  }
+
+  function stopFocusMeter() {
+    if (focusTimer) clearInterval(focusTimer);
+    focusTimer = null;
+    const el = $("focus-meter");
+    if (el) { el.classList.add("hidden"); el.textContent = ""; }
+  }
+
+  function grabFrame() {
+    const c = videoCanvas();
+    return c ? c.toDataURL("image/jpeg", 0.9) : null;
+  }
+
+  // A still from the camera rather than a video frame: the photo pipeline
+  // focuses and exposes properly where the preview stream does not. Measured
+  // on real scans, stills came back roughly ten times sharper than preview
+  // frames of the same card. It does NOT fix a lens that cannot focus at this
+  // distance at all — that is what the lens picker is for.
+  async function grabStill() {
+    if (!imageCapture || stillsAreStale) return grabFrame();
+    try {
+      const blob = await imageCapture.takePhoto();
+      const bitmap = await createImageBitmap(blob);
+      const c = document.createElement("canvas");
+      c.width = bitmap.width; c.height = bitmap.height;
+      c.getContext("2d").drawImage(bitmap, 0, 0);
+      bitmap.close();
+
+      // Some phones hand back the SAME photo every call. Measured on a real
+      // scanning run: twenty consecutive stills over 41 seconds were
+      // byte-identical, so every card after the first was read from a frozen
+      // image of the first. That is worse than a soft picture — it silently
+      // reports the wrong card — so once detected, stop using this path.
+      const fingerprint = previewGrey(c);
+      if (lastStillPrint && sameImage(fingerprint, lastStillPrint)) {
+        stillsAreStale = true;
+        toast("Camera returned a stale photo \u2014 using the live view", "err");
+        return grabFrame();
+      }
+      lastStillPrint = fingerprint;
+      return c.toDataURL("image/jpeg", 0.9);
+    } catch (e) {
+      return grabFrame();
+    }
+  }
+
+  function sameImage(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    let total = 0;
+    for (let i = 0; i < a.length; i++) total += Math.abs(a[i] - b[i]);
+    // Two captures of a real scene always differ by at least sensor noise.
+    return total / a.length < 0.5;
+  }
+
+  $("snap-btn").addEventListener("click", async () => {
+    const frame = await grabStill();
+    if (frame) sendImage(frame);
+  });
+
+  // ------------------------------------------------------ panel toggles
+
+  // Rows past this many switch to the symbol grid.
+  const ICON_GRID_FROM = 6;
+
+  // Always acts on the panel and its own button, never on ev.target: these
+  // buttons contain a span, so a tap that lands on the text reports the span
+  // as the target and would rewrite the wrong element.
+  function togglePanel(panelId) {
+    const panel = $(panelId);
+    const open = panel.classList.toggle("hidden") === false;
+    if (open) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return open;
+  }
+
+  $("type-btn").addEventListener("click", () => {
+    const open = togglePanel("type-panel");
+    $("type-btn").textContent = open ? "Hide typing" : "Type the card instead";
+    if (open) $("text").focus();
+  });
+
+  $("addas-btn").addEventListener("click", () => {
+    togglePanel("addas-panel");
+    $("addas-btn").innerHTML = "Add as: <span id='addas-summary'>"
+      + esc(addAsSummary()) + "</span>";
+  });
+
+  function addAsSummary() {
+    const sel = $("condition");
+    const cond = sel.options[sel.selectedIndex].textContent;
+    const where = ($("location").value || "").trim();
+    return where ? cond + " \u00b7 " + where : cond;
+  }
+
+  ["condition", "location"].forEach(id => {
+    $(id).addEventListener("change", () => {
+      const el = $("addas-summary");
+      if (el) el.textContent = addAsSummary();
+    });
+  });
+
+  $("cam-settings-btn").addEventListener("click", () => {
+    const open = togglePanel("cam-settings");
+    $("cam-settings-btn").textContent =
+      open ? "Hide camera settings" : "Camera settings";
+  });
+
+  $("cam-settings-done").addEventListener("click", () => {
+    $("cam-settings").classList.add("hidden");
+    $("cam-settings-btn").textContent = "Camera settings";
+  });
+
+  // ------------------------------------------------- continuous scanning
+
+  let autoTimer = null;
+  let lastAddedName = "";
+  let lastAddedAt = 0;
+  let lastAddedCount = 0;
+  // How long the same card name is held off after being filed. Long enough to
+  // cover a card sitting in frame while the phone refocuses, short enough that
+  // deliberately scanning a real second copy isn't a fight.
+  const REPEAT_HOLD_MS = 4000;
+
+  $("auto-scan").addEventListener("change", (ev) => {
+    if (ev.target.checked) startAuto(); else stopAuto();
+  });
+
+  function startAuto() {
+    stopAuto();
+    setAutoStatus("Looking for a card\u2026");
+    // Paced rather than free-running: each frame is a round trip plus OCR on
+    // the desktop, so firing faster just queues work and drains the battery.
+    autoTimer = setInterval(autoTick, 1300);
+  }
+
+  function stopAuto() {
+    if (autoTimer) clearInterval(autoTimer);
+    autoTimer = null;
+    setAutoStatus("");
+  }
+
+  function setAutoStatus(msg) {
+    const el = $("auto-status");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.classList.toggle("hidden", !msg);
+  }
+
+  async function autoTick() {
+    if (busy || !stream) return;
+    const canvas = videoCanvas();
+    if (!canvas) return;
+
+    // Don't spend a round trip while the phone is in motion. Carrying it
+    // between cards uploaded a 2 MB photograph of the floor every 1.3s and
+    // read nothing from any of them.
+    if (motionSince(canvas) > MOTION_CEILING) {
+      setAutoStatus("Hold steady\u2026");
+      return;
+    }
+
+    const frame = await grabStill();
+    if (!frame) return;
+    busy = true;
+    try {
+      const r = await api("capture", { image: frame });
+      const cands = r.candidates || [];
+      if (r.auto_addable && cands.length) {
+        const name = cands[0].name;
+        // The same card sits in frame for several ticks. Hold it off for a
+        // few seconds rather than until the next different card: the guard
+        // used to clear on any frame that read nothing, so one blurred frame
+        // between two good ones was enough to file the same card twice. Six
+        // copies of one card went in that way, unnoticed.
+        const now = Date.now();
+        const repeat = (name === lastAddedName)
+          && (now - lastAddedAt) < REPEAT_HOLD_MS;
+        if (!repeat) {
+          const again = name === lastAddedName ? lastAddedCount + 1 : 1;
+          lastAddedName = name;
+          lastAddedAt = now;
+          lastAddedCount = again;
+          await commit(cands[0], defaultFinish(cands[0], r), { repeat: again });
+          setAutoStatus("Added " + name + " \u2014 next card\u2026");
+        } else {
+          lastAddedAt = now;   // still in frame; keep holding it off
+          setAutoStatus("Same card still in frame \u2014 swap it out");
+        }
+      } else if (cands.length) {
+        // Ambiguous mid-run: stop and ask rather than guessing, but don't
+        // lose the user's place.
+        stopAuto();
+        $("auto-scan").checked = false;
+        render(r);
+        toast("Need a choice for this one", "err");
+      } else {
+        // Deliberately does NOT clear the repeat guard: a frame that read
+        // nothing is usually the same card mid-refocus, not a new one.
+        setAutoStatus("No card detected \u2014 hold it steady in frame");
+      }
+    } catch (err) {
+      setAutoStatus(err.message);
+    }
+    busy = false;
+  }
+
+  // ------------------------------------------------------- photo upload
+
+  $("file-btn").addEventListener("click", () => $("file-input").click());
+  $("file-input").addEventListener("change", (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => sendImage(reader.result);
+    reader.readAsDataURL(file);
+  });
+
+  async function sendImage(dataUrl) {
+    if (busy) return;
+    if (!photoSupported) {
+      toast(photoReason || "Photo scanning isn't available.", "err");
+      return;
+    }
+    busy = true;
+    $("result").textContent = "Reading the card\u2026";
+    // The result card sits below the fold on a phone, so scroll to it —
+    // otherwise both success and failure look like nothing happened.
+    $("result-card").scrollIntoView({ behavior: "smooth", block: "center" });
+    try {
+      render(await api("capture", { image: dataUrl }));
+    } catch (err) {
+      $("result").innerHTML = "<span class='muted'>" + esc(err.message) + "</span>";
+      $("conf").textContent = "";
+      toast(err.message, "err");   // always visible, unlike the card
+    }
+    busy = false;
+  }
+
+  // ---------------------------------------------------- photo capability
+
+  let photoSupported = true;
+  let photoReason = "";
+
+  async function checkPhotoSupport() {
+    try {
+      const caps = await api("capabilities", {});
+      photoSupported = caps.photo !== false;
+      photoReason = caps.reason || "";
+    } catch (e) {
+      return;                       // assume it works; the error will say
+    }
+    const note = $("photo-note");
+    if (!note) return;
+    note.classList.toggle("hidden", photoSupported);
+    if (!photoSupported) note.textContent = photoReason;
+  }
+
+  // ----------------------------------------------------------- identify
+
+  // Enter deliberately does NOT submit here. This field asks for the card's
+  // corner block, which is two or three lines, so swallowing Enter made the
+  // very format the placeholder demonstrates impossible to type. The Identify
+  // button submits.
+  $("id-btn").addEventListener("click", identify);
+
+  async function identify() {
+    const text = ($("text").value || "").trim();
+    if (!text) {
+      toast("Type the card's name, or the set code and number from its "
+            + "corner.", "err");
+      return;
+    }
+    if (busy) return;
+    busy = true;
+    try {
+      render(await api("identify", { text: text }));
+    } catch (err) {
+      toast(err.message, "err");
+    }
+    busy = false;
+  }
+
+  // ------------------------------------------------------------- result
+
+  function render(result) {
+    last = result;
+    const conf = result.confidence || "unknown";
+    $("conf").textContent = { exact: "Exact", likely: "Likely",
+                              ambiguous: "Choose one", unknown: "Not found" }[conf] || "";
+    $("conf").className = "conf " + conf;
+
+    const host = $("result");
+    const cands = result.candidates || [];
+    if (!cands.length) {
+      host.innerHTML = "<span class='muted'>Couldn't identify that. The set code "
+        + "and collector number in the bottom-left corner are the most reliable "
+        + "thing to enter.</span>";
+      return;
+    }
+
+    // Auto-add only when the match is certain. Anything else waits for a tap:
+    // a wrong card filed silently is worse than no card, because you won't
+    // know to go looking for it.
+    if (result.auto_addable) {
+      const fin = defaultFinish(cands[0], result);
+      commit(cands[0], fin);
+      host.innerHTML = "<span class='muted'>Added " + esc(cands[0].name)
+        + (fin === "foil" ? " <b>(foil)</b>" : "") + ".</span>";
+      return;
+    }
+
+    // Staples are reprinted dozens of times — Arcane Signet 88, Sol Ring 131 —
+    // and a stack of that many rows with two price buttons each is unusable on
+    // a phone. Past a handful, switch to a grid of set symbols: the symbol is
+    // printed on the card, so this is recognition rather than reading.
+    if (cands.length > ICON_GRID_FROM) {
+      host.innerHTML = "<p class='muted'>" + cands.length + " printings. Tap the "
+        + "set symbol on your card &mdash; the finish is chosen next.</p>"
+        + "<div class='iconpick'>" + cands.map((c, i) =>
+            "<button data-i='" + i + "' data-grid='1'>" + setIcon(c, true)
+            + "<span class='num'>" + esc((c.set_code || "").toUpperCase())
+            + "<br>#" + esc(c.collector_number) + "</span></button>").join("")
+        + "</div>"
+        + "<div class='pick none'><div><div class='name'>None of these</div>"
+        + "<div class='sub'>Type the corner text instead</div></div>"
+        + "<div class='acts'><button data-none='1'>Not listed</button></div></div>";
+      host.onclick = (ev) => {
+        if (ev.target.closest("button[data-none]")) { rejectCandidates(); return; }
+        const b = ev.target.closest("button[data-i]");
+        if (!b) return;
+        renderFinishChoice(cands[Number(b.dataset.i)], result);
+      };
+      focusChoice();
+      return;
+    }
+
+    host.innerHTML = "<p class='muted'>Pick the printing you're holding — prices "
+      + "differ a lot between them.</p>" + cands.map((c, i) => {
+      const acts = (c.finishes || ["nonfoil"]).map(f => {
+        const p = f === "foil" ? c.price_usd_foil : c.price_usd;
+        return "<button data-i='" + i + "' data-f='" + esc(f) + "'>+ " + esc(f)
+             + (p == null ? "" : " " + money(p)) + "</button>";
+      }).join("");
+      return "<div class='pick'>" + setIcon(c) + "<div><div class='name'>"
+        + esc(c.name) + "</div><div class='sub'>"
+        + esc((c.set_code || "").toUpperCase()) + " #" + esc(c.collector_number)
+        + " <span class='setname'>" + esc(c.set_name) + "</span>"
+        + "</div></div><div class='acts'>" + acts + "</div></div>";
+    }).join("")
+      // A miscut, misprinted or simply misread card must have a way out that
+      // isn't "file the wrong printing". Without it the only options were an
+      // incorrect add or abandoning the card.
+      + "<div class='pick none'><div><div class='name'>None of these</div>"
+      + "<div class='sub'>Type the corner text instead</div></div>"
+      + "<div class='acts'><button data-none='1'>Not listed</button></div></div>";
+
+    host.onclick = (ev) => {
+      if (ev.target.closest("button[data-none]")) { rejectCandidates(); return; }
+      const b = ev.target.closest("button[data-i]");
+      if (!b) return;
+      commit(cands[Number(b.dataset.i)], b.dataset.f);
+    };
+
+    // A choice is only a choice if you notice it. The camera fills the screen
+    // and the result sits below it, so a scan that needed a decision looked
+    // exactly like a scan that did nothing.
+    focusChoice();
+  }
+
+  // Set symbols, hotlinked from Scryfall the same way card images are. Set
+  // NAMES are close to useless when sorting a real collection — nobody knows
+  // which box "Dragons of Tarkir" is — but the symbol is printed on the card
+  // and recognisable at a glance.
+  function setIcon(c, bare) {
+    const code = (c.set_code || "").toLowerCase();
+    if (!code) return "";
+    return "<img" + (bare ? "" : " class='seticon'")
+         + " alt='" + esc(code.toUpperCase()) + "' "
+         + "src='https://svgs.scryfall.io/sets/" + esc(code) + ".svg' "
+         + "onerror=\"this.style.visibility='hidden'\">";
+  }
+
+  // Second step of the grid flow: which finish, now that the printing is known.
+  function renderFinishChoice(candidate, result) {
+    const host = $("result");
+    const finishes = candidate.finishes || ["nonfoil"];
+    host.innerHTML = "<div class='pick'>" + setIcon(candidate)
+      + "<div><div class='name'>" + esc(candidate.name) + "</div>"
+      + "<div class='sub'>" + esc((candidate.set_code || "").toUpperCase())
+      + " #" + esc(candidate.collector_number) + " <span class='setname'>"
+      + esc(candidate.set_name) + "</span></div></div></div>"
+      + "<div class='row' style='margin-top:10px'>" + finishes.map(f => {
+          const p = f === "foil" ? candidate.price_usd_foil : candidate.price_usd;
+          return "<button class='primary' data-f='" + esc(f) + "'>+ " + esc(f)
+               + (p == null ? "" : " " + money(p)) + "</button>";
+        }).join("") + "</div>"
+      + "<button class='wide' data-back='1' style='margin-top:10px'>Back to the "
+      + "list</button>";
+    host.onclick = (ev) => {
+      if (ev.target.closest("button[data-back]")) { render(result); return; }
+      const b = ev.target.closest("button[data-f]");
+      if (b) commit(candidate, b.dataset.f);
+    };
+    focusChoice();
+  }
+
+  function rejectCandidates() {
+    last = null;
+    $("result").innerHTML = "<span class='muted'>Nothing filed. Type the set code "
+      + "and collector number from the bottom-left corner — that identifies the "
+      + "printing exactly.</span>";
+    $("conf").textContent = "";
+    $("conf").className = "conf";
+    const box = $("text");
+    if (box) { box.value = ""; box.focus(); }
+    focusChoice();
+  }
+
+  function focusChoice() {
+    const card = $("result-card");
+    if (!card) return;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (navigator.vibrate) navigator.vibrate([20, 60, 20]);
+  }
+
+  function defaultFinish(c, result) {
+    // The footer's foil star tells us the finish outright. Ignoring it filed
+    // foils at the non-foil price, which on this card is 7x wrong.
+    if (result && result.suggested_finish === "foil") {
+      const f = c.finishes || [];
+      if (!f.length || f.indexOf("foil") >= 0) return "foil";
+    }
+    const f = c.finishes || [];
+    return f.indexOf("nonfoil") >= 0 ? "nonfoil" : (f[0] || "nonfoil");
+  }
+
+  async function commit(candidate, finish, opts) {
+    try {
+      const r = await api("commit", {
+        printing_id: candidate.printing_id,
+        card_name: candidate.name,
+        finish: finish,
+        condition: $("condition").value || "NM",
+        location: ($("location").value || "").trim(),
+        confidence: (last && last.confidence) || "phone",
+        collection_id: currentCollectionId(),
+      });
+      renderSession(r.session);
+      const price = finish === "foil" ? candidate.price_usd_foil : candidate.price_usd;
+      flashAdded(candidate, finish, price, (opts && opts.repeat) || 0);
+      // Hands are full of cards; a buzz is the only feedback that lands.
+      if (navigator.vibrate) navigator.vibrate(35);
+      $("text").value = "";
+    } catch (err) {
+      toast("Add failed: " + err.message, "err");
+    }
+  }
+
+  // Takes the whole screen for a beat. Anything smaller loses to a viewfinder
+  // being stared at with both hands full of cards.
+  let flashTimer = null;
+  function flashAdded(candidate, finish, price, repeat) {
+    const el = $("flash");
+    if (!el) return;
+    $("flash-name").textContent = candidate.name
+      + (finish === "foil" ? " (foil)" : "");
+    const bits = [(candidate.set_code || "").toUpperCase()
+                  + " #" + candidate.collector_number];
+    if (price != null) bits.push(money(price));
+    // Say so plainly when this is another copy of the same card, so a repeat
+    // scan of one card reads as a repeat rather than as progress.
+    if (repeat > 1) bits.push("copy #" + repeat + " of this card");
+    $("flash-meta").textContent = bits.join(" · ");
+    el.classList.toggle("dupe", repeat > 1);
+    el.classList.add("show");
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => el.classList.remove("show"), 950);
+  }
+
+  // ------------------------------------------------------------ session
+
+  function renderSession(s) {
+    if (!s) return;
+    $("t-scanned").textContent = s.scanned;
+    $("t-added").textContent = s.added;
+    $("t-value").textContent = money(s.value_usd);
+    const bits = [];
+    if (s.needs_review) bits.push(s.needs_review + " needed a choice");
+    if (s.skipped) bits.push(s.skipped + " skipped");
+    // Say what the total leaves out rather than letting it look complete.
+    if (s.unpriced) bits.push(s.unpriced + " had no price and aren't in the total");
+    $("t-note").textContent = bits.join(" · ");
+
+    // One row per printing with a count and +/-, rather than one row per
+    // scan. Boxes hold playsets, so "Sol Ring x4" is both what you want to
+    // see and what you want to edit; four identical lines is neither.
+    const counts = s.counts || [];
+    $("log").innerHTML = counts.slice(0, 40).map(c =>
+      "<div class='item'>"
+      + "<span class='nm'>" + esc(c.card_name)
+      + (c.finish === "foil" ? " <em>foil</em>" : "") + "</span>"
+      + "<span class='sub'>" + esc(c.set_code ? c.set_code.toUpperCase()
+          + " #" + c.collector_number : "") + "</span>"
+      + "<span class='pr'>" + (c.price_usd == null ? "" : money(c.price_usd))
+      + "</span>"
+      + "<span class='qty'>"
+      + "<button data-adj='-1' data-pid='" + esc(c.printing_id) + "' "
+      +   "data-fin='" + esc(c.finish || "nonfoil") + "' "
+      +   "aria-label='Remove one'>−</button>"
+      + "<b>" + c.quantity + "</b>"
+      + "<button data-adj='1' data-pid='" + esc(c.printing_id) + "' "
+      +   "data-fin='" + esc(c.finish || "nonfoil") + "' "
+      +   "aria-label='Add another'>+</button>"
+      + "</span></div>").join("");
+
+    // Anything scanned but not added still deserves a line, or a skipped card
+    // silently disappears from the run.
+    const misses = (s.entries || []).filter(e => !e.added).slice(-6).reverse();
+    if (misses.length) {
+      $("log").innerHTML += misses.map(e =>
+        "<div class='item skipped'><span class='tick'>·</span>"
+        + "<span class='nm'>" + esc(e.card_name || "(unread)") + "</span>"
+        + "<span class='sub'>not added</span></div>").join("");
+    }
+  }
+
+  // Delegated so the buttons keep working after every re-render.
+  $("log").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button[data-adj]");
+    if (!b || b.disabled) return;
+    b.disabled = true;
+    try {
+      const r = await api("adjust", {
+        printing_id: b.dataset.pid,
+        delta: Number(b.dataset.adj),
+        finish: b.dataset.fin,
+        condition: $("condition").value || "NM",
+        location: ($("location").value || "").trim(),
+        collection_id: currentCollectionId(),
+      });
+      renderSession(r.session);
+      if (navigator.vibrate) navigator.vibrate(20);
+    } catch (err) {
+      toast(err.message, "err");
+      b.disabled = false;
+    }
+  });
+
+  (async function boot() {
+    if (!TOKEN) {
+      document.querySelector("main").innerHTML =
+        "<div class='banner'><b>This link has no pairing code.</b><br>"
+        + "Scan the QR code from Densa Deck on your computer. If you saved "
+        + "this to your home screen, delete that shortcut and make a new one "
+        + "from the page the QR code opens &mdash; the pairing code lives in "
+        + "the address, so a shortcut saved without it can't connect.</div>";
+      return;
+    }
+    await loadCollections();
+    try { renderSession((await api("session", {})).session); } catch (e) { /* first run */ }
+    checkPhotoSupport();
+  })();
+
+  window.addEventListener("pagehide", stopCamera);
+})();
+</script>
+</body>
+</html>

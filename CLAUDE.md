@@ -32,15 +32,34 @@ GitHub on 2026-04-24; **11 post-release commits queued for v0.3.0.**
 - **`combos/`** — Commander Spellbook integration (MIT). ComboStore (SQLite cache),
   detect_combos / detect_near_miss_combos / diff_combos, refresh_combo_snapshot.
 - `export/` — JSON/Markdown/HTML report export (combo sections + Spellbook attribution)
+- **`collection/`** — physical collection, pricing and reseller layer.
+  `storage.py` CollectionStore (`~/.densa-deck/collection.db`, deliberately
+  separate from cards.db — `upsert_cards` is INSERT OR REPLACE and would wipe
+  anything bolted onto `cards`), per printing/finish/condition stacks.
+  `ownership.py` owned/committed/available. `prices.py` PriceProvider seam +
+  valuation + price history (owned printings only). `query.py` price-aware
+  search. `deck_value.py` deck value vs build value vs cost to complete.
+  `scanner.py` OCR-text -> printing identification, `capture.py` camera frame
+  -> flattened card -> footer crop (optional OpenCV, NOT bundled).
+  `allocation.py` opt-in printing-level deck binding. `reseller.py`
+  acquisitions, cost basis, sales, P&L, appraisal. Printing catalogue lives in
+  `data/printings.py` (opt-in `default_cards` ingest, ~107k paper printings).
+  Full plan + rationale: `docs/COLLECTION_PLAN.md`.
 - `benchmarks/` — 6 built-in gauntlet suites (casual-commander, cedh, modern-meta, etc.)
 
-Top-level: `cli.py` (~25 commands), `models.py`, `tiers.py` (free/pro gating),
+`app/phone.py` — phone-as-scanner bridge. Binds 127.0.0.1 ONLY; reached via
+`tailscale serve` (which also supplies the HTTPS origin the phone camera
+requires). Token-paired, explicit route allow-list, stopped on app close.
+Page at `app/static/phone/scan.html` — note the .spec needs its own glob
+for that subdirectory; `static/*` does not recurse.
+
+Top-level: `cli.py` (~27 commands), `models.py`, `tiers.py` (free/pro gating),
 `licensing.py` (hash-based key validation), `legal.py` (attribution).
 
 ## CLI Commands
 
 **Free tier:** ingest, analyze (basic), search, info, calc, license, **combos**
-(refresh/status/detect/near-miss/density), **rule0**, **bracket**, **export** (mtga/mtgo/moxfield)
+(refresh/status/detect/near-miss/density), **rule0**, **bracket**, **export** (mtga/mtgo/moxfield), **collection** (status/sync/add/remove/list/printings/check/value/deck-value/scan/appraise), **phone** (status/serve)
 
 **Pro tier:** analyze --deep, analyze --export, probability, goldfish, gauntlet,
 save, compare, history, diff, practice, **explain**, **compare-decks**, coach,

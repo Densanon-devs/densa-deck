@@ -1,0 +1,107 @@
+========================================================================
+DRAFT — r/mtgdeckbuilders launch post   (DO NOT POST — Jordan posts)
+Product: Densa Deck v0.5.0  |  Price: $49.99 one-time  |  Windows
+Angle: the DECKBUILDING WORKFLOW (deliberately different from the r/EDH
+       "combo/bracket for your pod" angle). Natural-language iteration,
+       budget building, near-miss "add this one card" suggestions,
+       format export. Sub is tool-friendly so this can be a touch more
+       direct — still "I built this," Pro disclosed, link in comment 1.
+========================================================================
+
+--- READ THIS BEFORE POSTING (compliance) --------------------------------
+I could NOT fetch this sub's live rules (Reddit blocks my fetch tools).
+r/mtgdeckbuilders is generally tool-friendly, but before posting:
+  1. Read the current sidebar rules — confirm self-promo of a relevant
+     tool is allowed and whether a flair (e.g. "Tool"/"Resource") is
+     required.
+  2. Follow Reddit's 9:1 rule — this should read as a genuine share, not
+     a drop-and-run. Reply to comments.
+  3. Keep the buy link in comment 1, not the post body, unless the sub
+     explicitly allows links in tool posts.
+Do NOT copy-paste the r/EDH post — this one is deliberately a different
+angle so cross-posters don't see the same wall of text twice.
+--------------------------------------------------------------------------
+
+
+TITLE:
+I built a deckbuilding tool where you iterate by *talking to it* — plug it into Claude Desktop, say "trim this to 100 and keep it under $80," and it does the search + validation locally
+
+[Attach the recorded GIF: the Claude-desktop MCP tool-call cascade.]
+
+
+BODY:
+
+The thing that always slows me down building a deck isn't ideas — it's the
+grind: search for the cards, price-check them, confirm they're format-legal,
+spot the combos I accidentally enabled, then re-export to whatever platform I'm
+playing on. So I built a local engine that does that grind and hooked it up to
+Claude Desktop so I can drive it in plain language.
+
+In the GIF I ask Claude to build a budget list. Under the hood it's calling a
+local rules engine — structured card search with a **price ceiling**, full
+static analysis (archetype, power level, mana curve, ramp/draw/interaction),
+**combo + near-miss combo detection** ("you're one card from [X]"), and one-click
+export to **MTGA / MTGO / Moxfield** format. No cloud, no account — the card DB
+and your decklists live on your machine.
+
+The workflow bits I think this sub will actually care about:
+• **Budget-first building** — set a per-card cap and every over-budget card gets
+  flagged with its current price + a deck-value total.
+• **Near-miss combos as add suggestions** — instead of "here are 40 staples," it
+  tells you the single card that unlocks a combo you already 90%-have.
+• **An iterate loop** — propose a cut/add, preview the before/after deltas
+  (power, curve, role counts) in-memory, accept or reject, and it logs the
+  decision so the same suggestion doesn't keep resurfacing.
+• **Playgroup profiles** — save who you build against and it tunes the read.
+
+All of the above is the free tier. There's a paid Pro tier ($49.99 one-time — no
+subscription) that adds the heavier simulation: goldfish testing, a matchup
+gauntlet vs. 11 archetypes, an LLM analyst + coach, and save/version history.
+Honest free-vs-Pro split and the download are in the first comment.
+
+I built this solo and I'd love deckbuilders to tell me where the analysis is
+wrong or the workflow is clunky — especially whether the iterate loop actually
+saves you time vs. just editing a list by hand.
+
+(Windows desktop app + 3 no-download browser tools. Not affiliated with Wizards
+of the Coast; combo data via Commander Spellbook, MIT.)
+
+
+========================================================================
+FIRST COMMENT (post immediately after, holds the link + Pro detail)
+========================================================================
+
+Full breakdown + download:
+
+FREE (no license, 100% local — Windows desktop app + 3 browser tools):
+• Structured card search with color/CMC/type/format/rarity/price filters
+• Deck import (Archidekt / plain text; Moxfield via paste)
+• Static analysis: archetype, power 1–10, mana curve, ramp/draw/interaction,
+  castability, staples, recommendations
+• Combo + near-miss combo detection (Commander Spellbook)
+• Budget/price-ceiling valuation, bracket fit (1–5), Rule 0 sheet
+• Iterate loop (propose / preview deltas / accept-reject with history)
+• Playgroup profiles
+• Export to MTGA / MTGO / Moxfield
+• MCP server — 17 free tools to drive all of it from Claude Desktop / any MCP
+  client in plain language
+• Browser-only: hypergeometric calculator, mana curve analyzer, staples checker
+
+PRO — $49.99 one-time (no subscription):
+• Goldfish simulation (win-rate / win-turn / mulligan rate)
+• Matchup gauntlet vs. 11 archetypes + deck-vs-deck duels
+• LLM analyst (executive summary, explain-a-card, compare two decks) + coach REPL
+• Save / version history / diff
+• 11 more Pro MCP tools (goldfish, gauntlet, analyst, coach from Claude)
+
+Download + full feature grid: <PRODUCT PAGE URL — toolkit.densanon.com/densa-deck.html>
+
+Two heads-ups:
+1. Unsigned Windows app for now — SmartScreen warns on first launch, click
+   "More info -> Run anyway."
+2. Combo features need a one-time Commander Spellbook cache pull from Settings
+   before they light up.
+
+Why one-time vs. a subscription: it's a local app — once it's on your machine it
+runs offline forever, so charging monthly for it never sat right with me. Happy
+to answer anything.

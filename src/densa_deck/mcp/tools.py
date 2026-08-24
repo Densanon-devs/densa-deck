@@ -82,17 +82,31 @@ def make_free_tools(api: AppApi) -> dict[str, Any]:
         """Structured card search. `colors` are single-letter (W,U,B,R,G,C);
         `color_match` is "subset" (color-identity-subset, default) or "any"
         (any-of). `format_legal` filters by format legality
-        (commander, modern, ...). Returns up to 120 cards per call."""
+        (commander, modern, ...). `rarity` accepts one or more of
+        common/uncommon/rare/mythic. Returns up to 120 cards per call.
+
+        Key names below must match `AppApi.search_cards` exactly. They didn't:
+        `type_line` and `max_price_usd` were silently dropped (the API reads
+        `types` and `max_price`), so type and budget filters did nothing over
+        MCP, and a list `rarity` raised AttributeError inside the SQL builder.
+        Unknown keys are ignored rather than rejected, which is why the first
+        two failed quietly."""
         query: dict[str, Any] = {"offset": offset, "limit": limit}
         if name: query["name"] = name
         if colors: query["colors"] = colors
-        query["color_match"] = color_match
+        # search_structured only special-cases "any"; everything else means
+        # identity. Normalise so the documented value maps to a real mode.
+        query["color_match"] = "any" if color_match == "any" else "identity"
         if cmc_min is not None: query["cmc_min"] = cmc_min
         if cmc_max is not None: query["cmc_max"] = cmc_max
-        if type_line: query["type_line"] = type_line
+        # The API takes a list of primary types under `types`.
+        if type_line: query["types"] = [type_line]
         if format_legal: query["format_legal"] = format_legal
-        if rarity: query["rarity"] = rarity
-        if max_price_usd is not None: query["max_price_usd"] = max_price_usd
+        # The API takes a single rarity string; accept a list from the model
+        # and use the first entry rather than crashing on .strip().
+        if rarity:
+            query["rarity"] = rarity[0] if isinstance(rarity, list) else rarity
+        if max_price_usd is not None: query["max_price"] = max_price_usd
         return _unwrap(api.search_cards(query))
 
     def get_card(name: str) -> dict:
@@ -212,6 +226,116 @@ def make_free_tools(api: AppApi) -> dict[str, Any]:
         """Return Densa Deck's running version + build date."""
         return _unwrap(api.get_current_version())
 
+    def get_collection_status() -> dict:
+        """How many physical cards the user owns, and whether the printing
+        catalogue (set + price data) has been downloaded. Check this before
+        answering collection questions — when `printings.ready` is false,
+        set details and prices are unavailable and you should say so rather
+        than implying the collection is empty."""
+        return _unwrap(api.get_collection_status())
+
+    def list_collection(
+        name_like: Optional[str] = None,
+        finish: Optional[str] = None,
+        condition: Optional[str] = None,
+        location: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict:
+        """List the physical cards the user owns, newest filters first.
+
+        One row per *stack* — identical copies of one printing in one finish,
+        condition and location. The same card in two sets is two rows, because
+        they are different objects with different values. `finish` is
+        nonfoil/foil/etched; `condition` is NM/LP/MP/HP/DMG.
+
+        `stack_value_usd` is null when the price is unknown — that means
+        unknown, never zero, and must not be summed as free."""
+        return _unwrap(api.list_collection({
+            "name_like": name_like, "finish": finish, "condition": condition,
+            "location": location, "limit": limit, "offset": offset,
+        }))
+
+    def get_card_printings(card_name: str) -> dict:
+        """Every physical printing of a card, with per-printing prices and how
+        many the user owns of each.
+
+        Use this before adding a card to a collection: prices vary enormously
+        between printings of the same card (Sol Ring ranges from about $1 to
+        over $1,600), so "which printing" is the whole question. `finishes`
+        lists the finishes that printing was actually made in."""
+        return _unwrap(api.get_card_printings(card_name))
+
+    def get_card_ownership(card_names: list[str]) -> dict:
+        """Owned / committed / available counts for a batch of card names.
+
+        `committed` is copies already called for by saved decks, `available`
+        is what is free to use in something new. A card can be owned but
+        unavailable — that means unsleeve it, not buy it."""
+        return _unwrap(api.get_card_ownership(card_names))
+
+    def get_collection_value() -> dict:
+        """Estimated market value of the user's whole collection, with 24h/7d/30d
+        movement where history exists.
+
+        `unpriced_copies` is not decoration: cards with no known price are
+        excluded from the total, so quote the total and the unpriced count
+        together or the figure misleads. Prices come from daily bulk data and
+        carry `prices_stale` / `price_age_hours` — say how old they are."""
+        return _unwrap(api.get_collection_value(True))
+
+    def get_deck_collection_value(
+        decklist_text: str,
+        format_: Optional[str] = None,
+        name: str = "Unnamed Deck",
+        deck_id: Optional[str] = None,
+    ) -> dict:
+        """Three distinct numbers for a decklist, which are easy to conflate:
+
+        `deck_value_usd` — what the user's own copies are worth (their foil
+        Secret Lair counts at foil Secret Lair money).
+        `build_value_usd` — what someone else would pay buying the cheapest
+        legal printing of every card. This is the honest "is this deck
+        expensive?" number.
+        `cost_to_complete_usd` — cheapest printings of only what's missing.
+
+        Also returns a paste-ready `shopping_list_text`."""
+        return _unwrap(api.get_deck_collection_value(decklist_text, format_, name, deck_id))
+
+    def appraise_collection(acquisition_id: Optional[int] = None) -> dict:
+        """Estimate resale proceeds and target purchase bands for the user's
+        cards (or one acquisition).
+
+        Deliberately returns NO buy/sell verdict. The underlying price feed's
+        own publisher states it is not fit to power a sales system, so this
+        reports the arithmetic, the fee assumptions, the price age and the
+        `caveats` list. Always relay the caveats and the confidence — never
+        present the target prices as a recommendation.
+
+        Note cards below the bulk threshold are valued at bulk rates, not at
+        nominal market price; ignoring that overstates large piles severalfold."""
+        return _unwrap(api.appraise_collection(acquisition_id))
+
+    def get_reseller_dashboard() -> dict:
+        """Capital invested, realized profit from sales, and remaining
+        inventory value. `sales_missing_basis` counts sales with no cost basis
+        allocated — realized profit excludes those, so mention it when non-zero."""
+        return _unwrap(api.get_reseller_dashboard())
+
+    def get_deck_ownership(
+        decklist_text: str,
+        format_: Optional[str] = None,
+        name: str = "Unnamed Deck",
+        deck_id: Optional[str] = None,
+    ) -> dict:
+        """What a decklist needs that the user doesn't have available.
+
+        Returns per-card rows plus totals. Distinguishes `missing` (not owned
+        — buy it) from `blocked` (owned but committed to another deck —
+        unsleeve it). Pass `deck_id` for a saved deck so it isn't counted as
+        competing with itself."""
+        return _unwrap(api.get_deck_ownership(decklist_text, format_, name, deck_id))
+
     return {
         "get_tier": get_tier,
         "search_cards": search_cards,
@@ -230,6 +354,18 @@ def make_free_tools(api: AppApi) -> dict[str, Any]:
         "detect_combos_for_deck": detect_combos_for_deck,
         "detect_near_miss_combos_for_deck": detect_near_miss_combos_for_deck,
         "get_current_version": get_current_version,
+        # Collection — read-only. Mutating the user's physical inventory over
+        # MCP is deliberately not exposed, same policy as deck deletion:
+        # an agent should not be able to silently rewrite what you own.
+        "get_collection_status": get_collection_status,
+        "list_collection": list_collection,
+        "get_card_printings": get_card_printings,
+        "get_card_ownership": get_card_ownership,
+        "get_deck_ownership": get_deck_ownership,
+        "get_collection_value": get_collection_value,
+        "get_deck_collection_value": get_deck_collection_value,
+        "appraise_collection": appraise_collection,
+        "get_reseller_dashboard": get_reseller_dashboard,
     }
 
 

@@ -1,0 +1,28 @@
+========================================================================
+MEASURE THIS AFTER POSTING — make the launch a TEST, not a shout
+(Learning transfers to the DensAssistant launch.)
+========================================================================
+
+1. FUNNEL, per sub: Reddit upvotes/comments -> product-page clicks (add a
+   ?ref=edh vs ?ref=mdb tag to each sub's link) -> Stripe checkout starts ->
+   completed $49.99 purchases. The only number that matters is the last one;
+   everything before it is a leak indicator.
+
+2. SmartScreen friction: count support emails (admin@densanon.com) mentioning
+   "can't run / Windows blocked / is this safe" in the first 72h. If it's the
+   #1 question, that's your signal the unsigned-installer trigger has hit — buy
+   the Azure Trusted Signing cert ($120/yr) before scaling any further launch.
+
+3. Refunds/disputes: watch the Stripe Dashboard daily for week 1. Any refund
+   request — log WHY (didn't run? expected different features? SmartScreen
+   scared them off?). One refund reason repeated = a product-page honesty gap.
+
+4. Which sub converts: compare clicks->purchase rate between r/EDH and
+   r/mtgdeckbuilders (that's what the ?ref tags are for). Whichever wins is where
+   you spend the next post — and tells you if the "pod/combo" or the "workflow"
+   angle sells better.
+
+5. Free-tier pull-through: if you can see it, watch free desktop-app downloads
+   vs. Pro purchases. A big free number with ~0 Pro = the MCP/free layer is the
+   real draw and Pro isn't differentiated enough yet; a healthy ratio validates
+   the "free hook -> paid sim" wedge you'll reuse for DensAssistant.

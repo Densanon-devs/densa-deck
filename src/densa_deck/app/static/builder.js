@@ -25,6 +25,7 @@
       format_legal: "commander",
       rarity: "",
       max_price: null,
+      ownership: null,
       set_code: "",
       limit: 60,
       offset: 0,
@@ -115,6 +116,15 @@
       builderState.query.offset = 0;
       debouncedSearch();
     });
+    document.querySelectorAll('input[name="ownership-filter"]').forEach(radio => {
+      radio.addEventListener("change", () => {
+        if (!radio.checked) return;
+        builderState.query.ownership = radio.value || null;
+        builderState.query.offset = 0;
+        debouncedSearch();
+      });
+    });
+
     const maxPrice = e("filter-max-price");
     if (maxPrice) maxPrice.addEventListener("input", () => {
       builderState.query.max_price = maxPrice.value === "" ? null : Number(maxPrice.value);
@@ -240,6 +250,10 @@
         builderState.results = cards;
       }
       renderSearchResults();
+      // Ownership badges. Fetched in one batch after render rather than
+      // per-tile, then painted in — a request per tile would be 60 calls
+      // per keystroke-triggered search.
+      refreshOwnershipBadges(cards.map(c => c.name));
       if (status) {
         status.textContent = builderState.resultTotal === 0
           ? "No matches"
@@ -260,6 +274,120 @@
     await runSearch(true);
   }
 
+  // name (lowercased) -> {owned, committed, available, shortfall}
+  const ownershipCache = {};
+
+  async function refreshOwnershipBadges(names) {
+    if (!names || !names.length) return;
+    const unknown = names.filter(n => !(n.toLowerCase() in ownershipCache));
+    if (unknown.length) {
+      try {
+        const r = await callApi("get_card_ownership", unknown);
+        Object.assign(ownershipCache, (r && r.ownership) || {});
+      } catch (err) {
+        // Ownership is decoration on the deckbuilder — a collection that
+        // can't be read must never stop you searching for cards.
+        return;
+      }
+    }
+    paintOwnershipBadges();
+  }
+
+  function paintOwnershipBadges() {
+    const host = e("build-search-results");
+    if (!host) return;
+    host.querySelectorAll(".card-tile").forEach(tile => {
+      const own = ownershipCache[(tile.dataset.cardName || "").toLowerCase()];
+      const existing = tile.querySelector(".card-tile-owned-badge");
+      if (existing) existing.remove();
+      if (!own || !own.owned) return;
+      const badge = document.createElement("span");
+      badge.className = "card-tile-owned-badge";
+      // "3 · 1 free" reads as: you own 3, one isn't in a deck already.
+      badge.textContent = own.available < own.owned
+        ? `${own.owned} · ${own.available} free`
+        : `owned ${own.owned}`;
+      badge.title = `You own ${own.owned}; ${own.committed} committed to saved decks.`;
+      tile.appendChild(badge);
+    });
+  }
+
+  // Invalidate after a collection change so badges don't go stale.
+  window.__builderInvalidateOwnership = function () {
+    for (const k of Object.keys(ownershipCache)) delete ownershipCache[k];
+    refreshOwnershipBadges(builderState.results.map(c => c.name));
+    refreshCollectionPanel();
+  };
+
+  // ---- deck vs collection panel -------------------------------------
+
+  let collectionPanelTimer = null;
+
+  function scheduleCollectionPanel() {
+    clearTimeout(collectionPanelTimer);
+    collectionPanelTimer = setTimeout(refreshCollectionPanel, 600);
+  }
+
+  async function refreshCollectionPanel() {
+    const panel = e("build-collection-panel");
+    const body = e("build-collection-body");
+    if (!panel || !body) return;
+
+    const text = draftToDecklistText();
+    if (!text.trim()) { panel.classList.add("hidden"); return; }
+
+    let v;
+    try {
+      v = await callApi("get_deck_collection_value", text,
+                        builderState.deck.format || null,
+                        builderState.deck.name || "Draft", null);
+    } catch (err) {
+      panel.classList.add("hidden");
+      return;
+    }
+    panel.classList.remove("hidden");
+
+    const money = (n) => "$" + Number(n || 0).toFixed(2);
+    const rows = [
+      ["Owned", `${v.owned_distinct} / ${v.distinct_cards}`, ""],
+      ["Deck value", money(v.deck_value_usd), "What your copies are worth"],
+      ["Build value", money(v.build_value_usd), "Cheapest printings"],
+    ];
+    if (v.missing_distinct) {
+      rows.push(["Missing", `${v.missing_distinct} cards`, ""]);
+      rows.push(["To complete", money(v.cost_to_complete_usd), "Cheapest printings"]);
+    }
+    if (v.blocked_distinct) {
+      rows.push(["In other decks", String(v.blocked_distinct),
+                 "Owned, but already sleeved elsewhere"]);
+    }
+
+    let html = rows.map(([label, value, hint]) => `
+      <div class="build-collection-row" ${hint ? `title="${escape(hint)}"` : ""}>
+        <span class="build-collection-label">${escape(label)}</span>
+        <span class="build-collection-value">${escape(value)}</span>
+      </div>`).join("");
+
+    // Never show a total without saying what it leaves out.
+    const unpriced = Math.max(v.deck_value_unpriced || 0, v.build_value_unpriced || 0);
+    if (unpriced) {
+      html += `<p class="panel-hint subtle">${unpriced} card${unpriced === 1 ? "" : "s"} ` +
+              `have no price and are excluded.</p>`;
+    }
+    if (v.shopping_list_text) {
+      html += `<button id="build-copy-shopping" class="btn btn-outline btn-slim">` +
+              `Copy shopping list</button>`;
+    }
+    body.innerHTML = html;
+
+    const copyBtn = e("build-copy-shopping");
+    if (copyBtn) copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(v.shopping_list_text).then(
+        () => { if (typeof toast === "function") toast("Shopping list copied", "success"); },
+        () => { if (typeof toast === "function") toast("Copy failed", "error"); });
+    });
+  }
+
   function renderSearchResults() {
     const host = e("build-search-results");
     if (!host) return;
@@ -276,6 +404,8 @@
   function renderCardTile(card) {
     const tile = document.createElement("div");
     tile.className = "card-tile";
+    // Lets paintOwnershipBadges find its tile after an async batch lookup.
+    tile.dataset.cardName = card.name || "";
     // Highlight cards that would complete a near-miss combo for the
     // current draft. The set is refreshed on every detection cycle —
     // see _builderComboCompleterSet maintained by detectBuilderCombos.
@@ -340,6 +470,7 @@
     builderState.query.types = [];
     builderState.query.rarity = "";
     builderState.query.max_price = null;
+    builderState.query.ownership = null;
     builderState.query.offset = 0;
     // Sync the DOM
     const si = e("build-search-input"); if (si) si.value = "";
@@ -351,6 +482,8 @@
     const maxPrice = e("filter-max-price"); if (maxPrice) maxPrice.value = "";
     const idRadio = document.querySelector("input[name='color-match-mode'][value='identity']");
     if (idRadio) idRadio.checked = true;
+    const ownAll = document.querySelector("input[name='ownership-filter'][value='']");
+    if (ownAll) ownAll.checked = true;
     debouncedSearch();
   }
 
@@ -562,6 +695,10 @@
   function recomputeStats() {
     if (statsTimer) clearTimeout(statsTimer);
     statsTimer = setTimeout(renderStats, 150);
+    // Owned/missing/value follows the deck too, but on a slower debounce —
+    // it costs a cross-database join, and nobody needs it to keep up with
+    // individual + clicks.
+    scheduleCollectionPanel();
   }
 
   function renderStats() {

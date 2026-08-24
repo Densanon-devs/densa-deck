@@ -55,8 +55,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 # Bundle the desktop app's HTML/CSS/JS so it ships inside the wheel and
 # the PyInstaller frozen binary finds them at STATIC_DIR.
-# Note: static/*.js covers both app.js and tour.js.
-"densa_deck.app" = ["static/*.html", "static/*.css", "static/*.js"]
+# Note: static/*.js covers app.js, tour.js, builder.js and collection.js.
+"densa_deck.app" = ["static/*.html", "static/*.css", "static/*.js",
+                    "static/phone/*.html", "static/phone/*.css",
+                    "static/phone/*.js"]
 
 [tool.ruff]
 target-version = "py311"

@@ -64,8 +64,11 @@ async def fetch_bulk_data_url() -> str:
     return bulk_download_url(entry)
 
 
-async def fetch_bulk_data_manifest() -> dict:
-    """Return the full Scryfall bulk-data manifest entry for oracle_cards.
+async def fetch_bulk_data_manifest(bulk_type: str = BULK_TYPE) -> dict:
+    """Return the full Scryfall bulk-data manifest entry for a bulk type.
+
+    Defaults to oracle_cards (the card ingest). The opt-in printings ingest
+    passes `default_cards` to get one entry per physical printing.
 
     Read the URL and size out of the returned entry with
     `bulk_download_url()` / `bulk_size_bytes()` rather than indexing it
@@ -84,9 +87,9 @@ async def fetch_bulk_data_manifest() -> dict:
         resp.raise_for_status()
         data = resp.json()
         for item in data["data"]:
-            if item["type"] == BULK_TYPE:
+            if item["type"] == bulk_type:
                 return item
-    raise RuntimeError(f"Could not find bulk data type '{BULK_TYPE}' in Scryfall API response")
+    raise RuntimeError(f"Could not find bulk data type '{bulk_type}' in Scryfall API response")
 
 
 async def download_bulk_file(url: str, dest: Path) -> Path:

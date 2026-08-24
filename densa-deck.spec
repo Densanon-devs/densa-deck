@@ -1,3 +1,5 @@
+import os
+
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for Densa Deck desktop binary.
 
@@ -43,6 +45,20 @@ hidden_imports = (
     # them; the CLI command still imports lazily and prints a clear
     # install hint. Bundling them by default means the desktop binary
     # ships an MCP-ready engine without a separate user-facing install.
+    # Photo scanning (OpenCV) IS bundled. It costs ~112 MB unpacked, roughly
+    # doubling the installer — accepted deliberately, because a frozen build
+    # has no pip and therefore no way to add it later. Shipping without it
+    # would mean the Scan tab's camera silently doesn't work for every paying
+    # customer, with no route to fix it short of a new installer.
+    #
+    # Set DENSA_BUNDLE_OPENCV=0 to cut it and ship the small build; photo
+    # scanning is then permanently unavailable in that binary and the UI says
+    # so rather than offering a button that cannot work.
+    + (collect_submodules("cv2", on_error="ignore")
+       if os.environ.get("DENSA_BUNDLE_OPENCV", "1") != "0" else [])
+    # cryptography backs the self-signed certificate that gives the phone a
+    # secure context (and therefore a live camera) without any public CA.
+    + collect_submodules("cryptography", on_error="ignore")
     + collect_submodules("mcp", on_error="ignore")
     + collect_submodules("httpx_sse", on_error="ignore")
     + collect_submodules("sse_starlette", on_error="ignore")
@@ -85,6 +101,14 @@ a = Analysis(
     # via collect_data_files so the analyst model path resolves correctly.
     datas=[
         ("src/densa_deck/app/static/*", "densa_deck/app/static"),
+        # Single-level globs do NOT recurse. The phone-scanner page
+        # lives in static/phone/ and would silently not ship, which
+        # is exactly how this project shipped four broken releases.
+        ("src/densa_deck/app/static/phone/*", "densa_deck/app/static/phone"),
+        # The window/taskbar icon is loaded at runtime by app/main.py, so it
+        # must be inside the bundle too — the exe `icon=` below only
+        # covers the file on disk, not the running window.
+        ("assets/densa-deck.ico", "assets"),
     ] + llama_datas,
     hiddenimports=hidden_imports,
     hookspath=[],
@@ -122,7 +146,11 @@ a = Analysis(
         "django",
         "psycopg2",
         "psycopg2_binary",
-        "cryptography",
+        # NOT excluded: `cryptography` generates the self-signed certificate
+        # that gives the phone scanner a secure context (and therefore a live
+        # camera). Excluding it silently beats the hiddenimports entry above,
+        # so the phone would fall back to plain HTTP with no camera and no
+        # explanation.
         "Pythonwin",
         "pythonwin",
         "win32com",

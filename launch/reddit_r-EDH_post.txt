@@ -1,0 +1,103 @@
+========================================================================
+DRAFT — r/EDH launch post   (DO NOT POST — Jordan posts)
+Product: Densa Deck v0.5.0  |  Price: $49.99 one-time  |  Windows
+Angle: Commander-specific. Lead with the FREE combo/bracket/Rule-0 layer
+       + the "talk to it from Claude Desktop" demo. "I built this," not
+       "buy this." Pro tier disclosed honestly. Buy link ONLY in comment 1.
+========================================================================
+
+--- READ THIS BEFORE POSTING (compliance) --------------------------------
+r/EDH is the STRICTER of the two subs and I could NOT fetch its live rules
+(Reddit blocks my fetch tools). Before posting you MUST:
+  1. Read r/EDH's current sidebar / wiki rules yourself.
+  2. If it requires MOD PRE-APPROVAL for tools/self-promo (it historically
+     has for content-creator + app posts) -> modmail the mods FIRST with
+     this post and ask permission. Posting cold risks instant removal.
+  3. If there's a designated self-promo / "content creator" thread or day,
+     post there instead of a top-level post.
+  4. No product link in the POST body — link lives in comment 1 only.
+  5. Post from your established account, not a fresh one.
+If mods say no to a top-level post, the compliant fallback is the self-promo
+thread + this same "I built a free thing" framing.
+--------------------------------------------------------------------------
+
+
+TITLE:
+I built a free local deck tool you can drive from Claude Desktop — "build me a Selesnya tokens list under $100" and it checks combos, bracket, and Rule 0 for you
+
+[Attach the recorded GIF: the Claude-desktop MCP tool-call cascade.]
+
+
+BODY:
+
+Long-time Commander player, I write software for a living, and I got tired of
+bouncing between a deckbuilder, a combo database, and a bracket cheat-sheet in
+three tabs. So I built one local tool that does all of it — and then wired it
+into Claude Desktop over MCP so I can just *ask* for what I want.
+
+The GIF is me typing "build me a Selesnya tokens deck under $100" into Claude
+Desktop. Claude searches the local card DB, assembles a budget, color-legal
+list, then runs it through the engine — archetype + power level, mana curve,
+**every combo line in the deck (via Commander Spellbook)**, the near-miss combos
+you're one card away from, a **bracket-fit read (1–5)**, and a **Rule 0
+disclosure sheet** you can paste at the table. All of that is the free tier,
+running 100% on your machine — no account, no cloud, your decklists never leave
+your PC.
+
+The part I actually care about for this sub: it's combo- and bracket-aware, not
+just a curve-and-card-count tool. The "you're one card away from [combo]" and
+the honest bracket read are the bits I use most for playgroup-legal building.
+
+To be upfront: there's a paid Pro tier too (goldfish simulation, a matchup
+gauntlet vs. 11 archetypes, an LLM analyst/coach, and save/version history) — but
+everything above, including the Claude-Desktop integration and the free browser
+tools, is free with no license. I put the honest free-vs-Pro breakdown and the
+download in the first comment so this post stays clean.
+
+I'm mostly looking for feedback from people who actually build for a pod: does
+the bracket read match your gut? Are the near-miss combo suggestions useful or
+noise? What would make the Rule 0 sheet something you'd actually hand across the
+table? Happy to answer anything.
+
+(Windows desktop app; the three browser tools need no download. Not affiliated
+with Wizards of the Coast; combo data via Commander Spellbook, MIT.)
+
+
+========================================================================
+FIRST COMMENT (post immediately after, holds the link + Pro detail)
+========================================================================
+
+Details + download, so the post above stays link-free:
+
+FREE (no license, all local, Windows desktop app + 3 no-download browser tools):
+• Card search + deck import (Archidekt / plain text; Moxfield via paste)
+• Full static analysis — archetype, power level 1–10, mana curve, ramp/draw/
+  interaction counts, castability, staples, recommendations
+• Combo detection + near-miss combos (Commander Spellbook)
+• Bracket fit (1-precon … 5-cedh) and a Rule 0 disclosure sheet
+• Budget/price-ceiling deck valuation (flags every card over your cap)
+• Playgroup profiles — save the commanders your pod plays, tune analysis to them
+• Export your list to MTGA / MTGO / Moxfield format
+• The MCP server itself — drive all of the above from Claude Desktop (or any
+  MCP client) with plain language. 17 free tools.
+• Browser-only tools (nothing to install): hypergeometric calculator, mana
+  curve analyzer, staples checker
+
+PRO — $49.99 one-time, no subscription (vs. Moxfield/Archidekt monthly):
+• Goldfish simulation (win-rate / win-turn / mulligan rate)
+• Matchup gauntlet vs. 11 archetype profiles + deck-vs-deck duels
+• LLM analyst — executive summary, "why is this card flagged," compare two decks
+• Coach — interactive REPL that knows your deck
+• Save / version history / diff
+• 11 additional Pro MCP tools (goldfish, gauntlet, analyst, coach from Claude)
+
+Download + full feature grid: <PRODUCT PAGE URL — toolkit.densanon.com/densa-deck.html>
+
+Two honest heads-ups:
+1. It's an unsigned Windows app right now, so SmartScreen will warn on first
+   launch — "More info -> Run anyway." (Signing cert is on the list once volume
+   justifies it.)
+2. Combo detection needs a one-time cache pull from the Commander Spellbook data
+   inside Settings before the combo features light up.
+
+Built it solo; genuinely want the feedback. Fire away.

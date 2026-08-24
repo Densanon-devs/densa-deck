@@ -3,6 +3,8 @@
 import subprocess
 import sys
 
+import pytest
+
 PYTHON = sys.executable
 
 
@@ -90,3 +92,93 @@ class TestCLIBasics:
     def test_compare_subcommand_exists(self):
         r = _run_cli("compare", "--help")
         assert r.returncode == 0
+
+
+class TestCollectionCLI:
+    """`densa-deck collection` — physical collection tracking.
+
+    Uses --db to point at a temp card DB so the suite never touches the real
+    ~/.densa-deck; the collection store is derived from that path.
+    """
+
+    def _db(self, tmp_path):
+        return str(tmp_path / "cards.db")
+
+    def test_collection_help(self):
+        r = _run_cli("collection", "--help")
+        assert r.returncode == 0
+        assert "sync" in r.stdout and "printings" in r.stdout
+
+    def test_status_on_fresh_install(self, tmp_path):
+        r = _run_cli("collection", "status", "--db", self._db(tmp_path))
+        assert r.returncode == 0
+        assert "0 cards" in r.stdout
+        # Must tell the user how to opt in rather than downloading unasked.
+        assert "collection sync" in r.stdout
+
+    def test_add_without_catalogue_explains_itself(self, tmp_path):
+        r = _run_cli("collection", "add", "Sol Ring", "--db", self._db(tmp_path))
+        assert r.returncode == 0
+        assert "sync" in r.stdout.lower()
+
+    def test_list_empty(self, tmp_path):
+        r = _run_cli("collection", "list", "--db", self._db(tmp_path))
+        assert r.returncode == 0
+
+    def test_printings_without_catalogue(self, tmp_path):
+        r = _run_cli("collection", "printings", "Sol Ring", "--db", self._db(tmp_path))
+        assert r.returncode == 0
+
+    def test_check_missing_file(self, tmp_path):
+        r = _run_cli("collection", "check", str(tmp_path / "nope.txt"),
+                     "--db", self._db(tmp_path))
+        assert r.returncode == 0
+        assert "No such deck file" in r.stdout
+
+    def test_check_reports_everything_missing(self, tmp_path):
+        deck = tmp_path / "deck.txt"
+        deck.write_text("1 Sol Ring\n1 Arcane Signet\n", encoding="utf-8")
+        r = _run_cli("collection", "check", str(deck), "--db", self._db(tmp_path))
+        assert r.returncode == 0
+        assert "Missing: 2" in r.stdout
+
+
+class TestPhoneCLI:
+    """`densa-deck phone` — share a scan surface to a phone over Tailscale."""
+
+    def test_help(self):
+        r = _run_cli("phone", "--help")
+        assert r.returncode == 0
+        assert "status" in r.stdout and "serve" in r.stdout
+
+    def test_status_runs_without_tailscale(self):
+        # Must degrade to advice, never a traceback, on a machine with no
+        # Tailscale — status is the first thing a confused user runs.
+        r = _run_cli("phone", "status")
+        assert r.returncode == 0
+        assert "Traceback" not in r.stderr
+
+    def test_status_is_read_only(self):
+        """Asking must not start a server or change Tailscale config.
+
+        The question is whether `phone status` OPENS the port, so the state
+        before the command is the baseline. Asserting the port is simply
+        closed afterwards fails whenever the desktop app is legitimately
+        running and serving the phone bridge — which is exactly when someone
+        is most likely to run the tests.
+        """
+        def listening() -> bool:
+            import socket
+            s = socket.socket()
+            s.settimeout(1)
+            try:
+                return s.connect_ex(("127.0.0.1", 8791)) == 0
+            finally:
+                s.close()
+
+        was_open = listening()
+        r = _run_cli("phone", "status")
+        assert r.returncode == 0
+        if was_open:
+            pytest.skip("phone bridge already running outside the tests")
+        assert not listening(), "phone status left a listener on 8791"

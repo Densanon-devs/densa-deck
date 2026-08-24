@@ -307,22 +307,40 @@ async def _walk_variants(
     *,
     user_agent: str,
     progress_cb=None,
+    start_url: str | None = None,
 ) -> list[Combo]:
     """Walk the paginated /variants/ endpoint, yielding parsed combos.
 
-    Polite: 200ms inter-page sleep + custom User-Agent identifying
-    Densa Deck per the agent's recommendation.
+    Polite: 250ms inter-page sleep + a User-Agent identifying Densa Deck.
+
+    **Retries on 429.** This walk is ~60 requests back to back, so tripping a
+    rate limiter is an ordinary event, not an exotic one. The original code
+    called `raise_for_status()` with no retry, which meant one 429 anywhere in
+    the sequence threw away every page fetched so far and showed the user an
+    opaque error — observed in the wild on 2026-08-17. Backing off and
+    resuming costs a few seconds; failing costs the entire refresh.
+
+    Transient 5xx and network blips get the same treatment for the same
+    reason. A hard 4xx (a genuinely bad request) still fails fast, because
+    retrying that would just be slower failure.
     """
     out: list[Combo] = []
-    url: str | None = f"{SPELLBOOK_API_BASE}/variants/?limit={PAGE_SIZE}"
+    url: str | None = start_url or f"{SPELLBOOK_API_BASE}/variants/?limit={PAGE_SIZE}"
     pages = 0
     async with httpx.AsyncClient(
         timeout=60, headers={"User-Agent": user_agent, "Accept": "application/json"},
     ) as client:
         while url:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                data = await _get_page(client, url, progress_cb=progress_cb,
+                                       pages_done=pages, combos_seen=len(out))
+            except Exception as exc:
+                # Sustained rate limiting, not a blip. Hand back everything
+                # fetched so far rather than discarding it — combos are
+                # independent facts, so 58,000 of them is worth vastly more
+                # than zero, and the next refresh simply tops it up.
+                raise PartialComboWalk(out, pages, str(exc), next_url=url) from exc
+
             for raw in data.get("results") or []:
                 combo = _parse_variant(raw)
                 if combo:
@@ -332,11 +350,98 @@ async def _walk_variants(
                 progress_cb(pages, len(out))
             url = data.get("next")
             if url:
-                # Polite spacing — Commander Spellbook doesn't publish a
-                # rate limit but the research note recommended ~250ms
-                # between pages.
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(PAGE_SPACING_SECONDS)
     return out
+
+
+class PartialComboWalk(Exception):
+    """The walk stopped early but produced usable data.
+
+    Carries the combos already fetched so the caller can persist them instead
+    of throwing away the work.
+    """
+
+    def __init__(self, combos: list, pages: int, reason: str,
+                 next_url: str | None = None):
+        super().__init__(reason)
+        self.combos = combos
+        self.pages = pages
+        self.reason = reason
+        # Where to pick up. Without this, a re-run restarts at page 1,
+        # re-fetches the same pages, and hits the same wall forever — the
+        # store would never get past the point where the limiter kicks in.
+        self.next_url = next_url
+
+
+# Spacing between pages. Raised from 0.25s after the live API rate-limited a
+# real refresh at page 117 on 2026-08-17 — the dataset has roughly doubled
+# since the original figure was chosen, so the old pacing now sustains far
+# more requests than the server tolerates.
+PAGE_SPACING_SECONDS = 0.6
+
+# How many times to retry a single page before giving up on the whole walk.
+MAX_PAGE_ATTEMPTS = 6
+# Cap on any single backoff sleep. A server asking for a 10-minute wait via
+# Retry-After should not silently freeze the progress bar for 10 minutes.
+MAX_BACKOFF_SECONDS = 60.0
+
+
+async def _get_page(client, url: str, *, progress_cb=None,
+                    pages_done: int = 0, combos_seen: int = 0) -> dict:
+    """Fetch one page, backing off politely on rate limits.
+
+    Honours `Retry-After` when the server sends it, since that is the server
+    telling us exactly what it wants; otherwise exponential backoff.
+    """
+    last_error: Exception | None = None
+
+    for attempt in range(MAX_PAGE_ATTEMPTS):
+        try:
+            resp = await client.get(url)
+        except httpx.HTTPError as exc:
+            # Connection reset / timeout mid-walk — same story as a 429.
+            last_error = exc
+            await _backoff(attempt, None, progress_cb, pages_done, combos_seen,
+                           "Connection problem")
+            continue
+
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_error = httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}", request=resp.request, response=resp)
+            reason = ("Rate limited by Commander Spellbook"
+                      if resp.status_code == 429 else
+                      f"Server error {resp.status_code}")
+            await _backoff(attempt, resp.headers.get("Retry-After"),
+                           progress_cb, pages_done, combos_seen, reason)
+            continue
+
+        resp.raise_for_status()   # genuine 4xx — retrying won't help
+        return resp.json()
+
+    raise RuntimeError(
+        f"Commander Spellbook did not respond after {MAX_PAGE_ATTEMPTS} attempts "
+        f"({last_error}). Their API is rate limiting or down — your existing "
+        f"combo data is unchanged. Try again in a few minutes."
+    ) from last_error
+
+
+async def _backoff(attempt: int, retry_after: str | None, progress_cb,
+                   pages_done: int, combos_seen: int, reason: str) -> None:
+    delay = 1.0 * (2 ** attempt)
+    if retry_after:
+        try:
+            delay = float(retry_after)
+        except (TypeError, ValueError):
+            pass  # HTTP-date form; the exponential default is fine
+    delay = min(delay, MAX_BACKOFF_SECONDS)
+    if progress_cb:
+        # Keep the bar honest — a silent stall reads as a hang.
+        try:
+            progress_cb(pages_done, combos_seen,
+                        f"{reason}; retrying in {delay:.0f}s...")
+        except TypeError:
+            progress_cb(pages_done, combos_seen)   # older 2-arg callbacks
+    await asyncio.sleep(delay)
 
 
 def refresh_combo_snapshot(
@@ -344,6 +449,7 @@ def refresh_combo_snapshot(
     *,
     user_agent: str = USER_AGENT_DEFAULT,
     progress_cb=None,
+    restart: bool = False,
 ) -> int:
     """Fetch a fresh combo snapshot and write it to the local store.
 
@@ -357,15 +463,61 @@ def refresh_combo_snapshot(
     """
     if store is None:
         store = ComboStore()
+
+    # Resume where the last run was cut off. Commander Spellbook rate-limits
+    # a full walk partway through, so without this the store would plateau
+    # at whatever page the limiter first bites and never advance.
+    resume_url = ""
+    if not restart and store.get_metadata("last_refresh_partial") == "1":
+        resume_url = store.get_metadata("last_refresh_next_url") or ""
+
     loop = asyncio.new_event_loop()
+    partial: PartialComboWalk | None = None
     try:
-        combos = loop.run_until_complete(
-            _walk_variants(user_agent=user_agent, progress_cb=progress_cb),
-        )
+        try:
+            combos = loop.run_until_complete(
+                _walk_variants(user_agent=user_agent, progress_cb=progress_cb,
+                               start_url=resume_url or None),
+            )
+        except PartialComboWalk as exc:
+            # Keep what we got. A refresh that dies at page 117 used to leave
+            # the user with nothing; now it leaves them with 58,000 combos and
+            # a clear note that it's incomplete.
+            partial = exc
+            combos = exc.combos
     finally:
         loop.close()
+
     written = store.upsert_combos(combos)
     store.set_metadata("last_refresh_at", datetime.now().isoformat(timespec="seconds"))
     store.set_metadata("source", SPELLBOOK_API_BASE)
     store.set_metadata("combo_count", str(written))
+
+    if partial is not None:
+        store.set_metadata("last_refresh_partial", "1")
+        store.set_metadata("last_refresh_next_url", partial.next_url or "")
+        if not written:
+            raise RuntimeError(partial.reason)
+        raise PartialComboRefresh(written, partial.reason)
+
+    store.set_metadata("last_refresh_partial", "")
+    store.set_metadata("last_refresh_next_url", "")
     return written
+
+
+class PartialComboRefresh(Exception):
+    """Refresh saved usable data but did not finish.
+
+    Deliberately an exception rather than a quiet return: the user asked for
+    a full refresh and did not get one, so combo detection will have gaps and
+    they should know. But `combos_written` is real and already stored.
+    """
+
+    def __init__(self, combos_written: int, reason: str):
+        self.combos_written = combos_written
+        self.reason = reason
+        super().__init__(
+            f"Saved {combos_written:,} combos, but the refresh didn't finish: "
+            f"{reason} Combo detection will work with what was saved; run the "
+            f"refresh again later to fill the gaps."
+        )

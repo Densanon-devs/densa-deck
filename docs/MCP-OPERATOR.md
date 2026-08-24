@@ -17,7 +17,7 @@ the desktop app don't need to read this.
 ```bash
 # 1. Verify the server side works (no Claude desktop involved):
 densa-deck mcp selftest
-# Expected: "OK — 28 tools registered (pro tier)."
+# Expected: "OK — 37 tools registered (pro tier)."
 
 # 2. Get a paste-ready Claude desktop config block with YOUR install's
 #    exe path already filled in:
@@ -137,7 +137,7 @@ rather than relying on the per-tool `assert_pro` defense in depth.
 
 ```bash
 densa-deck mcp serve --read-only
-# 17 free tools registered, Pro tools never appear in tools/list
+# 26 free tools registered, Pro tools never appear in tools/list
 ```
 
 ### 4. License tier — `MTG_ENGINE_TIER`
@@ -177,7 +177,7 @@ file a bug.
 
 ## Tool inventory
 
-### Free tier (always available, 17 tools)
+### Free tier (always available, 26 tools)
 
 | Tool | What it does |
 |---|---|
@@ -198,6 +198,15 @@ file a bug.
 | `get_combo_status` | Local Spellbook combo cache status (count, last refresh). |
 | `detect_combos_for_deck` | Full combo lines present in the deck. |
 | `detect_near_miss_combos_for_deck` | Combos N cards away from completing. |
+| `get_collection_status` | Physical-collection totals + whether the printing/price catalogue is installed. |
+| `list_collection` | The user's owned cards, one row per printing/finish/condition stack. |
+| `get_card_printings` | Every printing of a card with per-printing prices and owned counts. |
+| `get_card_ownership` | Owned / committed / available counts for a batch of card names. |
+| `get_deck_ownership` | What a decklist is missing (buy) vs blocked (owned, sleeved elsewhere). |
+| `get_collection_value` | Estimated collection value with 24h/7d/30d movement and unpriced count. |
+| `get_deck_collection_value` | Deck value vs build value vs cost to complete, plus a shopping list. |
+| `appraise_collection` | Resale estimate and target purchase bands. No verdict — caveats must be relayed. |
+| `get_reseller_dashboard` | Capital invested, realized profit, remaining inventory value. |
 
 ### Pro tier (license-gated, 11 tools)
 
@@ -231,6 +240,17 @@ agent surface, by design:
   Settings tab.
 - Builder draft management, first-run state, "what changed" diffs —
   UI-state plumbing the AI doesn't need.
+- `add_to_collection`, `set_collection_item_quantity`,
+  `update_collection_item`, `delete_collection_item`,
+  `printings_download_start`, `printings_remove` — the collection is
+  read-only over MCP. An agent may report what you own; it may not
+  rewrite your physical inventory or kick off a 74 MB download. Same
+  reasoning as `delete_deck`.
+- `create_acquisition`, `allocate_acquisition_basis`, `record_sale`,
+  `set_fee_model`, `scan_commit` — the money layer is read-only over MCP
+  too. Recording a purchase, a sale or a cost basis is bookkeeping the
+  user must drive; an agent writing financial records off a mistaken
+  reading of a prompt is not a recoverable error.
 
 ---
 
@@ -249,7 +269,7 @@ agent surface, by design:
 }
 ```
 
-License flows through automatically. AI sees 28 tools when Pro is
+License flows through automatically. AI sees 37 tools when Pro is
 active, 17 when not.
 
 ### B. Privacy-paranoid — analyze decks without exposing saved-deck history
