@@ -38,6 +38,79 @@ interface Props {
   onBack: () => void;
 }
 
+/** The decks you have, and a way to start another. */
+export function DeckListScreen({
+  decks,
+  onOpen,
+}: {
+  decks: DeckStore;
+  onOpen: (deckId: string) => void;
+}) {
+  const [rows, setRows] = useState<Deck[]>([]);
+  const [name, setName] = useState('');
+
+  const load = useCallback(async () => setRows(await decks.list()), [decks]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const create = useCallback(async () => {
+    const chosen = name.trim() || 'Untitled deck';
+    const deck: Deck = {
+      deck_id: globalThis.crypto.randomUUID(),
+      name: chosen,
+      format: '',
+      decklist: {},
+      notes: '',
+      updated_at: new Date().toISOString(),
+    };
+    await decks.save(deck);
+    setName('');
+    await load();
+    onOpen(deck.deck_id);
+  }, [name, decks, load, onOpen]);
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>Decks</Text>
+
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.list, styles.searchBox]}
+          value={name}
+          onChangeText={setName}
+          placeholder="New deck name"
+          placeholderTextColor="#8a8f9c"
+        />
+        <Pressable style={styles.secondary} onPress={create}>
+          <Text style={styles.secondaryText}>Create</Text>
+        </Pressable>
+      </View>
+
+      {rows.length === 0 ? (
+        <Text style={styles.muted}>
+          No decks yet. Make one above, then search for cards to put in it —
+          you don’t have to own them.
+        </Text>
+      ) : (
+        rows.map((deck) => (
+          <Pressable
+            key={deck.deck_id}
+            style={styles.result}
+            onPress={() => onOpen(deck.deck_id)}
+          >
+            <View style={styles.grow}>
+              <Text style={styles.name}>{deck.name}</Text>
+              <Text style={styles.muted}>{deckSize(deck.decklist)} cards</Text>
+            </View>
+            <Text style={styles.plus}>›</Text>
+          </Pressable>
+        ))
+      )}
+    </ScrollView>
+  );
+}
+
 export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');

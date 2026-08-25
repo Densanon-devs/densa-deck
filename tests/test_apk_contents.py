@@ -1,0 +1,105 @@
+"""What actually ships in the APK.
+
+Every other test in this repo checks a decision. This one checks *assembly*,
+and it exists because the two are genuinely different: the deck builder, the
+card search, the scanner and the wishlist were all fully implemented and fully
+tested while being **absent from the built app**. Metro bundles outward from
+the entry point, so a screen nothing navigates to is silently left out, and
+nothing that tests logic can notice.
+
+Two traps this had to learn the hard way:
+
+  * A **debug** APK contains no JavaScript at all — it fetches it from a dev
+    server at launch. Installing one on a phone away from the PC gives a red
+    error screen.
+  * The bundle is **Hermes bytecode**, and Hermes keeps any string containing
+    a non-ASCII character in a UTF-16 table. Searching UTF-8 alone reports a
+    string as missing when it is present, which is how a false alarm looks.
+
+Skipped when no APK has been built, so the suite still runs on a clean tree.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from pathlib import Path
+
+import pytest
+
+APK = (Path(__file__).parent.parent / "companion" / "android" / "app" /
+       "build" / "outputs" / "apk" / "release" / "app-release.apk")
+
+# One string from each screen, chosen to be something a user would see. If a
+# screen stops being reachable from the entry point, its strings leave the
+# bundle and the matching test fails.
+SCREENS = {
+    "pairing": "Scan from your phone",
+    "collection browsing": "Search your collection",
+    "deck list": "New deck name",
+    "deck editing": "Still needed",
+    "card search": "Search every card",
+    "analyst": "Analyse on my PC",
+    "wishlist": "part of your collection",
+    "scanner": "Point at a card",
+}
+
+# Behaviour that has to survive into the shipped app, not merely exist in src.
+BEHAVIOUR = {
+    "LAN/tunnel failover": "isTunnelAddr",
+    "stale LAN self-heal": "healedLanHost",
+    "catalogue search route": "cards/search",
+    "sync push route": "sync/push",
+}
+
+
+def _bundle() -> bytes:
+    if not APK.exists():
+        pytest.skip("no release APK built (companion/android ./gradlew assembleRelease)")
+    with zipfile.ZipFile(APK) as archive:
+        names = archive.namelist()
+        if "assets/index.android.bundle" not in names:
+            pytest.fail(
+                "The APK carries no JavaScript bundle. That is what a DEBUG "
+                "build looks like: it loads its code from a dev server at "
+                "launch, so on a phone away from the PC it shows a red error "
+                "screen. Build with assembleRelease."
+            )
+        return archive.read("assets/index.android.bundle")
+
+
+def _present(bundle: bytes, text: str) -> bool:
+    """Search both encodings.
+
+    Hermes stores strings containing non-ASCII in a UTF-16 table, so a UTF-8
+    search alone reports present strings as missing.
+    """
+    return text.encode("utf-8") in bundle or text.encode("utf-16-le") in bundle
+
+
+@pytest.mark.parametrize("screen,needle", sorted(SCREENS.items()))
+def test_the_screen_is_actually_in_the_app(screen, needle):
+    """A screen nothing navigates to is not shipped, however well it is tested."""
+    assert _present(_bundle(), needle), (
+        f"The {screen} screen is missing from the built app. It is most likely "
+        f"not reachable from App.tsx — Metro only bundles what the entry point "
+        f"can reach."
+    )
+
+
+@pytest.mark.parametrize("what,needle", sorted(BEHAVIOUR.items()))
+def test_the_behaviour_is_actually_in_the_app(what, needle):
+    assert _present(_bundle(), needle), f"{what} did not make it into the bundle"
+
+
+def test_the_native_libraries_are_there():
+    """No SQLite means no local collection, and the app is offline-first."""
+    if not APK.exists():
+        pytest.skip("no release APK built")
+    with zipfile.ZipFile(APK) as archive:
+        names = archive.namelist()
+    assert any("libexpo-sqlite" in n for n in names), "expo-sqlite is missing"
+
+
+def test_the_bundle_is_not_suspiciously_small():
+    """A near-empty bundle still passes a substring check for nothing."""
+    assert len(_bundle()) > 200_000
