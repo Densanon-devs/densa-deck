@@ -12,9 +12,12 @@ import { describe, test } from 'node:test';
 
 import {
   DeckStore,
+  addToDeck,
+  costToFinish,
   deckSize,
   formatDecklist,
   parseDecklist,
+  removeFromDeck,
   shortfall,
 } from '../src/lib/decks.ts';
 import { LocalStore } from '../src/lib/store.ts';
@@ -180,5 +183,75 @@ describe('storing decks', () => {
     await decks.remove('d1');
 
     assert.equal(await local.totalCards(), 2, 'the cards are untouched');
+  });
+});
+
+describe('building a deck from cards you do not own', () => {
+  test('an unowned card goes in like any other', () => {
+    // A deck says what it WANTS. Refusing to list a card you do not own
+    // would make the builder useless for working out what to buy, which is
+    // most of what it is for.
+    const deck = addToDeck({}, 'Black Lotus');
+    assert.equal(deck['Black Lotus'], 1);
+  });
+
+  test('adding the same card again increases the count', () => {
+    let deck = addToDeck({}, 'Lightning Bolt', 2);
+    deck = addToDeck(deck, 'Lightning Bolt', 2);
+    assert.equal(deck['Lightning Bolt'], 4);
+  });
+
+  test('the original list is not mutated', () => {
+    const before = { 'Sol Ring': 1 };
+    addToDeck(before, 'Black Lotus');
+    assert.deepEqual(before, { 'Sol Ring': 1 });
+  });
+
+  test('blank names and nonsense counts are ignored', () => {
+    assert.deepEqual(addToDeck({}, '   '), {});
+    assert.deepEqual(addToDeck({}, 'Sol Ring', 0), {});
+  });
+
+  test('removing takes copies off and then the line itself', () => {
+    let deck = { 'Sol Ring': 2 };
+    deck = removeFromDeck(deck, 'Sol Ring');
+    assert.equal(deck['Sol Ring'], 1);
+    deck = removeFromDeck(deck, 'Sol Ring');
+    assert.equal('Sol Ring' in deck, false, 'a zero line is not kept');
+  });
+
+  test('removing a card that is not there changes nothing', () => {
+    assert.deepEqual(removeFromDeck({ 'Sol Ring': 1 }, 'Black Lotus'),
+                     { 'Sol Ring': 1 });
+  });
+
+  test('a deck of entirely unowned cards reports all of them missing', () => {
+    const deck = addToDeck(addToDeck({}, 'Black Lotus'), 'Mox Jet');
+    const missing = shortfall(deck, []);
+    assert.equal(missing.length, 2);
+  });
+});
+
+describe('what finishing a deck would cost', () => {
+  test('only the copies you lack are counted', () => {
+    const missing = shortfall({ 'Sol Ring': 4 },
+                              [{ card_name: 'Sol Ring', quantity: 1 }]);
+    const cost = costToFinish(missing, { 'sol ring': 2 });
+    assert.equal(cost.usd, 6, 'three missing at 2 each, not four');
+  });
+
+  test('an unknown price is admitted, not treated as free', () => {
+    // A total that silently counts "unknown" as zero is worse than one that
+    // says what it could not price.
+    const missing = shortfall({ 'Black Lotus': 1, 'Sol Ring': 1 }, []);
+    const cost = costToFinish(missing, { 'sol ring': 2 });
+    assert.equal(cost.usd, 2);
+    assert.equal(cost.unpriced, 1);
+  });
+
+  test('a deck you can already build costs nothing', () => {
+    const cost = costToFinish([], {});
+    assert.equal(cost.usd, 0);
+    assert.equal(cost.unpriced, 0);
   });
 });

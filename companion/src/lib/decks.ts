@@ -177,3 +177,57 @@ export async function analyzeOnDesktop(
     format: deck.format,
   });
 }
+
+
+/**
+ * Put a card into a decklist, owned or not.
+ *
+ * Deck contents and ownership are separate questions: a deck says what it
+ * wants, the collection says what you have, and `shortfall` is where the two
+ * meet. Refusing to list a card you do not own would make the deck builder
+ * useless for the thing people mainly use one for — working out what to buy.
+ */
+export function addToDeck(
+  decklist: Record<string, number>,
+  name: string,
+  count = 1,
+): Record<string, number> {
+  const clean = (name || '').trim();
+  if (!clean || count <= 0) return decklist;
+  return { ...decklist, [clean]: (decklist[clean] ?? 0) + count };
+}
+
+export function removeFromDeck(
+  decklist: Record<string, number>,
+  name: string,
+  count = 1,
+): Record<string, number> {
+  const clean = (name || '').trim();
+  const have = decklist[clean];
+  if (!have) return decklist;
+  const next = { ...decklist };
+  if (have <= count) delete next[clean];
+  else next[clean] = have - count;
+  return next;
+}
+
+/**
+ * What a deck would cost to finish, counting only the copies you lack.
+ *
+ * Cards with no known price are counted separately rather than as zero — a
+ * total that quietly treats "unknown" as "free" is worse than one that admits
+ * what it could not price.
+ */
+export function costToFinish(
+  missing: Array<{ name: string; short: number }>,
+  prices: Record<string, number | null | undefined>,
+): { usd: number; unpriced: number } {
+  let usd = 0;
+  let unpriced = 0;
+  for (const row of missing) {
+    const price = prices[row.name.toLowerCase()];
+    if (price == null) unpriced += row.short;
+    else usd += price * row.short;
+  }
+  return { usd: Math.round(usd * 100) / 100, unpriced };
+}

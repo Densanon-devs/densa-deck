@@ -499,6 +499,18 @@ class PhoneBridge:
                 int(payload.get("item_id", 0) or 0),
                 int(payload.get("quantity", 0) or 0)))
 
+        # --- searching every card, not just the owned ones ----------------
+        # The catalogue is 34k oracle cards and 107k printings, which is not
+        # going on a phone. So this is one of the operations that genuinely
+        # needs the desktop, and it fails honestly when the desktop is away
+        # rather than pretending the collection is the world.
+        #
+        # `ownership` is opt-in: omitted, the search covers everything,
+        # because "what could I put in this deck" is a different question
+        # from "what do I have".
+        if route == "cards/search":
+            return _unwrap(api.search_cards(payload.get("query") or {}))
+
         # --- decks --------------------------------------------------------
         if route == "decks/list":
             # Named key rather than a bare array. Every response from this

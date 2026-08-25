@@ -10,6 +10,8 @@
 import { DesktopClient } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
+  CardQuery,
+  CardSearchReply,
   CollectionPage,
   CollectionsReply,
 } from './protocol.ts';
@@ -191,6 +193,19 @@ export class AppState {
 
   async rule0(decklistText: string) {
     return this.client.call('analyst/rule0', { decklist_text: decklistText });
+  }
+
+  /**
+   * Search the whole card catalogue, not just what you own.
+   *
+   * This is how a card you do not have gets into a deck. It needs the
+   * desktop: 34k oracle cards and 107k printings are not going on a phone,
+   * and a search that quietly fell back to the local mirror would answer a
+   * different question from the one asked — "what do I own" instead of "what
+   * exists" — which is worse than saying it cannot.
+   */
+  async searchCards(query: CardQuery = {}): Promise<CardSearchReply> {
+    return this.client.call<CardSearchReply>('cards/search', { query });
   }
 
   /** Live figures from the desktop, for when it is reachable. */

@@ -322,3 +322,59 @@ class TestWireShape:
         reply = call(bridge, "nope/not/a/route", {})
         assert isinstance(reply, dict)
         assert reply["ok"] is False
+
+
+class TestSearchingEveryCard:
+    """Finding a card you do NOT own, so it can go in a deck.
+
+    A deck builder that could only offer cards already in the collection would
+    be useless for the thing people mainly use one for — working out what to
+    buy. So search covers the whole catalogue by default, and ownership is an
+    opt-in filter rather than a permanent lens.
+    """
+
+    def test_it_finds_a_card_the_collection_has_never_seen(self, paired):
+        api, bridge = paired
+        # Nothing owned at all.
+        assert api._get_collection_store().summary().total_cards == 0
+        reply = call(bridge, "cards/search", {"query": {"name": "Sol Ring"}})
+        assert reply["total"] >= 1
+        assert any(c["name"] == "Sol Ring" for c in reply["cards"])
+
+    def test_owning_a_card_does_not_change_whether_it_is_findable(self, paired):
+        api, bridge = paired
+        before = call(bridge, "cards/search", {"query": {"name": "Sol Ring"}})
+        api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
+        after = call(bridge, "cards/search", {"query": {"name": "Sol Ring"}})
+        assert before["total"] == after["total"]
+
+    def test_ownership_can_be_asked_for_when_wanted(self, paired):
+        api, bridge = paired
+        api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
+        owned = call(bridge, "cards/search", {"query": {"ownership": "owned"}})
+        unowned = call(bridge, "cards/search",
+                       {"query": {"ownership": "unowned"}})
+        names = [c["name"] for c in owned["cards"]]
+        assert "Sol Ring" in names
+        assert "Sol Ring" not in [c["name"] for c in unowned["cards"]]
+
+    def test_a_card_carries_what_a_deck_builder_needs(self, paired):
+        _api, bridge = paired
+        card = call(bridge, "cards/search",
+                    {"query": {"name": "Sol Ring"}})["cards"][0]
+        for field in ("name", "type_line", "mana_cost", "cmc", "rarity",
+                      "set_code"):
+            assert field in card, field
+
+    def test_results_are_paged_rather_than_unbounded(self, paired):
+        """34k cards must never arrive in one response."""
+        _api, bridge = paired
+        reply = call(bridge, "cards/search", {"query": {"limit": 1}})
+        assert len(reply["cards"]) <= 1
+        assert "total" in reply and "offset" in reply
+
+    def test_searching_needs_the_pairing_token(self, paired):
+        _api, bridge = paired
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            call(bridge, "cards/search", {"query": {}}, token="wrong")
+        assert caught.value.code == 403
