@@ -6,7 +6,7 @@
  * only form that survives being saved and reopened later.
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Pressable,
   StyleSheet,
@@ -17,6 +17,8 @@ import {
 
 import { parsePairingUrl } from '../lib/client.ts';
 import type { Pairing } from '../lib/client.ts';
+import { VERSION } from '../lib/version.ts';
+import { CameraGate, CameraView } from './Camera.tsx';
 
 interface Props {
   onPaired: (pairing: Pairing) => void;
@@ -90,15 +92,17 @@ export function PairScreen({ onPaired, reason }: Props) {
         Your phone needs to be on the same Tailscale network as your PC. Nothing
         is sent anywhere else — this talks to your computer directly.
       </Text>
+      <Text style={styles.version}>Densa Deck companion {VERSION}</Text>
     </View>
   );
 }
 
 /**
- * The camera half, imported lazily.
+ * The camera half.
  *
- * expo-camera pulls in native code that does not exist under Node, and this
- * file is imported by tests that only care about the parsing above.
+ * `CameraView` comes from `./Camera.tsx`, which owns the import and the
+ * permission grant. It used to be fetched lazily into `useState`, and that is
+ * what closed the app when this button was pressed. See `./Camera.tsx`.
  */
 function QrScanner({
   onFound,
@@ -107,29 +111,25 @@ function QrScanner({
   onFound: (value: string) => void;
   onCancel: () => void;
 }) {
-  const [Camera, setCamera] = useState<React.ComponentType<
-    Record<string, unknown>
-  > | null>(null);
-
-  React.useEffect(() => {
-    let live = true;
-    void import('expo-camera').then((mod) => {
-      if (live) setCamera(mod.CameraView as never);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  if (!Camera) return <Text style={styles.body}>Starting the camera…</Text>;
+  // The camera reports a barcode on every frame it can see one, which is
+  // several times a second. Without a latch the first good frame is followed
+  // by a dozen more, all re-entering pairing while it is already unmounting.
+  const done = useRef(false);
 
   return (
     <View style={styles.scanner}>
-      <Camera
-        style={StyleSheet.absoluteFill}
-        barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-        onBarcodeScanned={({ data }: { data: string }) => onFound(data)}
-      />
+      <CameraGate purpose="Densa Deck reads the QR code your PC is showing. Nothing is recorded and no picture is kept.">
+        <CameraView
+          style={StyleSheet.absoluteFill}
+          facing="back"
+          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+          onBarcodeScanned={({ data }: { data: string }) => {
+            if (done.current || !data) return;
+            done.current = true;
+            onFound(data);
+          }}
+        />
+      </CameraGate>
       <Pressable style={styles.cancel} onPress={onCancel}>
         <Text style={styles.secondaryText}>Cancel</Text>
       </Pressable>
@@ -175,6 +175,7 @@ const styles = StyleSheet.create({
   secondaryText: { color: '#e4e6eb', fontSize: 16 },
   problem: { color: '#e53e3e', lineHeight: 20 },
   note: { color: '#8a8f9c', fontSize: 12, lineHeight: 18, marginTop: 'auto' },
+  version: { color: '#4a4f5c', fontSize: 11 },
   scanner: { height: 320, borderRadius: 12, overflow: 'hidden' },
   cancel: {
     position: 'absolute',

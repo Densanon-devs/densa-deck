@@ -23,16 +23,23 @@ import {
 } from 'react-native';
 
 import { AppState, buildAppState } from './src/lib/app-state.ts';
+import type { Crash } from './src/lib/crash.ts';
+import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
 import type { Pairing } from './src/lib/client.ts';
 import { DeckStore } from './src/lib/decks.ts';
 import { deviceId, loadPairing, savePairing } from './src/lib/pairing.ts';
 import { openDeviceDatabase } from './src/lib/sqlite.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './src/lib/store.ts';
+import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
 import { PairScreen } from './src/screens/Pair.tsx';
 import { ScanScreen } from './src/screens/Scan.tsx';
 import { WishlistScreen } from './src/screens/Wishlist.tsx';
+
+// Before the first render, so a failure during startup is shown rather than
+// taking the process down with it.
+installGlobalErrorTrap();
 
 type Tab = 'collection' | 'decks' | 'wishlist' | 'scan';
 
@@ -54,6 +61,12 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('collection');
   const [openDeck, setOpenDeck] = useState<string | null>(null);
   const [banner, setBanner] = useState('');
+  const [fatal, setFatal] = useState<Crash | null>(null);
+
+  useEffect(
+    () => onCrash((crash) => crash.fatal && setFatal(crash)),
+    [],
+  );
 
   const connect = useCallback(async (local: LocalStore, pairing: Pairing) => {
     const device = await deviceId(local, () => globalThis.crypto.randomUUID());
@@ -86,27 +99,42 @@ export default function App() {
   useEffect(() => {
     let live = true;
     void (async () => {
-      const database = await openDeviceDatabase();
-      const local = new LocalStore(database);
-      await local.init();
-      if (!live) return;
-      setStore(local);
+      try {
+        const database = await openDeviceDatabase();
+        const local = new LocalStore(database);
+        await local.init();
+        if (!live) return;
+        setStore(local);
 
-      const pairing = await loadPairing(local);
-      if (!pairing) {
-        setPhase({ kind: 'pairing' });
-        return;
+        const pairing = await loadPairing(local);
+        if (!pairing) {
+          setPhase({ kind: 'pairing' });
+          return;
+        }
+        setPhase({
+          kind: 'ready',
+          state: await connect(local, pairing),
+          decks: new DeckStore(database),
+        });
+      } catch (err) {
+        // Rejecting here used to leave "Opening your collection…" on screen
+        // forever, which reads as a hang and reports nothing.
+        if (live) setFatal(recordCrash(err, 'opening the collection'));
       }
-      setPhase({
-        kind: 'ready',
-        state: await connect(local, pairing),
-        decks: new DeckStore(database),
-      });
     })();
     return () => {
       live = false;
     };
   }, [connect]);
+
+  if (fatal) {
+    return (
+      <SafeAreaView style={styles.app}>
+        <StatusBar barStyle="light-content" />
+        <CrashScreen crash={fatal} onDismiss={() => setFatal(null)} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.app}>
@@ -117,6 +145,7 @@ export default function App() {
         </View>
       ) : null}
 
+      <ErrorBoundary where={`the ${tab} screen`}>
       <View style={styles.body}>
         {phase.kind === 'starting' ? (
           <View style={styles.centre}>
@@ -169,6 +198,7 @@ export default function App() {
           />
         ) : null}
       </View>
+      </ErrorBoundary>
 
       {phase.kind === 'ready' ? (
         <View style={styles.tabs}>

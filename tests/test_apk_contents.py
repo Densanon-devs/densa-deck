@@ -41,6 +41,9 @@ SCREENS = {
     "analyst": "Analyse on my PC",
     "wishlist": "part of your collection",
     "scanner": "Point at a card",
+    "camera permission": "Camera access needed",
+    "crash reporting": "Something broke",
+    "build stamp": "Densa Deck companion",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -49,6 +52,13 @@ BEHAVIOUR = {
     "stale LAN self-heal": "healedLanHost",
     "catalogue search route": "cards/search",
     "sync push route": "sync/push",
+    # The camera crashed the app because nothing ever asked for it, and the
+    # crash reported nothing because nothing was catching. Both fixes are
+    # facts about the shipped binary, not about the source tree.
+    "camera permission request": "useCameraPermissions",
+    # A label only this app uses; "setGlobalHandler" would pass on
+    # React Native's own copy whether or not the trap shipped.
+    "global error trap": "opening the collection",
 }
 
 

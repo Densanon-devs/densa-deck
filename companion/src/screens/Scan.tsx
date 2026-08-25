@@ -29,6 +29,8 @@ import {
   identifyPhoto,
 } from '../lib/scanner.ts';
 import type { ScanCandidate, ScanResult } from '../lib/scanner.ts';
+import { recordCrash } from '../lib/crash.ts';
+import { CameraGate, CameraView } from './Camera.tsx';
 
 interface Props {
   state: AppState;
@@ -138,7 +140,13 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
   );
 }
 
-/** The camera, imported lazily so Node never resolves the native module. */
+/**
+ * The camera and the shutter.
+ *
+ * `CameraView` and the permission grant both live in `./Camera.tsx`. This used
+ * to load the module into `useState`, which is the same fault that closed the
+ * app from the pairing screen.
+ */
 function CameraPane({
   onPhoto,
   busy,
@@ -146,42 +154,45 @@ function CameraPane({
   onPhoto: (base64: string) => void;
   busy: boolean;
 }) {
-  const [Camera, setCamera] = useState<React.ComponentType<
-    Record<string, unknown>
-  > | null>(null);
-  const ref = useRef<{ takePictureAsync: (o: object) => Promise<{ base64?: string }> } | null>(
-    null,
-  );
+  const ref = useRef<CameraView | null>(null);
+  const [problem, setProblem] = useState('');
 
-  React.useEffect(() => {
-    let live = true;
-    void import('expo-camera').then((mod) => {
-      if (live) setCamera(mod.CameraView as never);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  if (!Camera) return <Text style={styles.status}>Starting the camera…</Text>;
+  const capture = useCallback(async () => {
+    setProblem('');
+    try {
+      const shot = await ref.current?.takePictureAsync({
+        base64: true,
+        quality: 0.9,
+        skipProcessing: false,
+      });
+      if (shot?.base64) onPhoto(shot.base64);
+      else setProblem('The camera returned an empty picture. Try again.');
+    } catch (err) {
+      // Rejecting here used to go nowhere: an unhandled rejection, a shutter
+      // that appeared to do nothing, and no way to tell what happened.
+      setProblem(recordCrash(err, 'capture', false).message);
+    }
+  }, [onPhoto]);
 
   return (
     <View style={styles.cameraBox}>
-      <Camera ref={ref as never} style={StyleSheet.absoluteFill} facing="back" />
-      <Pressable
-        style={styles.shutter}
-        disabled={busy}
-        onPress={async () => {
-          const shot = await ref.current?.takePictureAsync({
-            base64: true,
-            quality: 0.9,
-            skipProcessing: false,
-          });
-          if (shot?.base64) onPhoto(shot.base64);
-        }}
-      >
-        <Text style={styles.shutterText}>{busy ? '…' : 'Capture'}</Text>
-      </Pressable>
+      <CameraGate purpose="Scanning a card means taking a picture of it. Pictures are read and discarded — none are kept.">
+        <CameraView
+          ref={ref}
+          style={StyleSheet.absoluteFill}
+          facing="back"
+        />
+        <Pressable
+          style={styles.shutter}
+          disabled={busy}
+          onPress={() => {
+            void capture();
+          }}
+        >
+          <Text style={styles.shutterText}>{busy ? '…' : 'Capture'}</Text>
+        </Pressable>
+      </CameraGate>
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
     </View>
   );
 }
@@ -230,4 +241,12 @@ const styles = StyleSheet.create({
   flashTick: { fontSize: 48, color: '#fff' },
   flashName: { fontSize: 24, color: '#fff', fontWeight: '700' },
   flashMeta: { fontSize: 15, color: '#fff' },
+  problem: {
+    position: 'absolute',
+    bottom: 0, left: 0, right: 0,
+    backgroundColor: '#0f1117dd',
+    color: '#e53e3e',
+    padding: 8,
+    fontSize: 12,
+  },
 });
