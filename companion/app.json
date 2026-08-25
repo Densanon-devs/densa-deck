@@ -2,13 +2,20 @@
   "expo": {
     "name": "Densa Deck",
     "slug": "densa-deck-companion",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.densanon.densadeck",
-      "permissions": ["CAMERA"]
+      "permissions": [
+        "CAMERA"
+      ],
+      "versionCode": 4
     },
-    "plugins": ["expo-sqlite", "expo-camera"]
+    "plugins": [
+      "expo-sqlite",
+      "expo-camera",
+      "./plugins/with-immersive.cjs"
+    ]
   }
 }

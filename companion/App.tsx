@@ -15,12 +15,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Pressable,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import {
+  SafeAreaProvider,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 
 import { AppState, buildAppState } from './src/lib/app-state.ts';
 import type { Crash } from './src/lib/crash.ts';
@@ -56,7 +59,27 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'scan', label: 'Scan' },
 ];
 
+/**
+ * The app runs edge to edge with the system bars hidden — see
+ * `plugins/with-immersive.js`. Android 15 forces edge-to-edge on anything
+ * targeting SDK 35+, so this is not a style choice: content draws under the
+ * status bar and the navigation buttons whatever the app does, and the only
+ * question is whether it accounts for that. It did not, so the offline banner
+ * sat behind the clock and the tab bar behind the gesture pill.
+ *
+ * `SafeAreaView` from react-native does nothing on Android — it is an iOS
+ * notch shim. The insets have to come from the provider below.
+ */
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <Shell />
+    </SafeAreaProvider>
+  );
+}
+
+function Shell() {
+  const insets = useSafeAreaInsets();
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
   const [store, setStore] = useState<LocalStore | null>(null);
   const [tab, setTab] = useState<Tab>('collection');
@@ -127,18 +150,28 @@ export default function App() {
     };
   }, [connect]);
 
+  // A floor under each inset: the bars are hidden, so the system reports
+  // nothing for them, but a punch-hole camera still occupies the top of the
+  // screen and a swipe brings the bars back on top of whatever is there.
+  const frame = {
+    paddingTop: Math.max(insets.top, 10),
+    paddingBottom: Math.max(insets.bottom, 0),
+    paddingLeft: insets.left,
+    paddingRight: insets.right,
+  };
+
   if (fatal) {
     return (
-      <SafeAreaView style={styles.app}>
-        <StatusBar barStyle="light-content" />
+      <View style={[styles.app, frame]}>
+        <StatusBar hidden />
         <CrashScreen crash={fatal} onDismiss={() => setFatal(null)} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.app}>
-      <StatusBar barStyle="light-content" />
+    <View style={[styles.app, { paddingTop: frame.paddingTop, paddingLeft: frame.paddingLeft, paddingRight: frame.paddingRight }]}>
+      <StatusBar hidden />
       {banner ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{banner}</Text>
@@ -208,7 +241,7 @@ export default function App() {
       </ErrorBoundary>
 
       {phase.kind === 'ready' ? (
-        <View style={styles.tabs}>
+        <View style={[styles.tabs, { paddingBottom: frame.paddingBottom + 6 }]}>
           {TABS.map((entry) => (
             <Pressable
               key={entry.id}
@@ -225,7 +258,7 @@ export default function App() {
           ))}
         </View>
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -242,7 +275,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#2d3142',
     backgroundColor: '#1a1d27',
   },
-  tab: { flex: 1, paddingVertical: 14, alignItems: 'center' },
+  tab: { flex: 1, paddingTop: 14, paddingBottom: 8, alignItems: 'center' },
   tabText: { color: '#8a8f9c', fontSize: 13 },
   tabOn: { color: '#e53e3e', fontWeight: '700' },
 });
