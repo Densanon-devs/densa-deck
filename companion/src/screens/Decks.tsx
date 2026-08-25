@@ -21,12 +21,15 @@ import {
 import type { AppState } from '../lib/app-state.ts';
 import {
   DeckStore,
+  addToDeck,
   deckSize,
   formatDecklist,
   parseDecklist,
+  removeFromDeck,
   shortfall,
 } from '../lib/decks.ts';
 import type { Deck } from '../lib/decks.ts';
+import type { CatalogueCard } from '../lib/protocol.ts';
 
 interface Props {
   state: AppState;
@@ -44,6 +47,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [analysis, setAnalysis] = useState<string>('');
   const [thinking, setThinking] = useState(false);
   const [problem, setProblem] = useState('');
+  const [search, setSearch] = useState('');
+  const [found, setFound] = useState<CatalogueCard[]>([]);
+  const [searching, setSearching] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -87,6 +93,61 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     setDeck(next);
     await recheck(cards);
   }, [text, deck, deckId, decks, recheck]);
+
+  /**
+   * Search every card, not only the ones you own.
+   *
+   * This needs the PC — the catalogue is 34k cards — and says so when it
+   * cannot reach one. Quietly searching the local collection instead would
+   * answer "what do I own" while appearing to answer "what exists", so a
+   * card you do not have would look like it does not exist.
+   */
+  const runSearch = useCallback(async () => {
+    const term = search.trim();
+    if (!term) return;
+    setSearching(true);
+    setProblem('');
+    try {
+      const reply = await state.searchCards({ name: term, limit: 25 });
+      setFound(reply.cards);
+      if (!reply.cards.length) setProblem(`No card matches “${term}”.`);
+    } catch (err) {
+      setFound([]);
+      setProblem(
+        `${(err as Error).message}. Searching every card needs your PC — ` +
+        'the card database lives there. You can still type a name in by hand.',
+      );
+    } finally {
+      setSearching(false);
+    }
+  }, [search, state]);
+
+  /** Put a card in the deck whether or not you own it. */
+  const add = useCallback(async (name: string) => {
+    if (!deck) return;
+    const next: Deck = {
+      ...deck,
+      decklist: addToDeck(deck.decklist, name),
+      updated_at: new Date().toISOString(),
+    };
+    await decks.save(next);
+    setDeck(next);
+    setText(formatDecklist(next.decklist));
+    await recheck(next.decklist);
+  }, [deck, decks, recheck]);
+
+  const drop = useCallback(async (name: string) => {
+    if (!deck) return;
+    const next: Deck = {
+      ...deck,
+      decklist: removeFromDeck(deck.decklist, name),
+      updated_at: new Date().toISOString(),
+    };
+    await decks.save(next);
+    setDeck(next);
+    setText(formatDecklist(next.decklist));
+    await recheck(next.decklist);
+  }, [deck, decks, recheck]);
 
   const analyse = useCallback(async () => {
     if (!deck) return;
@@ -135,19 +196,59 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
-      <Text style={styles.section}>Still needed</Text>
+      <Text style={styles.section}>Add a card</Text>
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.list, styles.searchBox]}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search every card…"
+          placeholderTextColor="#8a8f9c"
+          autoCorrect={false}
+          onSubmitEditing={runSearch}
+          returnKeyType="search"
+        />
+        <Pressable style={styles.secondary} onPress={runSearch}>
+          <Text style={styles.secondaryText}>{searching ? '…' : 'Find'}</Text>
+        </Pressable>
+      </View>
+      {found.map((card) => (
+        <Pressable
+          key={card.scryfall_id}
+          style={styles.result}
+          onPress={() => add(card.name)}
+        >
+          <View style={styles.grow}>
+            <Text style={styles.name}>{card.name}</Text>
+            <Text style={styles.muted}>
+              {card.type_line}
+              {card.price_usd != null ? `  ·  $${card.price_usd.toFixed(2)}` : ''}
+            </Text>
+          </View>
+          <Text style={styles.plus}>+</Text>
+        </Pressable>
+      ))}
+
+      <Text style={styles.section}>Still needed — on your wishlist</Text>
       {missing.length === 0 ? (
         <Text style={styles.good}>You own every card in this deck.</Text>
       ) : (
-        missing.map((row) => (
-          <View key={row.name} style={styles.row}>
-            <Text style={styles.short}>{row.short}</Text>
-            <Text style={styles.name}>{row.name}</Text>
-            <Text style={styles.muted}>
-              have {row.have} of {row.need}
-            </Text>
-          </View>
-        ))
+        <>
+          <Text style={styles.muted}>
+            These aren’t counted as owned. They’re what this deck would cost
+            to finish.
+          </Text>
+          {missing.map((row) => (
+            <Pressable key={row.name} style={styles.row}
+                       onLongPress={() => drop(row.name)}>
+              <Text style={styles.short}>{row.short}</Text>
+              <Text style={styles.name}>{row.name}</Text>
+              <Text style={styles.muted}>
+                have {row.have} of {row.need}
+              </Text>
+            </Pressable>
+          ))}
+        </>
       )}
 
       <Text style={styles.section}>Analysis</Text>
@@ -204,6 +305,17 @@ const styles = StyleSheet.create({
   good: { color: '#48bb78' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
   short: { color: '#e53e3e', minWidth: 24, fontWeight: '700' },
+  searchBox: { minHeight: 0, flex: 1, paddingVertical: 10 },
+  result: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2d3142',
+  },
+  grow: { flex: 1 },
+  plus: { color: '#48bb78', fontSize: 22, fontWeight: '700', paddingLeft: 8 },
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   analysis: {

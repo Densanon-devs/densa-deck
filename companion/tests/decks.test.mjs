@@ -19,6 +19,8 @@ import {
   parseDecklist,
   removeFromDeck,
   shortfall,
+  wishlistCost,
+  wishlistFromDecks,
 } from '../src/lib/decks.ts';
 import { LocalStore } from '../src/lib/store.ts';
 import { MemoryDatabase } from './harness.mjs';
@@ -253,5 +255,93 @@ describe('what finishing a deck would cost', () => {
     const cost = costToFinish([], {});
     assert.equal(cost.usd, 0);
     assert.equal(cost.unpriced, 0);
+  });
+});
+
+describe('the wishlist', () => {
+  const deck = (id, name, decklist) => ({
+    deck_id: id, name, format: '', decklist, notes: '', updated_at: 'now',
+  });
+
+  test('wanting a card is not owning it', () => {
+    // The failure this guards: a wished card looking owned would silently
+    // vanish from the list of things to buy.
+    const rows = wishlistFromDecks([deck('d1', 'Brew', { 'Black Lotus': 1 })], []);
+    assert.equal(rows[0].card_name, 'Black Lotus');
+    assert.equal(rows[0].quantity, 1);
+  });
+
+  test('cards you own do not appear', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { 'Sol Ring': 1 })],
+      [{ card_name: 'Sol Ring', quantity: 1 }],
+    );
+    assert.deepEqual(rows, []);
+  });
+
+  test('only the copies you lack are wanted', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { 'Sol Ring': 4 })],
+      [{ card_name: 'Sol Ring', quantity: 1 }],
+    );
+    assert.equal(rows[0].quantity, 3);
+  });
+
+  test('the headline is what ONE deck needs at once', () => {
+    // Two decks each wanting one copy need one copy between them unless both
+    // are built at the same time.
+    const rows = wishlistFromDecks([
+      deck('d1', 'Brew', { 'Black Lotus': 1 }),
+      deck('d2', 'Other', { 'Black Lotus': 1 }),
+    ], []);
+    assert.equal(rows[0].quantity, 1);
+    assert.equal(rows[0].quantityAcrossDecks, 2);
+  });
+
+  test('it records which decks want a card', () => {
+    const rows = wishlistFromDecks([
+      deck('d1', 'Brew', { 'Black Lotus': 1 }),
+      deck('d2', 'Other', { 'Black Lotus': 2 }),
+    ], []);
+    assert.deepEqual(rows[0].wantedBy.map((w) => w.deck_name).sort(),
+                     ['Brew', 'Other']);
+    assert.equal(rows[0].quantity, 2, 'the deck that needs most sets it');
+  });
+
+  test('the biggest gap comes first', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { A: 1, B: 4 })], [],
+    );
+    assert.equal(rows[0].card_name, 'B');
+  });
+
+  test('no decks means nothing wanted', () => {
+    assert.deepEqual(wishlistFromDecks([], []), []);
+  });
+
+  test('a deck you can already build wants nothing', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { 'Sol Ring': 1 })],
+      [{ card_name: 'Sol Ring', quantity: 4 }],
+    );
+    assert.deepEqual(rows, []);
+  });
+
+  test('copies across collections all count as owned', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { 'Sol Ring': 2 })],
+      [{ card_name: 'Sol Ring', quantity: 1 },
+       { card_name: 'Sol Ring', quantity: 1 }],
+    );
+    assert.deepEqual(rows, []);
+  });
+
+  test('costing the list, with unknowns admitted', () => {
+    const rows = wishlistFromDecks(
+      [deck('d1', 'Brew', { 'Black Lotus': 1, 'Sol Ring': 2 })], [],
+    );
+    const cost = wishlistCost(rows, { 'sol ring': 2 });
+    assert.equal(cost.usd, 4, 'two Sol Rings at 2');
+    assert.equal(cost.unpriced, 1, 'the Lotus is not counted as free');
   });
 });

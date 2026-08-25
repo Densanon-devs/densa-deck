@@ -511,6 +511,30 @@ class PhoneBridge:
         if route == "cards/search":
             return _unwrap(api.search_cards(payload.get("query") or {}))
 
+        # --- wishlist -----------------------------------------------------
+        # Cards a deck wants that you do not own. Stored apart from the
+        # collection, so nothing here counts toward what you have.
+        if route == "wishlist":
+            return _unwrap(api.get_wishlist())
+        if route == "wishlist/add":
+            return _unwrap(api.wishlist_add(
+                payload.get("card_name", ""),
+                int(payload.get("quantity", 1) or 1),
+                payload.get("deck_id", ""),
+                payload.get("deck_name", ""),
+                payload.get("notes", "")))
+        if route == "wishlist/remove":
+            return _unwrap(api.wishlist_remove(
+                payload.get("card_name", ""), payload.get("deck_id", "")))
+        if route == "wishlist/acquire":
+            return _unwrap(api.wishlist_acquire(
+                payload.get("printing_id", ""),
+                payload.get("card_name", ""),
+                int(payload.get("quantity", 1) or 1),
+                payload.get("finish", "nonfoil"),
+                payload.get("condition", "NM"),
+                payload.get("collection_id")))
+
         # --- decks --------------------------------------------------------
         if route == "decks/list":
             # Named key rather than a bare array. Every response from this

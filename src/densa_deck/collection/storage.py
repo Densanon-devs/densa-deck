@@ -122,6 +122,29 @@ _SCHEMA = [
         PRIMARY KEY (printing_id, captured_on, finish)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_ph_printing ON price_history(printing_id, finish)",
+    # ---- wishlist --------------------------------------------------------
+    # DELIBERATELY NOT collection_items. Ownership is computed by queries
+    # spread across six modules; a wishlist living in that table would need
+    # every one of them to exclude it, and the first one missed would count
+    # cards you do not own as owned. A separate table cannot be got wrong.
+    """CREATE TABLE IF NOT EXISTS wishlist_items (
+        wish_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card_name TEXT NOT NULL,
+        oracle_id TEXT NOT NULL DEFAULT '',
+        quantity INTEGER NOT NULL DEFAULT 1,
+        -- Which deck wants it, or '' for something added by hand. Two decks
+        -- wanting one card each is a different situation from one deck
+        -- wanting two, and collapsing them loses the answer to "why is this
+        -- on my list".
+        deck_id TEXT NOT NULL DEFAULT '',
+        deck_name TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_card_deck
+       ON wishlist_items(card_name COLLATE NOCASE, deck_id)""",
+    "CREATE INDEX IF NOT EXISTS idx_wish_deck ON wishlist_items(deck_id)",
     # ---- reseller layer -------------------------------------------------
     # An acquisition is a lot: "Mike's collection, $600, 14 Aug". Cards
     # scanned into it carry acquisition_id, and cost basis is allocated
@@ -734,6 +757,109 @@ class CollectionStore:
         return {"collection_id": r[0], "name": r[1], "kind": r[2], "notes": r[3],
                 "is_default": bool(r[4]), "created_at": r[5],
                 "collection_uid": r[6], "cards": 0, "unique_printings": 0}
+
+
+    # --------------------------------------------------------- wishlist
+    #
+    # Cards you want but do not have. Kept apart from `collection_items` on
+    # purpose — see the schema note. Nothing here can affect what you own,
+    # what your collection is worth, or what a deck still needs.
+
+    def wishlist_set(self, card_name: str, quantity: int, *,
+                     deck_id: str = "", deck_name: str = "",
+                     oracle_id: str = "", notes: str = "") -> dict:
+        """Record that something is wanted. Quantity 0 removes the entry.
+
+        An exact set rather than an increment: this is driven by "the deck is
+        short three", which is a fact about the current decklist, not an event
+        to accumulate. Adding would double the entry every time a deck was
+        saved.
+        """
+        card_name = (card_name or "").strip()
+        if not card_name:
+            raise ValueError("A wishlist entry needs a card name")
+        now = _now()
+        with self._connect() as conn:
+            if quantity <= 0:
+                conn.execute(
+                    """DELETE FROM wishlist_items
+                       WHERE card_name = ? COLLATE NOCASE AND deck_id = ?""",
+                    (card_name, deck_id))
+                conn.commit()
+                return {"card_name": card_name, "quantity": 0, "deck_id": deck_id}
+            conn.execute(
+                """INSERT INTO wishlist_items
+                     (card_name, oracle_id, quantity, deck_id, deck_name,
+                      notes, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(card_name COLLATE NOCASE, deck_id) DO UPDATE SET
+                     quantity = excluded.quantity,
+                     deck_name = excluded.deck_name,
+                     notes = CASE WHEN excluded.notes != '' THEN excluded.notes
+                                  ELSE wishlist_items.notes END,
+                     updated_at = excluded.updated_at""",
+                (card_name, oracle_id, int(quantity), deck_id, deck_name,
+                 notes, now, now))
+            conn.commit()
+        return {"card_name": card_name, "quantity": int(quantity),
+                "deck_id": deck_id}
+
+    def wishlist_for_deck(self, deck_id: str) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT card_name, quantity, deck_name, notes
+                   FROM wishlist_items WHERE deck_id = ?
+                   ORDER BY card_name COLLATE NOCASE""", (deck_id,)).fetchall()
+        return [{"card_name": r[0], "quantity": r[1], "deck_name": r[2],
+                 "notes": r[3]} for r in rows]
+
+    def wishlist(self) -> list[dict]:
+        """Everything wanted, one row per card, with who wants it.
+
+        Totals are the MAXIMUM any single deck needs, not the sum: two decks
+        each wanting one Sol Ring need one Sol Ring between them unless both
+        are built at once, and quoting two would send someone shopping for a
+        card they do not need.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT card_name, MAX(quantity) AS most, SUM(quantity) AS across,
+                          COUNT(*) AS decks, MAX(oracle_id) AS oracle_id
+                   FROM wishlist_items
+                   GROUP BY card_name COLLATE NOCASE
+                   ORDER BY card_name COLLATE NOCASE""").fetchall()
+            wanted = []
+            for name, most, across, decks, oracle_id in rows:
+                sources = conn.execute(
+                    """SELECT deck_id, deck_name, quantity FROM wishlist_items
+                       WHERE card_name = ? COLLATE NOCASE""", (name,)).fetchall()
+                wanted.append({
+                    "card_name": name,
+                    "oracle_id": oracle_id or "",
+                    # What one deck needs at once.
+                    "quantity": most,
+                    # What every deck would need if all were built together.
+                    "quantity_across_decks": across,
+                    "deck_count": decks,
+                    "wanted_by": [{"deck_id": d, "deck_name": n, "quantity": q}
+                                  for d, n, q in sources],
+                })
+        return wanted
+
+    def wishlist_clear_deck(self, deck_id: str) -> int:
+        """Forget what one deck wanted — used before writing its new shortfall."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM wishlist_items WHERE deck_id = ?",
+                               (deck_id,))
+            conn.commit()
+            return cur.rowcount
+
+    def wishlist_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT card_name COLLATE NOCASE) "
+                "FROM wishlist_items").fetchone()
+            return int(row[0])
 
     def remove_copies(self, printing_id: str, card_name: str, *, quantity: int = 1, **kwargs):
         """Convenience inverse of add_copies."""

@@ -231,3 +231,74 @@ export function costToFinish(
   }
   return { usd: Math.round(usd * 100) / 100, unpriced };
 }
+
+
+export interface WishlistRow {
+  card_name: string;
+  /** What a single deck needs at once. */
+  quantity: number;
+  /** What every deck would need if all were built together. */
+  quantityAcrossDecks: number;
+  wantedBy: Array<{ deck_id: string; deck_name: string; quantity: number }>;
+}
+
+/**
+ * What your decks want that you do not own.
+ *
+ * DERIVED, not stored. Both halves of the input already sync — decks as
+ * documents, ownership as deltas — so recomputing gives the same answer on
+ * every device without a wishlist needing a sync protocol of its own, and
+ * without the two ever being able to disagree.
+ *
+ * It also means this works with no signal at all, which matters: "what do I
+ * still need" is a question asked in a shop.
+ */
+export function wishlistFromDecks(
+  decks: Deck[],
+  owned: Array<{ card_name: string; quantity: number }>,
+): WishlistRow[] {
+  const rows = new Map<string, WishlistRow>();
+
+  for (const deck of decks) {
+    for (const missing of shortfall(deck.decklist, owned)) {
+      const key = missing.name.toLowerCase();
+      const existing = rows.get(key);
+      const source = {
+        deck_id: deck.deck_id,
+        deck_name: deck.name,
+        quantity: missing.short,
+      };
+      if (existing) {
+        // The headline is what ONE deck needs at once. Two decks each
+        // wanting a single copy need one copy between them unless both are
+        // built at the same time, and quoting two sends someone shopping for
+        // a card they do not need.
+        existing.quantity = Math.max(existing.quantity, missing.short);
+        existing.quantityAcrossDecks += missing.short;
+        existing.wantedBy.push(source);
+      } else {
+        rows.set(key, {
+          card_name: missing.name,
+          quantity: missing.short,
+          quantityAcrossDecks: missing.short,
+          wantedBy: [source],
+        });
+      }
+    }
+  }
+
+  return [...rows.values()].sort(
+    (a, b) => b.quantity - a.quantity || a.card_name.localeCompare(b.card_name),
+  );
+}
+
+/** What the whole wishlist would cost, unpriced cards reported separately. */
+export function wishlistCost(
+  rows: WishlistRow[],
+  prices: Record<string, number | null | undefined>,
+): { usd: number; unpriced: number } {
+  return costToFinish(
+    rows.map((r) => ({ name: r.card_name, short: r.quantity })),
+    prices,
+  );
+}

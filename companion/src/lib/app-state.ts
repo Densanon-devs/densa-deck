@@ -15,6 +15,8 @@ import type {
   CollectionPage,
   CollectionsReply,
 } from './protocol.ts';
+import { wishlistFromDecks } from './decks.ts';
+import type { Deck, WishlistRow } from './decks.ts';
 import { LocalStore } from './store.ts';
 import { SyncEngine } from './sync.ts';
 
@@ -193,6 +195,16 @@ export class AppState {
 
   async rule0(decklistText: string) {
     return this.client.call('analyst/rule0', { decklist_text: decklistText });
+  }
+
+  /**
+   * What your decks want that you do not own.
+   *
+   * Derived here from local decks and the local mirror rather than fetched,
+   * so it answers with no signal — which is the situation it exists for.
+   */
+  async wishlist(decks: Deck[]): Promise<WishlistRow[]> {
+    return wishlistFromDecks(decks, await this.store.listStacks());
   }
 
   /**

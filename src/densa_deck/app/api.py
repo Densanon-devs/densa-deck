@@ -676,6 +676,19 @@ class AppApi:
         # right after save. Empty list when nothing broke (or when the
         # combo cache is empty / no prior version exists).
         out["combos_broken"] = combos_broken
+
+        # Anything this deck is short of goes on the wishlist, automatically.
+        # Saving is the right moment: it is when the decklist becomes a thing
+        # you intend to build, and doing it here means the list can never
+        # drift from the decks that drive it.
+        #
+        # Never fatal. A wishlist that failed to update is a worse list; a
+        # save that failed is lost work.
+        try:
+            out["wishlist"] = self._refresh_wishlist_for_deck(
+                deck_id, name, decklist)
+        except Exception:
+            pass
         return out
 
     @_safe
@@ -683,6 +696,13 @@ class AppApi:
         """Delete a saved deck + all its versions. Destructive — the frontend
         should confirm before calling."""
         self._get_vstore().delete_deck(deck_id)
+        # And forget what it wanted. A deleted deck leaving cards on the
+        # wishlist would have someone shopping for a deck that no longer
+        # exists, with nothing on the list to say why it is there.
+        try:
+            self._get_collection_store().wishlist_clear_deck(deck_id)
+        except Exception:
+            pass
         # Free any physical copies earmarked for it. Without this the cards
         # stay allocated to a deck that no longer exists and read as
         # permanently unavailable, with nothing in the UI to explain why.
@@ -3210,6 +3230,140 @@ class AppApi:
             "head": sync.log.head(),
             "peers": sync.log.peers(),
         }
+
+    # --------------------------------------------------------- wishlist
+
+    def _refresh_wishlist_for_deck(self, deck_id: str, deck_name: str,
+                                   decklist: dict) -> dict:
+        """Rewrite what one deck wants, from what it is short of.
+
+        Replaced rather than added to: the shortfall is a fact about the
+        CURRENT decklist, so accumulating would leave a card on the list
+        forever after it was cut from the deck that wanted it.
+
+        Counted at the card-name level, because a deck slot says "Sol Ring"
+        and any printing satisfies it.
+        """
+        store = self._get_collection_store()
+        owned = store.owned_by_name()
+        lowered = {name.lower(): count for name, count in owned.items()}
+
+        store.wishlist_clear_deck(deck_id)
+        wanted = 0
+        for name, need in (decklist or {}).items():
+            have = lowered.get(str(name).lower(), 0)
+            short = int(need) - int(have)
+            if short > 0:
+                store.wishlist_set(str(name), short, deck_id=deck_id,
+                                   deck_name=deck_name)
+                wanted += 1
+        return {"deck_id": deck_id, "cards_wanted": wanted}
+
+    @_safe
+    def get_wishlist(self) -> dict:
+        """Everything wanted, and which decks want it.
+
+        These are NOT owned and are stored apart from the collection, so
+        nothing here counts toward what you have or what it is worth.
+        """
+        store = self._get_collection_store()
+        wanted = store.wishlist()
+
+        # Price them, because "what would it cost to finish my decks" is the
+        # question this list exists to answer. An unknown price is reported
+        # as unknown rather than folded in as zero.
+        db = self._get_db()
+        total = 0.0
+        unpriced = 0
+        if db.card_count() or db.printing_count():
+            prices = db.cheapest_prices_for_names([w["card_name"] for w in wanted])
+            for row in wanted:
+                price = prices.get(row["card_name"].lower())
+                row["price_usd"] = price
+                if price is None:
+                    unpriced += row["quantity"]
+                else:
+                    total += price * row["quantity"]
+
+        return {
+            "cards": wanted,
+            "distinct_cards": len(wanted),
+            "cost_usd": round(total, 2),
+            "unpriced_cards": unpriced,
+        }
+
+    @_safe
+    def wishlist_add(self, card_name: str, quantity: int = 1,
+                     deck_id: str = "", deck_name: str = "",
+                     notes: str = "") -> dict:
+        """Put something on the list by hand, deck or no deck."""
+        try:
+            return self._get_collection_store().wishlist_set(
+                card_name, int(quantity), deck_id=deck_id,
+                deck_name=deck_name, notes=notes)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @_safe
+    def wishlist_remove(self, card_name: str, deck_id: str = "") -> dict:
+        return self._get_collection_store().wishlist_set(
+            card_name, 0, deck_id=deck_id)
+
+    @_safe
+    def wishlist_acquire(self, printing_id: str, card_name: str = "",
+                         quantity: int = 1, finish: str = "nonfoil",
+                         condition: str = "NM",
+                         collection_id: int | None = None) -> dict:
+        """You bought it: file it, and take it off every list that wanted it.
+
+        The two halves belong together. Filing it without clearing the
+        wishlist leaves you shopping for a card sitting in your box, which is
+        the exact confusion the list exists to prevent.
+        """
+        db = self._get_db()
+        printing = db.get_printing(printing_id)
+        if printing is None:
+            return {"ok": False, "error": "Unknown printing.",
+                    "error_type": "NotFound"}
+        name = card_name or printing["name"]
+
+        store = self._get_collection_store()
+        store.add_copies(
+            printing_id, name, quantity=int(quantity),
+            oracle_id=printing.get("oracle_id", ""), finish=finish,
+            condition=condition,
+            collection_id=None if collection_id is None else int(collection_id),
+            reason="acquired")
+        self._log_stack_delta(printing_id, name, int(quantity),
+                              collection_id=collection_id, finish=finish,
+                              condition=condition,
+                              oracle_id=printing.get("oracle_id", ""),
+                              reason="acquired")
+
+        # Every deck that wanted it re-checks against what is now owned.
+        cleared = self._reconcile_wishlist_for_card(name)
+        return {"acquired": name, "quantity": int(quantity),
+                "wishlist_rows_updated": cleared}
+
+    def _reconcile_wishlist_for_card(self, card_name: str) -> int:
+        """Re-check every deck that wanted a card against what is now owned."""
+        store = self._get_collection_store()
+        owned = store.owned_by_name().get(card_name, 0)
+        if not owned:
+            owned = next((count for name, count in store.owned_by_name().items()
+                          if name.lower() == card_name.lower()), 0)
+        touched = 0
+        for row in store.wishlist():
+            if row["card_name"].lower() != card_name.lower():
+                continue
+            for source in row["wanted_by"]:
+                # The deck's need has not changed; what it is short of has.
+                still_short = source["quantity"] - owned
+                store.wishlist_set(row["card_name"], max(0, still_short),
+                                   deck_id=source["deck_id"],
+                                   deck_name=source["deck_name"])
+                touched += 1
+        return touched
 
     # ------------------------------------------------------- collections
 
