@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { reporting } from './report.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
 
 interface Props {
@@ -32,6 +33,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   const [chosen, setChosen] = useState<string | undefined>();
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
 
   const load = useCallback(async () => {
     setRows(await state.cards(chosen, search || undefined));
@@ -39,14 +41,17 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   }, [state, chosen, search]);
 
   useEffect(() => {
-    void load();
+    void load().catch(reporting('your collection', setProblem));
   }, [load]);
 
   const syncNow = useCallback(async () => {
     setBusy(true);
+    setProblem('');
     try {
       await state.sync();
       await load();
+    } catch (err) {
+      reporting('syncing', setProblem)(err);
     } finally {
       setBusy(false);
     }
@@ -54,6 +59,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 
   return (
     <View style={styles.screen}>
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
       <TextInput
         style={styles.search}
         placeholder="Search your collection"
@@ -124,6 +130,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 }
 
 const styles = StyleSheet.create({
+  problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19, paddingBottom: 6 },
   screen: { flex: 1, backgroundColor: '#0f1117', padding: 12 },
   search: {
     backgroundColor: '#1a1d27',

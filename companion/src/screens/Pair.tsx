@@ -17,11 +17,13 @@ import {
 
 import { parsePairingUrl } from '../lib/client.ts';
 import type { Pairing } from '../lib/client.ts';
+import { recordCrash } from '../lib/crash.ts';
 import { VERSION } from '../lib/version.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 
 interface Props {
-  onPaired: (pairing: Pairing) => void;
+  /** May be async: whatever it throws is shown rather than discarded. */
+  onPaired: (pairing: Pairing) => void | Promise<void>;
   /** Rendered when the desktop has revoked this phone. */
   reason?: string;
 }
@@ -30,8 +32,9 @@ export function PairScreen({ onPaired, reason }: Props) {
   const [typed, setTyped] = useState('');
   const [problem, setProblem] = useState('');
   const [scanning, setScanning] = useState(false);
+  const [progress, setProgress] = useState('');
 
-  const accept = (raw: string) => {
+  const accept = async (raw: string) => {
     const pairing = parsePairingUrl(raw);
     if (!pairing) {
       // Being specific matters: the usual mistake is a link whose token was
@@ -43,7 +46,16 @@ export function PairScreen({ onPaired, reason }: Props) {
       return;
     }
     setProblem('');
-    onPaired(pairing);
+    setProgress(`Connecting to ${pairing.baseUrl}…`);
+    try {
+      // Nothing awaited this before. A release build reports an unhandled
+      // rejection nowhere, so a failure here read as the button doing
+      // absolutely nothing — which is exactly how it looked.
+      await onPaired(pairing);
+    } catch (err) {
+      setProgress('');
+      setProblem(recordCrash(err, 'pairing', false).message);
+    }
   };
 
   return (
@@ -56,7 +68,14 @@ export function PairScreen({ onPaired, reason }: Props) {
         “Scan from your phone”. Then scan the QR code it shows.
       </Text>
 
-      <Pressable style={styles.primary} onPress={() => setScanning(true)}>
+      <Pressable
+        style={styles.primary}
+        onPress={() => {
+          setProblem('');
+          setProgress('');
+          setScanning(true);
+        }}
+      >
         <Text style={styles.primaryText}>
           {scanning ? 'Point at the QR code…' : 'Scan QR code'}
         </Text>
@@ -66,11 +85,18 @@ export function PairScreen({ onPaired, reason }: Props) {
         <QrScanner
           onFound={(value) => {
             setScanning(false);
-            accept(value);
+            // Saying a code was read, before anything is done with it,
+            // separates "the camera never saw it" from "what happened next
+            // went wrong". Without that line both look the same.
+            setProgress('Read a code — connecting…');
+            void accept(value);
           }}
           onCancel={() => setScanning(false)}
         />
       ) : null}
+
+      {progress ? <Text style={styles.progress}>{progress}</Text> : null}
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       <Text style={styles.or}>or paste the link</Text>
       <TextInput
@@ -82,11 +108,14 @@ export function PairScreen({ onPaired, reason }: Props) {
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <Pressable style={styles.secondary} onPress={() => accept(typed)}>
+      <Pressable
+        style={styles.secondary}
+        onPress={() => {
+          void accept(typed);
+        }}
+      >
         <Text style={styles.secondaryText}>Connect</Text>
       </Pressable>
-
-      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       <Text style={styles.note}>
         Your phone needs to be on the same Tailscale network as your PC. Nothing
@@ -174,6 +203,7 @@ const styles = StyleSheet.create({
   },
   secondaryText: { color: '#e4e6eb', fontSize: 16 },
   problem: { color: '#e53e3e', lineHeight: 20 },
+  progress: { color: '#ecc94b', lineHeight: 20 },
   note: { color: '#8a8f9c', fontSize: 12, lineHeight: 18, marginTop: 'auto' },
   version: { color: '#4a4f5c', fontSize: 11 },
   scanner: { height: 320, borderRadius: 12, overflow: 'hidden' },

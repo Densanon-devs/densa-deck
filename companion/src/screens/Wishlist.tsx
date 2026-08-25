@@ -20,6 +20,7 @@ import {
 
 import type { AppState } from '../lib/app-state.ts';
 import type { DeckStore, WishlistRow } from '../lib/decks.ts';
+import { reporting } from './report.ts';
 
 interface Props {
   state: AppState;
@@ -29,20 +30,24 @@ interface Props {
 export function WishlistScreen({ state, decks }: Props) {
   const [rows, setRows] = useState<WishlistRow[]>([]);
   const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState('');
 
   const load = useCallback(async () => {
     setRows(await state.wishlist(await decks.list()));
   }, [state, decks]);
 
   useEffect(() => {
-    void load();
+    void load().catch(reporting('your wishlist', setProblem));
   }, [load]);
 
   const refresh = useCallback(async () => {
     setBusy(true);
+    setProblem('');
     try {
       await state.sync();
       await load();
+    } catch (err) {
+      reporting('syncing', setProblem)(err);
     } finally {
       setBusy(false);
     }
@@ -52,6 +57,7 @@ export function WishlistScreen({ state, decks }: Props) {
 
   return (
     <View style={styles.screen}>
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
       <Text style={styles.title}>Wishlist</Text>
       <Text style={styles.muted}>
         {rows.length
@@ -93,6 +99,7 @@ export function WishlistScreen({ state, decks }: Props) {
 }
 
 const styles = StyleSheet.create({
+  problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19 },
   screen: { flex: 1, backgroundColor: '#0f1117', padding: 14 },
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },

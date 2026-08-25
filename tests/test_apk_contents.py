@@ -44,6 +44,7 @@ SCREENS = {
     "camera permission": "Camera access needed",
     "crash reporting": "Something broke",
     "build stamp": "Densa Deck companion",
+    "pairing progress": "Read a code",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -113,3 +114,18 @@ def test_the_native_libraries_are_there():
 def test_the_bundle_is_not_suspiciously_small():
     """A near-empty bundle still passes a substring check for nothing."""
     assert len(_bundle()) > 200_000
+
+
+def test_the_app_does_not_reach_for_a_global_that_is_not_there():
+    """`crypto.randomUUID` is in Node, in jsdom and in every browser.
+
+    It is not in React Native — not in Hermes, not in React Native's own
+    polyfills, not in Expo's WinterCG runtime. Calling it threw the instant a
+    QR code was read, inside a promise nobody awaited, in a build that reports
+    unhandled rejections nowhere. The pairing screen simply never changed.
+
+    An absence is the honest assertion here: the fix is that the call is gone.
+    """
+    assert not _present(_bundle(), "randomUUID"), (
+        "crypto.randomUUID is back in the bundle; it does not exist on a phone"
+    )

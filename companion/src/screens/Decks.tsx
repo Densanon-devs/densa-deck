@@ -19,6 +19,8 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { uuid } from '../lib/uuid.ts';
+import { reporting } from './report.ts';
 import {
   DeckStore,
   addToDeck,
@@ -48,16 +50,17 @@ export function DeckListScreen({
 }) {
   const [rows, setRows] = useState<Deck[]>([]);
   const [name, setName] = useState('');
+  const [problem, setProblem] = useState('');
 
   const load = useCallback(async () => setRows(await decks.list()), [decks]);
   useEffect(() => {
-    void load();
+    void load().catch(reporting('your decks', setProblem));
   }, [load]);
 
   const create = useCallback(async () => {
     const chosen = name.trim() || 'Untitled deck';
     const deck: Deck = {
-      deck_id: globalThis.crypto.randomUUID(),
+      deck_id: uuid(),
       name: chosen,
       format: '',
       decklist: {},
@@ -73,6 +76,7 @@ export function DeckListScreen({
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Decks</Text>
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       <View style={styles.row}>
         <TextInput
@@ -82,7 +86,13 @@ export function DeckListScreen({
           placeholder="New deck name"
           placeholderTextColor="#8a8f9c"
         />
-        <Pressable style={styles.secondary} onPress={create}>
+        <Pressable
+          style={styles.secondary}
+          onPress={() => {
+            setProblem('');
+            void create().catch(reporting('making the deck', setProblem));
+          }}
+        >
           <Text style={styles.secondaryText}>Create</Text>
         </Pressable>
       </View>
@@ -130,7 +140,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       if (!found) return;
       setDeck(found);
       setText(formatDecklist(found.decklist));
-    })();
+    })().catch(reporting('opening the deck', setProblem));
   }, [decks, deckId]);
 
   /** What you still need, from the phone's own mirror. Works with no signal. */
@@ -143,7 +153,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   );
 
   useEffect(() => {
-    if (deck) void recheck(deck.decklist);
+    if (deck) void recheck(deck.decklist).catch(reporting('checking what you own', setProblem));
   }, [deck, recheck]);
 
   const save = useCallback(async () => {

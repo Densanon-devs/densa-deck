@@ -29,6 +29,7 @@ import type { Pairing } from './src/lib/client.ts';
 import { DeckStore } from './src/lib/decks.ts';
 import { deviceId, loadPairing, savePairing } from './src/lib/pairing.ts';
 import { openDeviceDatabase } from './src/lib/sqlite.ts';
+import { uuid } from './src/lib/uuid.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
@@ -69,10 +70,8 @@ export default function App() {
   );
 
   const connect = useCallback(async (local: LocalStore, pairing: Pairing) => {
-    const device = await deviceId(local, () => globalThis.crypto.randomUUID());
-    const state = buildAppState(local, pairing, device, () =>
-      globalThis.crypto.randomUUID(),
-    );
+    const device = await deviceId(local, uuid);
+    const state = buildAppState(local, pairing, device, uuid);
     state.subscribe((snapshot) => {
       if (snapshot.connection === 'unpaired') {
         // The desktop revoked this phone; there is nothing to retry, so say
@@ -91,8 +90,9 @@ export default function App() {
       );
     });
     // Deliberately not awaited: a slow or absent desktop must not hold up the
-    // first paint of a screen whose data is already local.
-    void state.sync();
+    // first paint of a screen whose data is already local. Not being awaited
+    // is exactly why it needs its own catch — nothing else would ever see it.
+    void state.sync().catch((err) => recordCrash(err, 'first sync', false));
     return state;
   }, []);
 
@@ -157,7 +157,14 @@ export default function App() {
           <PairScreen
             reason={phase.reason}
             onPaired={async (pairing) => {
-              if (!store) return;
+              // Returning quietly used to make a real failure — the database
+              // never opened — look like a button that does nothing.
+              if (!store) {
+                throw new Error(
+                  'The local collection is not open yet. Give it a moment ' +
+                    'and try again.',
+                );
+              }
               await savePairing(store, pairing);
               const database = await openDeviceDatabase();
               setPhase({
