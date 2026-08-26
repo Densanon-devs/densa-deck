@@ -18,6 +18,7 @@ import {
 import { parsePairingUrl } from '../lib/client.ts';
 import type { Pairing } from '../lib/client.ts';
 import { recordCrash } from '../lib/crash.ts';
+import { checkHost } from '../lib/hosts.ts';
 import { VERSION } from '../lib/version.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 
@@ -45,6 +46,15 @@ export function PairScreen({ onPaired, reason }: Props) {
       );
       return;
     }
+    // A QR code is a thing anyone can hold in front of a camera. This token
+    // grants read and write access to a whole collection, so it goes nowhere
+    // that is not the tailnet, the local network, or this machine.
+    const verdict = checkHost(pairing.baseUrl);
+    if (!verdict.allowed) {
+      setProblem(verdict.reason ?? 'That address is not one this app will use.');
+      return;
+    }
+
     setProblem('');
     setProgress(`Connecting to ${pairing.baseUrl}…`);
     try {

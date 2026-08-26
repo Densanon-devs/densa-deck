@@ -14,6 +14,7 @@
 
 import { isApiError } from './protocol.ts';
 import type { ApiError } from './protocol.ts';
+import { checkHost } from './hosts.ts';
 import { Reachability, makeProbe } from './reach.ts';
 import type { Probe, Via } from './reach.ts';
 
@@ -39,6 +40,16 @@ export interface Pairing {
   token: string;
   /** Optional LAN address, tried when the tailnet is unavailable. */
   lanUrl?: string;
+}
+
+/** What one address did when asked. */
+export interface EndpointReport {
+  label: 'Wi-Fi' | 'Tailscale';
+  url: string;
+  ok: boolean;
+  /** How the desktop saw this phone, which is the only honest path signal. */
+  peer?: string;
+  detail: string;
 }
 
 export interface ClientOptions {
@@ -125,6 +136,99 @@ export class DesktopClient {
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Try every address in turn and say what each one did.
+   *
+   * "Offline" is one word for a dozen different problems — the wrong address,
+   * a firewall, Tailscale switched off on the phone, a desktop that isn't
+   * serving, a platform refusing the request before it left the handset. Each
+   * has a different fix and the app was reporting all of them identically.
+   *
+   * This does not go through `Reachability`: the point is to report on EVERY
+   * endpoint rather than stop at the first that answers.
+   */
+  async diagnose(): Promise<EndpointReport[]> {
+    const { lanUrl, tunnelUrl } = this.reach.current();
+    const targets: Array<{ label: EndpointReport['label']; url?: string }> = [
+      { label: 'Wi-Fi', url: lanUrl },
+      { label: 'Tailscale', url: tunnelUrl },
+    ];
+
+    const reports: EndpointReport[] = [];
+    for (const target of targets) {
+      if (!target.url) {
+        reports.push({
+          label: target.label,
+          url: '',
+          ok: false,
+          detail: 'No address for this path. Pair again to pick one up.',
+        });
+        continue;
+      }
+
+      const verdict = checkHost(target.url);
+      if (!verdict.allowed) {
+        reports.push({
+          label: target.label,
+          url: target.url,
+          ok: false,
+          detail: verdict.reason ?? 'Refused as an address to talk to.',
+        });
+        continue;
+      }
+
+      reports.push(await this.probeOne(target.label, target.url));
+    }
+    return reports;
+  }
+
+  private async probeOne(
+    label: EndpointReport['label'],
+    url: string,
+  ): Promise<EndpointReport> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    try {
+      const query = `?token=${encodeURIComponent(this.pairing.token)}`;
+      const response = await this.fetchImpl(`${url}/health${query}`, {
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        return {
+          label,
+          url,
+          ok: false,
+          detail: `Answered, but with ${response.status}.`,
+        };
+      }
+      const health = (await response.json()) as { peer?: string };
+      return {
+        label,
+        url,
+        ok: true,
+        peer: health.peer,
+        detail: health.peer
+          ? `Answered. It saw this phone as ${health.peer}.`
+          : 'Answered.',
+      };
+    } catch (err) {
+      const message = (err as Error).message || String(err);
+      return {
+        label,
+        url,
+        ok: false,
+        // Android blocks plain HTTP unless the manifest allows it, and the
+        // error for that is indistinguishable from a dead host without this
+        // note. It cost a whole evening once.
+        detail: /abort/i.test(message)
+          ? 'No answer within four seconds.'
+          : `Could not connect: ${message}`,
+      };
     } finally {
       clearTimeout(timer);
     }

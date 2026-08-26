@@ -97,3 +97,28 @@ describe('the immersive plugin', () => {
     assert.ok(source.includes('onWindowFocusChanged'));
   });
 });
+
+
+describe('reaching the desktop at all', () => {
+  test('the cleartext plugin is registered', () => {
+    const config = JSON.parse(read('../app.json'));
+    assert.ok(
+      config.expo.plugins.includes('./plugins/with-cleartext.cjs'),
+      'without this a release build cannot make one plain-HTTP request',
+    );
+  });
+
+  test('it fails loudly rather than shipping a mute app', () => {
+    assert.ok(read('../plugins/with-cleartext.cjs').includes('throw new Error'));
+  });
+
+  test('the built manifest permits cleartext, when it has been built', () => {
+    // Android 9 made cleartext default to off. Expo puts the permission in
+    // the DEBUG manifest only, so the release build blocked every request
+    // before it left the handset — which reads as "Offline" while sitting
+    // next to the PC on the same Wi-Fi.
+    const manifest = '../android/app/src/main/AndroidManifest.xml';
+    if (!existsSync(new URL(manifest, import.meta.url))) return;
+    assert.match(read(manifest), /android:usesCleartextTraffic="true"/);
+  });
+});

@@ -47,6 +47,7 @@ SCREENS = {
     "pairing progress": "Read a code",
     "continuous scanning": "Auto scan",
     "camera controls": "Torch off",
+    "connection diagnostics": "Nothing answered",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -130,4 +131,32 @@ def test_the_app_does_not_reach_for_a_global_that_is_not_there():
     """
     assert not _present(_bundle(), "randomUUID"), (
         "crypto.randomUUID is back in the bundle; it does not exist on a phone"
+    )
+
+
+def test_the_release_build_is_allowed_to_use_plain_http():
+    """The bug that made the app say Offline while sitting next to the PC.
+
+    Android 9 made `cleartextTrafficPermitted` default to false. Expo's
+    template puts `usesCleartextTraffic` in the **debug** manifest only, so a
+    release build blocks every plain-HTTP request before it leaves the handset.
+
+    Nothing about that looked broken. Pairing worked, because pairing only
+    parses a URL and writes it down. The collection opened, because it reads
+    the local mirror. Every sync failed the instant it started.
+
+    This app talks plain HTTP on purpose — a certificate would mean publishing
+    the machine's name to the public Certificate Transparency log — so the
+    permission has to be in the SHIPPED manifest, which is what this reads.
+    Android compiles the manifest to binary XML and keeps attribute names in a
+    UTF-16 string pool, so the needle is encoded rather than written out.
+    """
+    if not APK.exists():
+        pytest.skip("no release APK built")
+    with zipfile.ZipFile(APK) as archive:
+        manifest = archive.read("AndroidManifest.xml")
+    needle = "usesCleartextTraffic".encode("utf-16-le")
+    assert needle in manifest, (
+        "the shipped manifest does not permit cleartext HTTP, so the app "
+        "cannot reach the desktop at all"
     )

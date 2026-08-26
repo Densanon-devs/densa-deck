@@ -13,6 +13,7 @@ import {
 } from './camera-settings.ts';
 import type { CameraSettings } from './camera-settings.ts';
 import { DesktopClient } from './client.ts';
+import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
   CardQuery,
@@ -191,6 +192,16 @@ export class AppState {
    */
   get scanClient(): DesktopClient {
     return this.client;
+  }
+
+  /**
+   * Why it says Offline.
+   *
+   * One word was standing in for a dozen different problems, each with a
+   * different fix. This reports what every address actually did.
+   */
+  async diagnose(): Promise<EndpointReport[]> {
+    return this.client.diagnose();
   }
 
   // ------------------------------------------- things only the desktop knows

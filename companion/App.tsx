@@ -36,6 +36,7 @@ import { uuid } from './src/lib/uuid.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
+import { ConnectionScreen } from './src/screens/Connection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
 import { PairScreen } from './src/screens/Pair.tsx';
 import { ScanScreen } from './src/screens/Scan.tsx';
@@ -86,6 +87,7 @@ function Shell() {
   const [openDeck, setOpenDeck] = useState<string | null>(null);
   const [banner, setBanner] = useState('');
   const [fatal, setFatal] = useState<Crash | null>(null);
+  const [showConnection, setShowConnection] = useState(false);
 
   useEffect(
     () => onCrash((crash) => crash.fatal && setFatal(crash)),
@@ -173,13 +175,24 @@ function Shell() {
     <View style={[styles.app, { paddingTop: frame.paddingTop, paddingLeft: frame.paddingLeft, paddingRight: frame.paddingRight }]}>
       <StatusBar hidden />
       {banner ? (
-        <View style={styles.banner}>
+        <Pressable
+          style={styles.banner}
+          onPress={() => setShowConnection(true)}
+        >
           <Text style={styles.bannerText}>{banner}</Text>
-        </View>
+          <Text style={styles.bannerHint}>Tap to see why</Text>
+        </Pressable>
       ) : null}
 
       <ErrorBoundary where={`the ${tab} screen`}>
       <View style={styles.body}>
+        {phase.kind === 'ready' && showConnection ? (
+          <ConnectionScreen
+            state={phase.state}
+            onClose={() => setShowConnection(false)}
+          />
+        ) : null}
+
         {phase.kind === 'starting' ? (
           <View style={styles.centre}>
             <Text style={styles.muted}>Opening your collection…</Text>
@@ -209,11 +222,11 @@ function Shell() {
           />
         ) : null}
 
-        {phase.kind === 'ready' && tab === 'collection' ? (
+        {phase.kind === 'ready' && !showConnection && tab === 'collection' ? (
           <CollectionScreen state={phase.state} />
         ) : null}
 
-        {phase.kind === 'ready' && tab === 'decks' ? (
+        {phase.kind === 'ready' && !showConnection && tab === 'decks' ? (
           openDeck ? (
             <DeckScreen
               state={phase.state}
@@ -226,11 +239,11 @@ function Shell() {
           )
         ) : null}
 
-        {phase.kind === 'ready' && tab === 'wishlist' ? (
+        {phase.kind === 'ready' && !showConnection && tab === 'wishlist' ? (
           <WishlistScreen state={phase.state} decks={phase.decks} />
         ) : null}
 
-        {phase.kind === 'ready' && tab === 'scan' ? (
+        {phase.kind === 'ready' && !showConnection && tab === 'scan' ? (
           <ScanScreen
             state={phase.state}
             collectionUid={DEFAULT_COLLECTION_UID}
@@ -269,6 +282,7 @@ const styles = StyleSheet.create({
   muted: { color: '#8a8f9c' },
   banner: { backgroundColor: '#232837', padding: 10 },
   bannerText: { color: '#ecc94b', textAlign: 'center', fontSize: 13 },
+  bannerHint: { color: '#8a8f9c', textAlign: 'center', fontSize: 11, marginTop: 2 },
   tabs: {
     flexDirection: 'row',
     borderTopWidth: 1,
