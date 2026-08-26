@@ -7,6 +7,11 @@
  * on it, not as logic.
  */
 
+import {
+  loadCameraSettings,
+  saveCameraSettings,
+} from './camera-settings.ts';
+import type { CameraSettings } from './camera-settings.ts';
 import { DesktopClient } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
@@ -89,6 +94,21 @@ export class AppState {
     // leaving the phone quietly out of date.
     if (outcome.more) return this.sync();
     return this.snapshot;
+  }
+
+  /**
+   * The camera levers, kept between visits.
+   *
+   * Screens do not reach into the store; finding a zoom that focuses on your
+   * cards and losing it every time the tab changes is worse than not having
+   * the control at all.
+   */
+  async cameraSettings(): Promise<CameraSettings> {
+    return loadCameraSettings(this.store);
+  }
+
+  async rememberCameraSettings(settings: CameraSettings): Promise<void> {
+    await saveCameraSettings(this.store, settings);
   }
 
   async refreshPending(): Promise<void> {

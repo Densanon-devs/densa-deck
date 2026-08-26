@@ -45,6 +45,8 @@ SCREENS = {
     "crash reporting": "Something broke",
     "build stamp": "Densa Deck companion",
     "pairing progress": "Read a code",
+    "continuous scanning": "Auto scan",
+    "camera controls": "Torch off",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
