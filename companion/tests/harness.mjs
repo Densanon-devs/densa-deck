@@ -168,6 +168,19 @@ export class MemoryDatabase {
     if (/FROM stacks/i.test(text) && /SELECT \*/i.test(text)) {
       return this._selectStacks(text, params);
     }
+    // Collections are filters: a stack can be in several lists at once, so
+    // the fake engine has to answer the membership queries too or every test
+    // about lists asserts against a store that cannot store them.
+    if (/FROM stack_collections/i.test(text)) {
+      const rows = this._table('stack_collections');
+      if (/WHERE stack_key = \?/.test(text)) {
+        return rows.filter((r) => r.stack_key === params[0]);
+      }
+      if (/WHERE collection_uid = \?/.test(text)) {
+        return rows.filter((r) => r.collection_uid === params[0]);
+      }
+      return [...rows];
+    }
     if (/FROM collections c/i.test(text)) return this._selectCollections();
     if (/FROM sync_events/i.test(text)) return this._selectEvents(text, params);
     if (/FROM decks/i.test(text)) {
@@ -181,7 +194,20 @@ export class MemoryDatabase {
   _selectStacks(text, params) {
     let rows = this._table('stacks').filter((r) => r.quantity > 0);
     let i = 0;
-    if (/collection_uid = \?/.test(text)) {
+    if (/stack_collections WHERE collection_uid = \?/.test(text)) {
+      // The real query is "filed here OR a member here". Both parameters are
+      // the same uid.
+      const uid = params[i];
+      i += 2;
+      const members = new Set(
+        this._table('stack_collections')
+          .filter((r) => r.collection_uid === uid)
+          .map((r) => r.stack_key),
+      );
+      rows = rows.filter(
+        (r) => r.collection_uid === uid || members.has(r.stack_key),
+      );
+    } else if (/collection_uid = \?/.test(text)) {
       const uid = params[i++];
       rows = rows.filter((r) => r.collection_uid === uid);
     }
@@ -227,6 +253,10 @@ export class MemoryDatabase {
       return { n: rows.reduce((sum, r) => sum + r.quantity, 0) };
     }
     if (/SELECT quantity FROM stacks/i.test(text)) {
+      return this._table('stacks').find((r) => r.stack_key === params[0]);
+    }
+    if (/SELECT collection_uid FROM stacks WHERE stack_key = \?/i.test(text)) {
+      // Where a card is FILED, as distinct from which lists it belongs to.
       return this._table('stacks').find((r) => r.stack_key === params[0]);
     }
     if (/SELECT value FROM meta/i.test(text)) {

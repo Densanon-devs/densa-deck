@@ -39,7 +39,7 @@ import {
   scryfallPageUrl,
 } from '../lib/images.ts';
 import type { CardDetail, CardFace } from '../lib/protocol.ts';
-import type { StackRow } from '../lib/store.ts';
+import type { CollectionRow, StackRow } from '../lib/store.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -58,6 +58,32 @@ export function CardScreen({ state, stack, onClose }: Props) {
   const [problem, setProblem] = useState('');
   const [artFailed, setArtFailed] = useState('');
   const [busy, setBusy] = useState(true);
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
+  const [lists, setLists] = useState<string[]>([]);
+
+  const loadLists = useCallback(async () => {
+    setCollections(await state.collections());
+    setLists(await state.listsFor(stack.stack_key));
+  }, [state, stack.stack_key]);
+
+  useEffect(() => {
+    void loadLists().catch(reporting('the lists', setProblem));
+  }, [loadLists]);
+
+  /**
+   * Put this card in a list, or take it out.
+   *
+   * Ticking one never unticks another — collections are filters, so a card
+   * can be in a set you are completing AND a deck AND last weekend's
+   * seventy-five. Unticking never removes the card.
+   */
+  const toggleList = useCallback(
+    async (uid: string, member: boolean) => {
+      await state.setListMembership(stack, uid, member);
+      await loadLists();
+    },
+    [state, stack, loadLists],
+  );
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -197,6 +223,35 @@ export function CardScreen({ state, stack, onClose }: Props) {
           ))
         : null}
 
+      {collections.length ? (
+        <View style={styles.panel}>
+          <Text style={styles.faceName}>In these lists</Text>
+          <Text style={styles.muted}>
+            A card can be in as many as you like. Adding it to one never takes
+            it out of another, and removing it never removes the card.
+          </Text>
+          {collections.map((collection) => {
+            const inIt = lists.includes(collection.collection_uid);
+            return (
+              <Pressable
+                key={collection.collection_uid}
+                style={[styles.listRow, inIt && styles.listRowOn]}
+                onPress={() => {
+                  void toggleList(collection.collection_uid, !inIt).catch(
+                    reporting('changing the lists', setProblem),
+                  );
+                }}
+              >
+                <Text style={[styles.listTick, inIt && styles.listTickOn]}>
+                  {inIt ? '✓' : '•'}
+                </Text>
+                <Text style={styles.listName}>{collection.name}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       {page ? (
@@ -254,6 +309,20 @@ const styles = StyleSheet.create({
   stat: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19 },
+  listRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  listRowOn: { borderColor: '#38a169' },
+  listTick: { color: '#8a8f9c', fontSize: 15, width: 16 },
+  listTickOn: { color: '#38a169', fontWeight: '700' },
+  listName: { color: '#e4e6eb', fontSize: 15 },
   link: {
     borderColor: '#2d3142',
     borderWidth: 1,

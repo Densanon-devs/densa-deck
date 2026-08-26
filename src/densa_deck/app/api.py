@@ -3412,6 +3412,7 @@ class AppApi:
         from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
         from densa_deck.sync.log import (
             KIND_COLLECTION_UPSERT,
+            KIND_MEMBERSHIP,
             KIND_STACK_SET,
             SyncEvent,
         )
@@ -3469,6 +3470,32 @@ class AppApi:
                     "quantity": int(item.quantity),
                 },
             ).to_dict())
+
+        # Memberships last: a membership naming a stack the far side has not
+        # created yet is ignored rather than invented, so the stacks have to
+        # be in the stream before them.
+        for item in items:
+            if item.quantity <= 0:
+                continue
+            for member in store.collections_for_item(item.item_id):
+                uid = member.get("collection_uid") or ""
+                if not uid:
+                    continue
+                events.append(SyncEvent(
+                    event_uid=f"baseline-{head}-member-{item.item_id}-{uid}",
+                    device=device,
+                    kind=KIND_MEMBERSHIP,
+                    payload={
+                        "printing_id": item.printing_id,
+                        "card_name": item.card_name,
+                        "finish": item.finish,
+                        "condition": item.condition,
+                        "language": item.language,
+                        "location": item.location,
+                        "collection_uid": uid,
+                        "member": True,
+                    },
+                ).to_dict())
 
         return events, head
 

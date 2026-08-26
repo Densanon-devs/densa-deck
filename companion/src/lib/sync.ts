@@ -14,6 +14,7 @@
  */
 
 import { DesktopClient, Unpaired, Unreachable } from './client.ts';
+import { stackKey } from './protocol.ts';
 import type {
   HelloReply,
   PullReply,
@@ -253,6 +254,20 @@ export class SyncEngine {
           notes: String(event.payload.notes ?? ''),
         });
         return true;
+      case 'membership': {
+        // Which lists a card is in. Addressed by natural key on both sides:
+        // local row ids cannot travel, because two devices scanning the same
+        // card offline each mint their own.
+        const payload = event.payload as unknown as StackDelta & {
+          member?: boolean;
+        };
+        const key = stackKey(payload);
+        const uid = String(event.payload.collection_uid ?? '');
+        if (!uid) return false;
+        if (event.payload.member) await this.store.addMembership(key, uid);
+        else await this.store.removeMembership(key, uid);
+        return true;
+      }
       case 'collection-delete':
         await this.store.deleteCollection(
           String(event.payload.collection_uid ?? ''),
@@ -264,6 +279,36 @@ export class SyncEngine {
         // this one, and dropping it would lose it permanently.
         return false;
     }
+  }
+
+  /**
+   * Note a list change for the desktop.
+   *
+   * Carries the card's natural key, never a local row id: this phone's
+   * numbering means nothing on the other machine.
+   */
+  async recordMembership(
+    stack: {
+      printing_id: string;
+      card_name: string;
+      finish: string;
+      condition: string;
+      language: string;
+      location: string;
+    },
+    collectionUid: string,
+    member: boolean,
+  ): Promise<void> {
+    await this.log('membership', {
+      printing_id: stack.printing_id,
+      card_name: stack.card_name,
+      finish: stack.finish,
+      condition: stack.condition,
+      language: stack.language,
+      location: stack.location,
+      collection_uid: collectionUid,
+      member,
+    });
   }
 
   async pending(): Promise<number> {

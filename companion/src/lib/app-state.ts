@@ -262,6 +262,37 @@ export class AppState {
     });
   }
 
+  /** Which lists a stack is in, from the phone's own mirror. */
+  async listsFor(stackKey: string): Promise<string[]> {
+    return this.store.membershipsFor(stackKey);
+  }
+
+  /**
+   * Put a card in a list, or take it out of one.
+   *
+   * Applied locally first so it is visible with no signal, and logged for the
+   * desktop. Adding never removes from another list; removing never removes
+   * the card.
+   */
+  async setListMembership(
+    stack: {
+      stack_key: string;
+      printing_id: string;
+      card_name: string;
+      finish: string;
+      condition: string;
+      language: string;
+      location: string;
+    },
+    collectionUid: string,
+    member: boolean,
+  ): Promise<void> {
+    if (member) await this.store.addMembership(stack.stack_key, collectionUid);
+    else await this.store.removeMembership(stack.stack_key, collectionUid);
+    await this.engine.recordMembership(stack, collectionUid, member);
+    await this.refreshPending();
+  }
+
   async overlaps(): Promise<OverlapsReply> {
     return this.client.call<OverlapsReply>('overlaps', {});
   }

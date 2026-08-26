@@ -59,6 +59,18 @@ export const SCHEMA: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_stacks_name ON stacks(card_name)`,
   // The phone's own log. Events made here wait in it until a desktop is
   // reachable, which may be days.
+  // Collections are FILTERS, not boxes. `stacks.collection_uid` says where a
+  // card is filed — one place, because a physical card is in one physical box
+  // — which is a different question from which lists it belongs to. The same
+  // card can be in a set you are completing, a deck, and last weekend's
+  // seventy-five, all at once and without moving.
+  `CREATE TABLE IF NOT EXISTS stack_collections (
+     stack_key TEXT NOT NULL,
+     collection_uid TEXT NOT NULL,
+     PRIMARY KEY (stack_key, collection_uid)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_sc_collection
+     ON stack_collections(collection_uid)`,
   `CREATE TABLE IF NOT EXISTS sync_events (
      event_uid TEXT PRIMARY KEY,
      device TEXT NOT NULL,
@@ -253,8 +265,15 @@ export class LocalStore {
     const where: string[] = ['quantity > 0'];
     const params: unknown[] = [];
     if (collectionUid) {
-      where.push('collection_uid = ?');
-      params.push(collectionUid);
+      // Membership OR filing. A card belongs to a list either because it was
+      // put there or because that is where it lives, and a filter that only
+      // knew about one of those would hide cards from the collection they
+      // were scanned into.
+      where.push(
+        `(collection_uid = ? OR stack_key IN (
+            SELECT stack_key FROM stack_collections WHERE collection_uid = ?))`,
+      );
+      params.push(collectionUid, collectionUid);
     }
     if (search) {
       where.push('card_name LIKE ?');
@@ -265,6 +284,44 @@ export class LocalStore {
        ORDER BY card_name LIMIT 500`,
       params,
     );
+  }
+
+  // -------------------------------------------------- membership (filters)
+
+  /** Put a stack in a list without taking it out of any other. */
+  async addMembership(stackKey: string, collectionUid: string): Promise<void> {
+    if (!stackKey || !collectionUid) return;
+    await this.db.run(
+      'INSERT OR IGNORE INTO stack_collections (stack_key, collection_uid) VALUES (?, ?)',
+      [stackKey, collectionUid],
+    );
+  }
+
+  /**
+   * Take a stack out of one list.
+   *
+   * The card itself is untouched — a filter cannot destroy what it filters.
+   */
+  async removeMembership(stackKey: string, collectionUid: string): Promise<void> {
+    await this.db.run(
+      'DELETE FROM stack_collections WHERE stack_key = ? AND collection_uid = ?',
+      [stackKey, collectionUid],
+    );
+  }
+
+  /** Every list a stack appears in, including where it is filed. */
+  async membershipsFor(stackKey: string): Promise<string[]> {
+    const rows = await this.db.all<{ collection_uid: string }>(
+      'SELECT collection_uid FROM stack_collections WHERE stack_key = ?',
+      [stackKey],
+    );
+    const stack = await this.db.get<{ collection_uid: string }>(
+      'SELECT collection_uid FROM stacks WHERE stack_key = ?',
+      [stackKey],
+    );
+    const uids = new Set(rows.map((r) => r.collection_uid));
+    if (stack?.collection_uid) uids.add(stack.collection_uid);
+    return [...uids];
   }
 
   // ---------------------------------------------------------- collections
