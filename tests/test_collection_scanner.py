@@ -663,3 +663,61 @@ class TestTwoPartCards:
         """The resolution is exact, so it must not have widened anything."""
         result = identify_card("Definitely Not A Real Card At All", db)
         assert not result.auto_addable
+
+
+class TestTheNameOnTheCardIsUsed:
+    """Both footer checks were blind to the card's own name.
+
+    `_candidate_names` is tuned against rules text and routinely discards the
+    real name — on a photo of Rulik Mons it returned only "Legendary Creature
+    - Goblin". Both the conflict veto and the corroboration check read from
+    it, so both were looking at a list the name was not in.
+
+    That cost accuracy in both directions at once, which is why it showed up
+    as "scanning wrong every time": a correct read could not corroborate, and
+    a misread footer could not be contradicted.
+    """
+
+    @staticmethod
+    def _two_cards(db):
+        # Real neighbours: Dominaria United #217 and #211. One misread digit
+        # is all that separates them.
+        db.upsert_printings([
+            printing_row_from_scryfall(
+                _raw("dmu-217", "Rulik Mons, Warren Chief", "dmu", "217",
+                     oracle="o-rulik"), "t"),
+            printing_row_from_scryfall(
+                _raw("dmu-211", "Radha, Coalition Warlord", "dmu", "211",
+                     oracle="o-radha"), "t"),
+        ])
+
+    def test_a_correct_read_auto_adds(self, db):
+        """It came out ambiguous, so every card needed a tap."""
+        self._two_cards(db)
+        r = identify_card(
+            "Rulik Mons, Warren Chief\nLegendary Creature - Goblin\n"
+            "217/281 U\nDMU • EN", db)
+        assert r.confidence == CONFIDENCE_EXACT
+        assert r.auto_addable
+        assert r.best["collector_number"] == "217"
+
+    def test_a_misread_digit_is_vetoed_by_the_name(self, db):
+        """The card says Rulik Mons; the key says Radha. Ask, never guess."""
+        self._two_cards(db)
+        r = identify_card(
+            "Rulik Mons, Warren Chief\nLegendary Creature - Goblin\n"
+            "211/281 U\nDMU • EN", db)
+        assert not r.auto_addable
+        assert r.confidence == CONFIDENCE_AMBIGUOUS
+
+    def test_no_readable_name_still_refuses_to_file(self, db):
+        self._two_cards(db)
+        r = identify_card("Legendary Creature - Goblin\nMenace\n"
+                          "211/281 U\nDMU • EN", db)
+        assert not r.auto_addable
+
+    def test_the_type_line_is_not_mistaken_for_a_name(self, db):
+        """Widening what counts as a name must not widen what can be filed."""
+        self._two_cards(db)
+        r = identify_card("Legendary Creature - Goblin\n217/281 U\nDMU • EN", db)
+        assert not r.auto_addable

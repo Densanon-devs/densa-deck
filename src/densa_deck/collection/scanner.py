@@ -515,6 +515,31 @@ def _set_code_variants(code: str) -> list[str]:
     return variants
 
 
+def _names_to_weigh(text: str, read_name: str, name_hint: str) -> list[str]:
+    """Everything on the card that might be its name.
+
+    A Magic card prints its name on the first line, and `_candidate_names`
+    exists to avoid mistaking rules text for it — a filter tuned for the
+    FUZZY path, where a bad candidate becomes a wrong card. The footer path
+    needs the opposite: it is checking a name it already has against a
+    printing it already found, so a spurious extra line can only ever make it
+    ask rather than guess.
+
+    Being blind here cost both directions at once. A correct read of Rulik
+    Mons came out ambiguous because the name was never in the list to
+    corroborate the footer, and a misread footer pointing at a different card
+    was not vetoed because the name was never in the list to contradict it.
+    """
+    if name_hint:
+        return [read_name]
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    seen: list[str] = []
+    for option in [read_name, *_candidate_names(text), *lines]:
+        if option and option not in seen:
+            seen.append(option)
+    return seen
+
+
 def _conflicting_name(names, expected: str, card_db) -> str:
     """A name we read that is a real card, and isn't the expected one.
 
@@ -558,9 +583,17 @@ def identify_card(text: str, card_db, *, name_hint: str = "") -> ScanResult:
         # and treating unrecognisable junk as disagreement meant noise could
         # veto a perfectly good read. Junk matches nothing; a real card name
         # matches something, and that is the case worth stopping for.
-        conflict = _conflicting_name(
-            [identity.name] if name_hint else _candidate_names(text),
-            hit["name"], card_db)
+        # Every line, not only the ones the name heuristic kept.
+        #
+        # `_candidate_names` is tuned against rules text and routinely
+        # discards the real name: on a photo of Rulik Mons it returned only
+        # "Legendary Creature - Goblin". Both checks below depend on having
+        # seen the name, so both were blind — the veto could not fire on a
+        # misread footer, and the corroboration could not pass on a correct
+        # one. A correct read came out ambiguous; a wrong one was not caught
+        # by the card contradicting it.
+        read_names = _names_to_weigh(text, identity.name, name_hint)
+        conflict = _conflicting_name(read_names, hit["name"], card_db)
         if conflict:
             result.candidates = [ScanCandidate(
                 hit, CONFIDENCE_AMBIGUOUS,
@@ -583,9 +616,8 @@ def identify_card(text: str, card_db, *, name_hint: str = "") -> ScanResult:
         # auto-add. If nothing on the card confirms the key, the printing is
         # still offered first — one tap, not retyping — but a human looks at
         # it. Nothing is lost except the guess.
-        names = [identity.name] if name_hint else _candidate_names(text)
         corroborated = any(
-            _names_roughly_match(n, hit["name"]) for n in names if n
+            _names_roughly_match(n, hit["name"]) for n in read_names if n
         )
         if not corroborated:
             result.candidates = [ScanCandidate(
