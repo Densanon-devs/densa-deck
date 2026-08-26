@@ -17,6 +17,7 @@ import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
   CardDetail,
+  OverlapsReply,
   CardQuery,
   CardSearchReply,
   CollectionPage,
@@ -238,6 +239,17 @@ export class AppState {
       printing_id: printingId,
       card_name: cardName,
     });
+  }
+
+  /**
+   * Cards in more than one list.
+   *
+   * Needs the desktop: the counting is over every relationship between
+   * collections, and the phone mirrors what you OWN rather than how the
+   * lists overlap.
+   */
+  async overlaps(): Promise<OverlapsReply> {
+    return this.client.call<OverlapsReply>('overlaps', {});
   }
 
   get scanClient(): DesktopClient {

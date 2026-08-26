@@ -1206,6 +1206,55 @@ class AppApi:
         return _card_to_builder_dict(card, include_full=True)
 
     @_safe
+    def collection_add_to(self, item_id: int, collection_uid: str) -> dict:
+        """Put a stack in a collection without taking it out of any other.
+
+        Collections are filters, not boxes: the same card can be in a set you
+        are completing, a deck, and last weekend's seventy-five at once.
+        """
+        store = self._get_collection_store()
+        collection = store.collection_by_uid(collection_uid)
+        if not collection:
+            return {"ok": False, "error": "No such collection."}
+        changed = store.add_to_collection(int(item_id), collection["collection_id"])
+        return {"added": changed, "collections": store.collections_for_item(int(item_id))}
+
+    @_safe
+    def collection_remove_from(self, item_id: int, collection_uid: str) -> dict:
+        """Take a stack out of one list. The card itself is untouched."""
+        store = self._get_collection_store()
+        collection = store.collection_by_uid(collection_uid)
+        if not collection:
+            return {"ok": False, "error": "No such collection."}
+        changed = store.remove_from_collection(int(item_id), collection["collection_id"])
+        return {"removed": changed, "collections": store.collections_for_item(int(item_id))}
+
+    @_safe
+    def collection_move(self, item_id: int, collection_uid: str) -> dict:
+        """For when the card really has gone into another box."""
+        store = self._get_collection_store()
+        collection = store.collection_by_uid(collection_uid)
+        if not collection:
+            return {"ok": False, "error": "No such collection."}
+        store.move_to_collection(int(item_id), collection["collection_id"])
+        return {"collections": store.collections_for_item(int(item_id))}
+
+    @_safe
+    def get_overlaps(self, min_collections: int = 2) -> dict:
+        """Cards that appear in more than one list.
+
+        Reports two situations that look identical in a plain collection view:
+        a card doing two jobs quite legitimately, and a card two decks both
+        expect when you own one copy. The second is `overcommitted`, and it is
+        the one you would otherwise discover at the table.
+        """
+        rows = self._get_collection_store().overlaps(int(min_collections))
+        return {
+            "cards": rows,
+            "overcommitted": sum(1 for r in rows if r["overcommitted"]),
+        }
+
+    @_safe
     def get_card_detail(self, printing_id: str = "", card_name: str = "") -> dict:
         """Everything needed to show a card: what it does, and what it looks like.
 

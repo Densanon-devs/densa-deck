@@ -92,6 +92,23 @@ _SCHEMA = [
     """CREATE UNIQUE INDEX IF NOT EXISTS idx_ci_stack_v2 ON collection_items(
         printing_id, finish, condition, language, location, collection_id
     )""",
+    # ---- collections as FILTERS, not boxes -------------------------------
+    # `collection_items.collection_id` says where a stack is FILED — one
+    # place, because a physical card is in one physical box. That is not the
+    # same question as which lists it belongs to: the same card can be part
+    # of a set you are completing, a deck you have built, and the seventy-five
+    # you took to a tournament, all at once and without moving.
+    #
+    # So membership is its own table and many-to-many. Filing stays a
+    # property of the stack; belonging is a relationship.
+    """CREATE TABLE IF NOT EXISTS collection_membership (
+        item_id INTEGER NOT NULL,
+        collection_id INTEGER NOT NULL,
+        added_at TEXT NOT NULL,
+        PRIMARY KEY (item_id, collection_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cm_collection ON collection_membership(collection_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cm_item ON collection_membership(item_id)",
     "CREATE INDEX IF NOT EXISTS idx_ci_oracle ON collection_items(oracle_id)",
     "CREATE INDEX IF NOT EXISTS idx_ci_collection ON collection_items(collection_id)",
     "CREATE INDEX IF NOT EXISTS idx_ci_name ON collection_items(card_name COLLATE NOCASE)",
@@ -256,7 +273,36 @@ class CollectionStore:
             for stmt in _SCHEMA:
                 conn.execute(stmt)
             self._ensure_default_collection(conn)
+            # After the schema, because it needs the membership table to
+            # exist. Backfills where every existing stack is already filed, so
+            # collections keep showing exactly what they showed before.
+            self._migrate_membership(conn)
             conn.commit()
+
+    def _migrate_membership(self, conn) -> None:
+        """Every stack belongs to the collection it is filed in.
+
+        Membership was added after the fact, so a database that predates it
+        has none — and a collection whose contents suddenly read as empty
+        would look like the cards had been lost. Backfilling from
+        `collection_id` means the first launch after upgrading shows exactly
+        what the last launch showed.
+
+        Runs only when the table is empty. Once a user has moved things
+        around, `collection_id` is no longer the whole story and re-running
+        this would quietly undo their edits.
+        """
+        already = conn.execute(
+            "SELECT COUNT(*) FROM collection_membership").fetchone()[0]
+        if already:
+            return
+        conn.execute(
+            """INSERT OR IGNORE INTO collection_membership
+                   (item_id, collection_id, added_at)
+               SELECT item_id, collection_id, ?
+                 FROM collection_items
+                WHERE collection_id IS NOT NULL""",
+            (_now(),))
 
     def _migrate_collections(self, conn) -> None:
         """Bring an existing collection.db up to the named-collections model.
@@ -354,6 +400,122 @@ class CollectionStore:
 
     # --------------------------------------------------------- mutation
 
+    # ------------------------------------------------- membership (filters)
+
+    def add_to_collection(self, item_id: int, collection_id: int) -> bool:
+        """Put a stack in a collection WITHOUT taking it out of any other.
+
+        This is the whole point of the filter model: a card can be part of a
+        set you are completing, a deck you have built, and the seventy-five
+        you took to a tournament, all at once. It never moved; three lists
+        just mention it.
+
+        Returns whether anything changed, so a caller can tell "added" from
+        "was already there" instead of reporting both as success.
+        """
+        with self._connect() as conn:
+            before = conn.total_changes
+            conn.execute(
+                "INSERT OR IGNORE INTO collection_membership "
+                "(item_id, collection_id, added_at) VALUES (?, ?, ?)",
+                (int(item_id), int(collection_id), _now()))
+            conn.commit()
+            return conn.total_changes > before
+
+    def remove_from_collection(self, item_id: int, collection_id: int) -> bool:
+        """Take a stack out of one list. The card itself is untouched.
+
+        Removing from a collection must never remove from the collection —
+        the master list is the physical cards, and a filter cannot destroy
+        what it filters.
+        """
+        with self._connect() as conn:
+            before = conn.total_changes
+            conn.execute(
+                "DELETE FROM collection_membership "
+                "WHERE item_id = ? AND collection_id = ?",
+                (int(item_id), int(collection_id)))
+            conn.commit()
+            return conn.total_changes > before
+
+    def move_to_collection(self, item_id: int, collection_id: int) -> None:
+        """The old behaviour, kept for when you really mean "it lives here now".
+
+        Replaces every membership rather than adding one. Used when a card
+        physically changes box, as opposed to appearing in another list.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM collection_membership WHERE item_id = ?",
+                         (int(item_id),))
+            conn.execute(
+                "INSERT OR IGNORE INTO collection_membership "
+                "(item_id, collection_id, added_at) VALUES (?, ?, ?)",
+                (int(item_id), int(collection_id), _now()))
+            # Filing follows the move: this is the one case where the card
+            # really has gone somewhere else.
+            conn.execute(
+                "UPDATE collection_items SET collection_id = ?, updated_at = ? "
+                "WHERE item_id = ?",
+                (int(collection_id), _now(), int(item_id)))
+            conn.commit()
+
+    def collections_for_item(self, item_id: int) -> list[dict]:
+        """Every list this stack appears in, default first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT c.collection_id, c.collection_uid, c.name, c.is_default
+                     FROM collection_membership m
+                     JOIN collections c ON c.collection_id = m.collection_id
+                    WHERE m.item_id = ?
+                    ORDER BY c.is_default DESC, c.name COLLATE NOCASE""",
+                (int(item_id),)).fetchall()
+        return [{"collection_id": r[0], "collection_uid": r[1], "name": r[2],
+                 "is_default": bool(r[3])} for r in rows]
+
+    def overlaps(self, min_collections: int = 2) -> list[dict]:
+        """Stacks that appear in more than one list.
+
+        Two quite different situations look the same in a plain collection
+        view and are worth separating here:
+
+          * **Deliberate.** A card is in "Ravnica set" and in a deck. Nothing
+            is wrong; you simply own it and it is doing two jobs.
+          * **Overcommitted.** Two decks each expect this card and you own
+            one copy. You will find out at the table.
+
+        `overcommitted` is the flag that distinguishes them: it is true when
+        more lists claim the stack than there are physical copies of it.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT i.item_id, i.printing_id, i.card_name, i.finish,
+                          i.condition, i.language, i.quantity,
+                          COUNT(m.collection_id) AS lists
+                     FROM collection_items i
+                     JOIN collection_membership m ON m.item_id = i.item_id
+                    WHERE i.quantity > 0
+                    GROUP BY i.item_id
+                   HAVING lists >= ?
+                    ORDER BY lists DESC, i.card_name COLLATE NOCASE""",
+                (int(min_collections),)).fetchall()
+
+            out = []
+            for r in rows:
+                names = conn.execute(
+                    """SELECT c.name FROM collection_membership m
+                         JOIN collections c ON c.collection_id = m.collection_id
+                        WHERE m.item_id = ?
+                        ORDER BY c.is_default DESC, c.name COLLATE NOCASE""",
+                    (r[0],)).fetchall()
+                out.append({
+                    "item_id": r[0], "printing_id": r[1], "card_name": r[2],
+                    "finish": r[3], "condition": r[4], "language": r[5],
+                    "quantity": r[6], "collection_count": r[7],
+                    "collections": [n[0] for n in names],
+                    "overcommitted": r[7] > r[6],
+                })
+        return out
+
     def stack_quantity(
         self,
         printing_id: str,
@@ -438,6 +600,11 @@ class CollectionStore:
                 new_qty = current + quantity
                 if new_qty <= 0:
                     conn.execute("DELETE FROM collection_items WHERE item_id = ?", (item_id,))
+                    # Memberships would otherwise dangle, and the overlap
+                    # view would keep reporting a card that is not here.
+                    conn.execute(
+                        "DELETE FROM collection_membership WHERE item_id = ?",
+                        (item_id,))
                 else:
                     conn.execute(
                         """UPDATE collection_items
@@ -469,6 +636,16 @@ class CollectionStore:
                 )
                 item_id = cur.lastrowid
                 new_qty = quantity
+
+            # A stack belongs to the collection it is filed into. Without
+            # this, a newly scanned card was in no list at all — so the
+            # collection it was scanned into would not show it, which reads
+            # as the scan having failed.
+            if new_qty > 0:
+                conn.execute(
+                    "INSERT OR IGNORE INTO collection_membership "
+                    "(item_id, collection_id, added_at) VALUES (?, ?, ?)",
+                    (item_id, collection, now))
 
             conn.execute(
                 """INSERT INTO collection_events

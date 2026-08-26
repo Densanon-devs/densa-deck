@@ -259,3 +259,21 @@ export interface CardDetail {
   scryfall_url?: string;
   unknown_card?: boolean;
 }
+
+/** A card that appears in more than one collection. */
+export interface OverlapCard {
+  item_id: number;
+  printing_id: string;
+  card_name: string;
+  finish: string;
+  quantity: number;
+  collection_count: number;
+  collections: string[];
+  /** More lists want it than you own copies of it. */
+  overcommitted: boolean;
+}
+
+export interface OverlapsReply {
+  cards: OverlapCard[];
+  overcommitted: number;
+}

@@ -515,6 +515,24 @@ class PhoneBridge:
         # phone loads that straight from Scryfall's CDN — so this carries only
         # rules text, and a phone that cannot reach the desktop loses the text
         # while keeping the picture.
+        # Collections behave as filters: adding to one never removes from
+        # another, and removing from one never removes the card.
+        if route == "collection/add-to":
+            return _unwrap(api.collection_add_to(
+                int(payload.get("item_id", 0) or 0),
+                payload.get("collection_uid", "")))
+        if route == "collection/remove-from":
+            return _unwrap(api.collection_remove_from(
+                int(payload.get("item_id", 0) or 0),
+                payload.get("collection_uid", "")))
+        if route == "collection/move":
+            return _unwrap(api.collection_move(
+                int(payload.get("item_id", 0) or 0),
+                payload.get("collection_uid", "")))
+        if route == "overlaps":
+            return _unwrap(api.get_overlaps(
+                int(payload.get("min_collections", 2) or 2)))
+
         if route == "cards/detail":
             return _unwrap(api.get_card_detail(
                 payload.get("printing_id", ""),

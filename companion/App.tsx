@@ -40,6 +40,7 @@ import { LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CardScreen } from './src/screens/Card.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
+import { OverlapsScreen } from './src/screens/Overlaps.tsx';
 import { ConnectionScreen } from './src/screens/Connection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
 import { PairScreen } from './src/screens/Pair.tsx';
@@ -50,7 +51,7 @@ import { WishlistScreen } from './src/screens/Wishlist.tsx';
 // taking the process down with it.
 installGlobalErrorTrap();
 
-type Tab = 'collection' | 'decks' | 'wishlist' | 'scan';
+type Tab = 'collection' | 'decks' | 'overlaps' | 'wishlist' | 'scan';
 
 type Phase =
   | { kind: 'starting' }
@@ -60,6 +61,7 @@ type Phase =
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'collection', label: 'Cards' },
   { id: 'decks', label: 'Decks' },
+  { id: 'overlaps', label: 'Shared' },
   { id: 'wishlist', label: 'Wishlist' },
   { id: 'scan', label: 'Scan' },
 ];
@@ -255,6 +257,10 @@ function Shell() {
           ) : (
             <DeckListScreen decks={phase.decks} onOpen={setOpenDeck} />
           )
+        ) : null}
+
+        {phase.kind === 'ready' && !showConnection && tab === 'overlaps' ? (
+          <OverlapsScreen state={phase.state} />
         ) : null}
 
         {phase.kind === 'ready' && !showConnection && tab === 'wishlist' ? (

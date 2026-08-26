@@ -54,6 +54,7 @@ SCREENS = {
     "undo a bad scan": "Wrong? Undo",
     "removing cards": "Remove it",
     "card detail": "Rulings and printings",
+    "overlaps tab": "In more than one list",
     "offline art": "Download all card art",
     "art diagnostics": "Card art",
 }
