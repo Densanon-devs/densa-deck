@@ -13,7 +13,6 @@
 import React, { useCallback, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -78,11 +77,13 @@ export function CollectionBar({
 
   return (
     <View style={styles.wrap}>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chips}
-      >
+      {/*
+        Wrapped, not scrolled sideways. A horizontal strip put every
+        collection past the third one off the edge of the screen with nothing
+        to say they were there — a list you cannot see is a list you cannot
+        pick from.
+      */}
+      <View style={styles.chips}>
         {entries.map((entry) => {
           const active = selected === entry.collection_uid;
           return (
@@ -110,7 +111,7 @@ export function CollectionBar({
             {adding ? 'Cancel' : '+ New collection'}
           </Text>
         </Pressable>
-      </ScrollView>
+      </View>
 
       {adding ? (
         <View style={styles.adder}>
@@ -146,7 +147,7 @@ export function CollectionBar({
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
-  chips: { gap: 8, paddingRight: 8 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     borderColor: '#2d3142',
     borderWidth: 1,

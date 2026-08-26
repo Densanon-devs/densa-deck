@@ -39,7 +39,9 @@ import type { AppState, Connection } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
 import {
   DEFAULT_CAMERA_SETTINGS,
+  ZOOM_DEADZONE,
   stepZoom,
+  zoomAt,
   zoomLabel,
 } from '../lib/camera-settings.ts';
 import type { CameraSettings } from '../lib/camera-settings.ts';
@@ -87,6 +89,9 @@ export function ScanScreen({ state }: Props) {
   // The interval's closure would otherwise read whatever `busy` was when the
   // effect ran, and fire a second capture on top of the one in flight.
   const busyRef = useRef(false);
+  // Measured rather than assumed: a tap only means a zoom level if the width
+  // it landed on is the real one.
+  const [trackWidth, setTrackWidth] = useState(0);
 
   const loadCollections = useCallback(async () => {
     setCollections(await state.collections());
@@ -254,6 +259,11 @@ export function ScanScreen({ state }: Props) {
         </View>
       ) : null}
 
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
       <View style={styles.header}>
         <Text style={styles.target}>Scanning into {targetName}</Text>
         <Pressable
@@ -330,9 +340,22 @@ export function ScanScreen({ state }: Props) {
           >
             <Text style={styles.stepText}>-</Text>
           </Pressable>
-          <View style={styles.track}>
+          <Pressable
+            style={styles.track}
+            onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+            onPress={(event) => {
+              if (trackWidth <= 0) return;
+              change({
+                zoom: zoomAt(event.nativeEvent.locationX / trackWidth),
+              });
+            }}
+          >
             <View style={[styles.fill, { width: `${settings.zoom * 100}%` }]} />
-          </View>
+            {/* Where the lens actually starts responding. */}
+            <View
+              style={[styles.deadzone, { width: `${ZOOM_DEADZONE * 100}%` }]}
+            />
+          </Pressable>
           <Pressable
             style={styles.step}
             onPress={() => change({ zoom: stepZoom(settings.zoom, 1) })}
@@ -381,16 +404,24 @@ export function ScanScreen({ state }: Props) {
           <Text style={styles.hint}>
             Zoom is the lens control. Android gives no way to ask for the
             telephoto by name, but zooming in makes the phone switch to it —
-            and that is the lens that can focus on a card held close. The card
-            does not need to fill the frame: a small sharp one beats a large
-            blurry one. Lock the focus once it looks right and it will stop
-            hunting between cards.
+            and that is the lens that can focus on a card held close.
+          </Text>
+          <Text style={styles.hint}>
+            The shaded part of the bar does nothing. Anything below it asks
+            for less than 1x, which the camera rounds back up to 1x, so the
+            picture cannot change there. + jumps straight over it and tapping
+            the bar snaps past it.
+          </Text>
+          <Text style={styles.hint}>
+            The card does not need to fill the frame: a small sharp one beats
+            a large blurry one. Lock the focus once it looks right and it will
+            stop hunting between cards.
           </Text>
         </View>
       ) : null}
 
       {result?.candidates?.length ? (
-        <ScrollView style={styles.picker}>
+        <View style={styles.picker}>
           {result.candidates.slice(0, 20).map((candidate, index) => (
             <Pressable
               key={`${candidate.printing_id}-${index}`}
@@ -410,14 +441,17 @@ export function ScanScreen({ state }: Props) {
           <Pressable style={styles.none} onPress={() => setResult(null)}>
             <Text style={styles.candidateMeta}>None of these</Text>
           </Pressable>
-        </ScrollView>
+        </View>
       ) : null}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#0f1117', padding: 14, gap: 10 },
+  screen: { flex: 1, backgroundColor: '#0f1117' },
+  scroll: { flex: 1 },
+  content: { padding: 14, gap: 10, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   target: { color: '#8a8f9c', fontSize: 13, flex: 1 },
   chip: {
@@ -484,12 +518,26 @@ const styles = StyleSheet.create({
   stepText: { color: '#e4e6eb', fontSize: 20, lineHeight: 24 },
   track: {
     flex: 1,
-    height: 6,
-    borderRadius: 3,
+    height: 22,
+    borderRadius: 4,
     backgroundColor: '#2d3142',
     overflow: 'hidden',
+    justifyContent: 'center',
   },
-  fill: { height: 6, backgroundColor: '#e53e3e' },
+  fill: {
+    position: 'absolute',
+    left: 0,
+    height: 22,
+    backgroundColor: '#e53e3e',
+  },
+  deadzone: {
+    position: 'absolute',
+    left: 0,
+    height: 22,
+    borderRightWidth: 1,
+    borderRightColor: '#8a8f9c',
+    backgroundColor: 'rgba(15,17,23,0.45)',
+  },
   toggle: {
     borderColor: '#2d3142',
     borderWidth: 1,
@@ -501,7 +549,7 @@ const styles = StyleSheet.create({
   toggleText: { color: '#e4e6eb', fontSize: 13 },
   hint: { color: '#8a8f9c', fontSize: 12, lineHeight: 18 },
   problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
-  picker: { maxHeight: 260 },
+  picker: { gap: 0 },
   candidate: {
     borderColor: '#2d3142',
     borderWidth: 1,
