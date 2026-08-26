@@ -1205,6 +1205,41 @@ class AppApi:
             return {"ok": False, "error": f"No card named '{name}'."}
         return _card_to_builder_dict(card, include_full=True)
 
+    def _log_membership(self, item_id: int, collection_uid: str,
+                        member: bool) -> None:
+        """Tell the other device which lists this card is in.
+
+        Best-effort: a membership that fails to log is a worse list on the
+        phone, not a lost card, and it must not be able to fail the edit the
+        user actually asked for.
+        """
+        try:
+            from densa_deck.sync.apply import membership_event
+            from densa_deck.sync.log import KIND_MEMBERSHIP
+
+            store = self._get_collection_store()
+            row = store.item_by_id(item_id)
+            if not row:
+                return
+            sync = self._get_sync()
+            sync.log.record(KIND_MEMBERSHIP, membership_event(
+                printing_id=row.get("printing_id", ""),
+                card_name=row.get("card_name", ""),
+                finish=row.get("finish", "nonfoil"),
+                condition=row.get("condition", "NM"),
+                language=row.get("language", "en"),
+                location=row.get("location", ""),
+                collection_uid=collection_uid,
+                member=member,
+            ))
+        except Exception:
+            pass
+
+    @_safe
+    def collections_for_item(self, item_id: int) -> list:
+        """Every list one stack appears in. Drives the desktop's Lists panel."""
+        return self._get_collection_store().collections_for_item(int(item_id))
+
     @_safe
     def collection_add_to(self, item_id: int, collection_uid: str) -> dict:
         """Put a stack in a collection without taking it out of any other.
@@ -1217,6 +1252,8 @@ class AppApi:
         if not collection:
             return {"ok": False, "error": "No such collection."}
         changed = store.add_to_collection(int(item_id), collection["collection_id"])
+        if changed:
+            self._log_membership(int(item_id), collection_uid, True)
         return {"added": changed, "collections": store.collections_for_item(int(item_id))}
 
     @_safe
@@ -1227,6 +1264,8 @@ class AppApi:
         if not collection:
             return {"ok": False, "error": "No such collection."}
         changed = store.remove_from_collection(int(item_id), collection["collection_id"])
+        if changed:
+            self._log_membership(int(item_id), collection_uid, False)
         return {"removed": changed, "collections": store.collections_for_item(int(item_id))}
 
     @_safe
@@ -1236,7 +1275,15 @@ class AppApi:
         collection = store.collection_by_uid(collection_uid)
         if not collection:
             return {"ok": False, "error": "No such collection."}
+        # A move is "leave everything, then join one". Sent as the individual
+        # joins and leaves rather than as a move, so a device that applies
+        # them in any order lands in the same place.
+        before = [c["collection_uid"] for c in store.collections_for_item(int(item_id))]
         store.move_to_collection(int(item_id), collection["collection_id"])
+        for uid in before:
+            if uid != collection_uid:
+                self._log_membership(int(item_id), uid, False)
+        self._log_membership(int(item_id), collection_uid, True)
         return {"collections": store.collections_for_item(int(item_id))}
 
     @_safe

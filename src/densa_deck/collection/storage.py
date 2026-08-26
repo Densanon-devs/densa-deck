@@ -400,6 +400,68 @@ class CollectionStore:
 
     # --------------------------------------------------------- mutation
 
+    def item_by_id(self, item_id: int) -> dict | None:
+        """One stack, by local row id.
+
+        Used when turning a local edit into a sync event: the event has to
+        carry the card's NATURAL key, and this is what supplies it.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT item_id, printing_id, oracle_id, card_name, finish,
+                          condition, language, location, quantity, collection_id
+                     FROM collection_items WHERE item_id = ?""",
+                (int(item_id),)).fetchone()
+        if not row:
+            return None
+        return {"item_id": row[0], "printing_id": row[1], "oracle_id": row[2],
+                "card_name": row[3], "finish": row[4], "condition": row[5],
+                "language": row[6], "location": row[7], "quantity": row[8],
+                "collection_id": row[9]}
+
+    def find_item_id(
+        self,
+        printing_id: str,
+        *,
+        finish: Finish | str = Finish.NONFOIL,
+        condition: Condition | str = Condition.NM,
+        language: str = "en",
+        location: str = "",
+        collection_id: int | None = None,
+    ) -> int | None:
+        """The local row id for a stack, found by its natural key.
+
+        Exists because local integer ids cannot travel between devices — two
+        phones scanning the same card offline each mint their own — so a sync
+        event names the card and this turns that back into a row here.
+
+        Returns None rather than raising: a membership for a stack that has
+        not arrived yet is a normal ordering, not an error.
+        """
+        finish = finish.value if isinstance(finish, Finish) else str(finish)
+        condition = (condition.value if isinstance(condition, Condition)
+                     else str(condition))
+        with self._connect() as conn:
+            if collection_id is None:
+                # Any collection: the stack is the physical card, and which
+                # list it is filed under is not part of finding it.
+                row = conn.execute(
+                    """SELECT item_id FROM collection_items
+                        WHERE printing_id = ? AND finish = ? AND condition = ?
+                          AND language = ? AND location = ?
+                        ORDER BY item_id LIMIT 1""",
+                    (printing_id, finish, condition, language, location),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT item_id FROM collection_items
+                        WHERE printing_id = ? AND finish = ? AND condition = ?
+                          AND language = ? AND location = ? AND collection_id = ?""",
+                    (printing_id, finish, condition, language, location,
+                     collection_id),
+                ).fetchone()
+        return int(row[0]) if row else None
+
     # ------------------------------------------------- membership (filters)
 
     def add_to_collection(self, item_id: int, collection_id: int) -> bool:

@@ -248,6 +248,20 @@ export class AppState {
    * collections, and the phone mirrors what you OWN rather than how the
    * lists overlap.
    */
+  /**
+   * Put a card on the wishlist by hand.
+   *
+   * Deliberately possible for a card you have never seen and do not own: the
+   * catalogue is every card in Magic, and "things I want" is a list about
+   * cards, not about the collection.
+   */
+  async wishlistAdd(cardName: string, quantity = 1): Promise<void> {
+    await this.client.call('wishlist/add', {
+      card_name: cardName,
+      quantity,
+    });
+  }
+
   async overlaps(): Promise<OverlapsReply> {
     return this.client.call<OverlapsReply>('overlaps', {});
   }

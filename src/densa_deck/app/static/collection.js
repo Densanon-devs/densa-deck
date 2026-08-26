@@ -273,6 +273,9 @@
             <div class="collection-set subtle">${setTxt}</div>
           </div>
           <div class="collection-value">${val}</div>
+          <button class="btn btn-outline btn-slim" data-act="lists"
+                  data-item="${it.item_id}"
+                  data-name="${escape(it.card_name)}">Lists</button>
           <button class="btn btn-outline btn-slim" data-act="card"
                   data-printing="${escape(it.printing_id || "")}"
                   data-name="${escape(it.card_name)}">View</button>
@@ -288,6 +291,10 @@
       if (act === "printings") { openPrintings(btn.dataset.name); return; }
       if (act === "card") {
         openCard(btn.dataset.printing, btn.dataset.name);
+        return;
+      }
+      if (act === "lists") {
+        openLists(Number(btn.dataset.item), btn.dataset.name);
         return;
       }
 
@@ -321,6 +328,69 @@
     if (id.length < 8 || !/^[0-9a-f][0-9a-f-]*$/.test(id)) return "";
     const ext = size === "png" ? "png" : "jpg";
     return `https://cards.scryfall.io/${size}/front/${id[0]}/${id[1]}/${id}.${ext}`;
+  }
+
+  /**
+   * Which lists a card belongs to.
+   *
+   * Collections are filters rather than boxes: ticking one here never
+   * unticks another, and unticking one never removes the card. The master
+   * collection is the physical cards and nothing on this panel can change it.
+   */
+  async function openLists(itemId, cardName) {
+    const modal = e("lists-modal");
+    const body = e("lists-modal-body");
+    if (!modal || !body) return;
+    e("lists-modal-title").textContent = cardName || "Lists";
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+    body.innerHTML = "<p class=\"panel-hint\">Loading…</p>";
+
+    let all, mine;
+    try {
+      all = await callApi("list_collections");
+      mine = await callApi("collections_for_item", itemId);
+    } catch (err) {
+      body.innerHTML = `<p class="panel-hint">Could not load: ${escape(err.message)}</p>`;
+      return;
+    }
+
+    const inThem = new Set((mine || []).map(c => c.collection_uid));
+    body.innerHTML = `
+      <p class="panel-hint">A card can be in as many lists as you like — a set
+        you are completing, a deck, last weekend's seventy-five. Ticking one
+        never unticks another, and unticking one never removes the card.</p>
+      ${(all || []).map(c => `
+        <label class="lists-row">
+          <input type="checkbox" data-uid="${escape(c.collection_uid)}"
+                 ${inThem.has(c.collection_uid) ? "checked" : ""}>
+          <span>${escape(c.name)}</span>
+        </label>`).join("")}`;
+
+    body.onchange = async (ev) => {
+      const box = ev.target.closest("input[type=checkbox]");
+      if (!box) return;
+      const uid = box.dataset.uid;
+      box.disabled = true;
+      try {
+        await callApi(box.checked ? "collection_add_to" : "collection_remove_from",
+                      itemId, uid);
+      } catch (err) {
+        // Put the tick back: the panel must not claim a change that failed.
+        box.checked = !box.checked;
+        toast("Could not update: " + err.message, "error");
+      } finally {
+        box.disabled = false;
+      }
+      await loadItems(false);
+    };
+  }
+
+  function hideLists() {
+    const modal = e("lists-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
   }
 
   function hideCard() {
@@ -490,6 +560,13 @@
     state.wired = true;
 
     const sync = e("collection-sync-btn");
+    const listsClose = e("lists-close-btn");
+    if (listsClose) listsClose.addEventListener("click", hideLists);
+    const listsModal = e("lists-modal");
+    if (listsModal) listsModal.addEventListener("click", (ev) => {
+      if (ev.target === listsModal) hideLists();
+    });
+
     const cardClose = e("card-close-btn");
     if (cardClose) cardClose.addEventListener("click", hideCard);
     const cardModal = e("card-modal");

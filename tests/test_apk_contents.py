@@ -55,6 +55,7 @@ SCREENS = {
     "removing cards": "Remove it",
     "card detail": "Rulings and printings",
     "overlaps tab": "In more than one list",
+    "catalogue on wishlist": "Search every card in Magic",
     "offline art": "Download all card art",
     "art diagnostics": "Card art",
 }

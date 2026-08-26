@@ -2517,3 +2517,13 @@ code {
   padding-top: 12px;
 }
 .card-detail-credit { margin-top: 16px; font-size: 0.78rem; }
+
+/* ---- list membership --------------------------------------------------- */
+.lists-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 2px;
+  cursor: pointer;
+}
+.lists-row input { width: 17px; height: 17px; cursor: pointer; }

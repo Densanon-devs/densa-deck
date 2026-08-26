@@ -42,6 +42,11 @@ KIND_STACK_DELTA = "stack-delta"
 # Absolute, and used ONLY for the first-sync baseline. See
 # SyncApplier._apply_stack_set for why it is confined to that.
 KIND_STACK_SET = "stack-set"
+# Which lists a stack belongs to. Addressed by the stack's NATURAL key and the
+# collection's uid, never by local integer ids: two devices mint their own
+# item_ids and collection_ids offline, and each would think the other meant
+# its own rows.
+KIND_MEMBERSHIP = "membership"
 KIND_COLLECTION_UPSERT = "collection-upsert"
 KIND_COLLECTION_DELETE = "collection-delete"
 KIND_DECK_UPSERT = "deck-upsert"

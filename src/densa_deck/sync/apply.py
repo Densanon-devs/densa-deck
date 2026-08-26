@@ -25,10 +25,31 @@ from densa_deck.sync.log import (
     KIND_DECK_DELETE,
     KIND_DECK_UPSERT,
     KIND_STACK_DELTA,
+    KIND_MEMBERSHIP,
     KIND_STACK_SET,
     SyncEvent,
     SyncLog,
 )
+
+
+def membership_event(*, printing_id: str, collection_uid: str, member: bool,
+                     finish: str = "nonfoil", condition: str = "NM",
+                     language: str = "en", location: str = "",
+                     card_name: str = "") -> dict:
+    """The payload for a stack joining or leaving a list.
+
+    Natural key only. See `_apply_membership` for why local ids cannot travel.
+    """
+    return {
+        "printing_id": printing_id,
+        "card_name": card_name,
+        "finish": finish,
+        "condition": condition,
+        "language": language,
+        "location": location,
+        "collection_uid": collection_uid,
+        "member": bool(member),
+    }
 
 
 def stack_delta_event(*, printing_id: str, card_name: str, delta: int,
@@ -75,6 +96,7 @@ class SyncApplier:
         handler = {
             KIND_STACK_DELTA: self._apply_stack_delta,
             KIND_STACK_SET: self._apply_stack_set,
+            KIND_MEMBERSHIP: self._apply_membership,
             KIND_COLLECTION_UPSERT: self._apply_collection_upsert,
             KIND_COLLECTION_DELETE: self._apply_collection_delete,
             KIND_DECK_UPSERT: self._apply_deck_upsert,
@@ -168,6 +190,37 @@ class SyncApplier:
             reason="baseline",
         )
         return {"applied": True, "kind": event.kind, "delta": delta}
+
+    def _apply_membership(self, event: SyncEvent) -> dict:
+        """A stack joining or leaving one list.
+
+        Addressed by natural key on both sides. `item_id` is a local integer —
+        two devices scanning the same card offline each mint their own — so an
+        event carrying one would attach the wrong card on the far side, which
+        is the sort of mistake nobody notices until a deck list is wrong.
+
+        A membership for a stack this device has never seen is IGNORED rather
+        than invented. The stack-delta that creates it may simply not have
+        arrived yet; making an empty stack to hang a label on would put a card
+        you do not own into a list.
+        """
+        p = event.payload
+        collection_id = self._collection_for(p.get("collection_uid", ""))
+        item_id = self.store.find_item_id(
+            p.get("printing_id", ""),
+            finish=p.get("finish", "nonfoil"),
+            condition=p.get("condition", "NM"),
+            language=p.get("language", "en"),
+            location=p.get("location", ""),
+        )
+        if not item_id:
+            return {"applied": False, "reason": "no such stack here yet"}
+
+        if p.get("member"):
+            self.store.add_to_collection(item_id, collection_id)
+        else:
+            self.store.remove_from_collection(item_id, collection_id)
+        return {"applied": True, "kind": event.kind}
 
     def _apply_collection_upsert(self, event: SyncEvent) -> dict:
         p = event.payload
