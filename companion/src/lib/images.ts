@@ -129,3 +129,49 @@ export async function prefetchCollectionArt(
   );
   return progress;
 }
+
+/** A card that will exist for as long as Magic does, for testing the path. */
+export const PROBE_URL = cardImageUrl('87ed0a14-1a98-4190-b195-f84fa42d4364');
+
+export interface ArtReach {
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * Can this phone actually fetch card art?
+ *
+ * Worth asking separately from "can it reach the PC", because they are
+ * different networks and they fail independently. Art comes from Scryfall
+ * over the public internet; the collection comes from a machine on the
+ * tailnet. Being connected to one says nothing about the other, and the app
+ * was reporting an image that would not load as though the user should
+ * already know which of the two was missing.
+ */
+export async function checkArtReachable(
+  fetchImpl: typeof fetch = fetch,
+  url: string = PROBE_URL,
+): Promise<ArtReach> {
+  try {
+    const response = await fetchImpl(url, { method: 'GET' });
+    if (response.ok) {
+      return { ok: true, detail: 'Card art loads. Scryfall is reachable.' };
+    }
+    return {
+      ok: false,
+      detail: `Scryfall answered ${response.status}. That is their end, not yours.`,
+    };
+  } catch (err) {
+    const message = (err as Error)?.message || String(err);
+    return {
+      ok: false,
+      // The two that actually happen, and they look identical otherwise: no
+      // internet at all, and a device clock wrong enough to fail TLS.
+      detail:
+        `Could not reach Scryfall: ${message}. Card art needs ordinary ` +
+        `internet — the tailnet alone is not enough. If this phone has Wi-Fi ` +
+        `and it still fails, check the date and time: a clock that is days ` +
+        `out makes every HTTPS connection fail while the tailnet keeps working.`,
+    };
+  }
+}

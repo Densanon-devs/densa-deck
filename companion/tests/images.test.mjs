@@ -19,6 +19,7 @@ import { describe, test } from 'node:test';
 
 import {
   cardImageUrl,
+  checkArtReachable,
   prefetchCollectionArt,
   scryfallPageUrl,
 } from '../src/lib/images.ts';
@@ -168,5 +169,54 @@ describe('warming the cache before you need it', () => {
       onProgress: (p) => seen.push(p.done),
     });
     assert.deepEqual(seen, [1, 2, 3]);
+  });
+});
+
+describe('is card art reachable at all', () => {
+  test('a good answer reads as working', async () => {
+    const result = await checkArtReachable(async () => ({ ok: true, status: 200 }));
+    assert.equal(result.ok, true);
+    assert.match(result.detail, /Scryfall/);
+  });
+
+  test('an error from Scryfall is named as theirs, not yours', async () => {
+    // Sending someone to check their own Wi-Fi over a 503 wastes their
+    // evening.
+    const result = await checkArtReachable(async () => ({ ok: false, status: 503 }));
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /503/);
+    assert.match(result.detail, /their end/);
+  });
+
+  test('no connection says what art actually needs', async () => {
+    // The tailnet is not the internet, and the app had been letting people
+    // assume that being "Connected" covered both.
+    const result = await checkArtReachable(async () => {
+      throw new Error('Network request failed');
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.detail, /Network request failed/);
+    assert.match(result.detail, /tailnet alone is not enough/);
+  });
+
+  test('it names the wrong-clock case, which looks identical otherwise', async () => {
+    // A device days out of date fails every HTTPS connection while plain
+    // HTTP to the tailnet keeps working — so the collection syncs and the
+    // art does not, which reads as a bug in the app.
+    const result = await checkArtReachable(async () => {
+      throw new Error('certificate is not yet valid');
+    });
+    assert.match(result.detail, /date and time/);
+  });
+
+  test('it never throws, whatever comes back', async () => {
+    for (const impl of [
+      async () => { throw 'a string, not an Error'; },
+      async () => { throw undefined; },
+    ]) {
+      const result = await checkArtReachable(impl);
+      assert.equal(result.ok, false);
+      assert.ok(result.detail.length > 0);
+    }
   });
 });

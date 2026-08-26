@@ -54,7 +54,8 @@ SCREENS = {
     "undo a bad scan": "Wrong? Undo",
     "removing cards": "Remove it",
     "card detail": "Rulings and printings",
-    "offline art": "Save art for offline",
+    "offline art": "Download all card art",
+    "art diagnostics": "Card art",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.

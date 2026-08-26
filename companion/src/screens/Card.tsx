@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
-import { cardImageUrl, scryfallPageUrl } from '../lib/images.ts';
+import { checkArtReachable, cardImageUrl, scryfallPageUrl } from '../lib/images.ts';
 import type { CardDetail, CardFace } from '../lib/protocol.ts';
 import type { StackRow } from '../lib/store.ts';
 import { reporting } from './report.ts';
@@ -51,7 +51,7 @@ function readableCost(cost: string): string {
 export function CardScreen({ state, stack, onClose }: Props) {
   const [detail, setDetail] = useState<CardDetail | null>(null);
   const [problem, setProblem] = useState('');
-  const [artFailed, setArtFailed] = useState(false);
+  const [artFailed, setArtFailed] = useState('');
   const [busy, setBusy] = useState(true);
 
   const load = useCallback(async () => {
@@ -88,15 +88,36 @@ export function CardScreen({ state, stack, onClose }: Props) {
           source={{ uri: art }}
           style={styles.art}
           resizeMode="contain"
-          onError={() => setArtFailed(true)}
+          // The real error, not a guess at it. "Needs internet" was a
+          // reasonable assumption that turned out to explain nothing.
+          onError={(event) =>
+            setArtFailed(
+              event?.nativeEvent?.error
+                ? String(event.nativeEvent.error)
+                : 'the image did not load',
+            )
+          }
         />
       ) : (
         <View style={[styles.art, styles.artMissing]}>
           <Text style={styles.muted}>
-            {art
-              ? 'The art could not be loaded. It comes from Scryfall, so this needs internet — the tailnet alone is not enough.'
-              : 'No art for this printing.'}
+            {art ? `Art did not load: ${artFailed}` : 'No art for this printing.'}
           </Text>
+          {art ? (
+            <Pressable
+              style={styles.retry}
+              onPress={() => {
+                setArtFailed('');
+                void checkArtReachable()
+                  .then((r) => {
+                    if (!r.ok) setProblem(r.detail);
+                  })
+                  .catch(reporting('checking Scryfall', setProblem));
+              }}
+            >
+              <Text style={styles.retryText}>Try again</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
 
@@ -236,5 +257,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   linkText: { color: '#e4e6eb', fontSize: 15 },
+  retry: {
+    marginTop: 12,
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  retryText: { color: '#e4e6eb', fontSize: 13 },
   credit: { color: '#5a5f6c', fontSize: 11, lineHeight: 16 },
 });

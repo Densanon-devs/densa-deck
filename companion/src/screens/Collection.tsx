@@ -146,7 +146,9 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
             void cacheArt().catch(reporting('saving the art', setProblem));
           }}
         >
-          <Text style={styles.artButtonText}>Save art for offline</Text>
+          <Text style={styles.artButtonText}>
+            {caching ? 'Download art' : 'Download all card art'}
+          </Text>
         </Pressable>
         {caching ? <Text style={styles.artStatus}>{caching}</Text> : null}
       </View>
@@ -251,13 +253,13 @@ const styles = StyleSheet.create({
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19, paddingBottom: 6 },
   artRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 4 },
   artButton: {
-    borderColor: '#2d3142',
+    borderColor: '#e53e3e',
     borderWidth: 1,
     borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
-  artButtonText: { color: '#8a8f9c', fontSize: 12 },
+  artButtonText: { color: '#e53e3e', fontSize: 13, fontWeight: '600' },
   artStatus: { color: '#8a8f9c', fontSize: 12, flex: 1 },
   thumb: { width: 34, height: 47, borderRadius: 3, backgroundColor: '#1a1d27' },
   editRow: {

@@ -16,6 +16,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { AppSnapshot, AppState } from '../lib/app-state.ts';
 import type { EndpointReport } from '../lib/client.ts';
+import { checkArtReachable } from '../lib/images.ts';
+import type { ArtReach } from '../lib/images.ts';
 import { describeConnection } from '../lib/status.ts';
 import { reporting } from './report.ts';
 
@@ -29,6 +31,7 @@ export function ConnectionScreen({ state, onClose }: Props) {
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+  const [art, setArt] = useState<ArtReach | null>(null);
 
   useEffect(() => state.subscribe(setSnapshot), [state]);
 
@@ -37,6 +40,10 @@ export function ConnectionScreen({ state, onClose }: Props) {
     setProblem('');
     try {
       setReports(await state.diagnose());
+      // Deliberately separate. Card art comes from Scryfall over the public
+      // internet; the collection comes from a machine on the tailnet. They
+      // fail independently and the app used to report only one of them.
+      setArt(await checkArtReachable());
       // A probe that answers proves nothing until a real request follows it,
       // so the sync runs too and the banner updates from the result.
       await state.sync();
@@ -85,6 +92,18 @@ export function ConnectionScreen({ state, onClose }: Props) {
           </View>
         ))
       )}
+
+      {art ? (
+        <View style={styles.row}>
+          <View style={styles.rowHead}>
+            <Text style={[styles.label, art.ok && styles.labelOk]}>
+              {art.ok ? '✓' : '✗'} Card art
+            </Text>
+            <Text style={styles.url}>cards.scryfall.io</Text>
+          </View>
+          <Text style={styles.detail} selectable>{art.detail}</Text>
+        </View>
+      ) : null}
 
       {reports && !anyOk ? (
         <View style={styles.advice}>
