@@ -57,6 +57,8 @@ SCREENS = {
     "overlaps tab": "In more than one list",
     "catalogue on wishlist": "Search every card in Magic",
     "list membership": "In these lists",
+    "deleting a collection": "Delete this collection",
+    "scan diagnosis": "but matched nothing",
     "offline art": "Download all card art",
     "art diagnostics": "Card art",
 }

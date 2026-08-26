@@ -213,6 +213,32 @@ export class AppState {
     await this.addCard({ ...card, quantity: -(card.quantity ?? 1) });
   }
 
+  /**
+   * Delete a collection. The cards stay.
+   *
+   * Only the grouping goes — the desktop can also discard the copies, and
+   * that is deliberately not reachable from here. It is irreversible, and a
+   * mis-tap on a handset is not the place for it.
+   *
+   * Needs the desktop, unlike almost everything else: deleting locally and
+   * telling the PC later would leave a window where a card is filed under a
+   * collection that no longer exists on one device.
+   */
+  async deleteCollection(collectionUid: string): Promise<void> {
+    await this.client.call('collection/delete', {
+      collection_uid: collectionUid,
+    });
+    await this.sync();
+  }
+
+  async renameCollection(collectionUid: string, name: string): Promise<void> {
+    await this.client.call('collection/rename', {
+      collection_uid: collectionUid,
+      name,
+    });
+    await this.sync();
+  }
+
   async newCollection(name: string): Promise<string> {
     const uid = await this.engine.createCollection(name);
     await this.refreshPending();

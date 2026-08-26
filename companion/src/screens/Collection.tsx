@@ -170,6 +170,10 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           return uid;
         }}
         includeEverything
+        onDelete={async (uid) => {
+          await state.deleteCollection(uid);
+          await load();
+        }}
       />
 
       <FlatList
@@ -245,7 +249,10 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                   style={styles.editButton}
                   onPress={() => onOpenCard?.(item)}
                 >
-                  <Text style={styles.editText}>View</Text>
+                  {/* "Lists" as well as "View", because the list ticks live
+                      on that screen and nobody found them behind a word that
+                      only promises a picture. */}
+                  <Text style={styles.editText}>View · Lists</Text>
                 </Pressable>
               </View>
             ) : null}

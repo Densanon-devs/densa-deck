@@ -114,6 +114,35 @@ export function CardScreen({ state, stack, onClose }: Props) {
         </Pressable>
       </View>
 
+      {collections.length ? (
+        <View style={styles.panel}>
+          <Text style={styles.faceName}>In these lists</Text>
+          <Text style={styles.muted}>
+            A card can be in as many as you like. Adding it to one never takes
+            it out of another, and removing it never removes the card.
+          </Text>
+          {collections.map((collection) => {
+            const inIt = lists.includes(collection.collection_uid);
+            return (
+              <Pressable
+                key={collection.collection_uid}
+                style={[styles.listRow, inIt && styles.listRowOn]}
+                onPress={() => {
+                  void toggleList(collection.collection_uid, !inIt).catch(
+                    reporting('changing the lists', setProblem),
+                  );
+                }}
+              >
+                <Text style={[styles.listTick, inIt && styles.listTickOn]}>
+                  {inIt ? '✓' : '•'}
+                </Text>
+                <Text style={styles.listName}>{collection.name}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+
       {art && !artFailed ? (
         <Image
           source={artSource(stack.printing_id, 'normal')}
@@ -222,35 +251,6 @@ export function CardScreen({ state, stack, onClose }: Props) {
             </View>
           ))
         : null}
-
-      {collections.length ? (
-        <View style={styles.panel}>
-          <Text style={styles.faceName}>In these lists</Text>
-          <Text style={styles.muted}>
-            A card can be in as many as you like. Adding it to one never takes
-            it out of another, and removing it never removes the card.
-          </Text>
-          {collections.map((collection) => {
-            const inIt = lists.includes(collection.collection_uid);
-            return (
-              <Pressable
-                key={collection.collection_uid}
-                style={[styles.listRow, inIt && styles.listRowOn]}
-                onPress={() => {
-                  void toggleList(collection.collection_uid, !inIt).catch(
-                    reporting('changing the lists', setProblem),
-                  );
-                }}
-              >
-                <Text style={[styles.listTick, inIt && styles.listTickOn]}>
-                  {inIt ? '✓' : '•'}
-                </Text>
-                <Text style={styles.listName}>{collection.name}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-      ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 

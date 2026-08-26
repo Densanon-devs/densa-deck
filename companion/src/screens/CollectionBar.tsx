@@ -34,6 +34,8 @@ interface Props {
   includeEverything?: boolean;
   /** Shown on each chip when the count is worth seeing. */
   showCounts?: boolean;
+  /** Offered only where deleting makes sense. The scanner does not. */
+  onDelete?: (uid: string, name: string) => Promise<void>;
 }
 
 export function CollectionBar({
@@ -43,11 +45,16 @@ export function CollectionBar({
   onCreate,
   includeEverything = false,
   showCounts = true,
+  onDelete,
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
+  // A second tap on the chip you are already looking at. Deleting a
+  // collection from a list of chips is one mis-tap away otherwise, and the
+  // undo is "make it again and re-file everything".
+  const [confirming, setConfirming] = useState('');
 
   const create = useCallback(async () => {
     const verdict = checkCollectionName(name, collections);
@@ -103,6 +110,7 @@ export function CollectionBar({
         <Pressable
           onPress={() => {
             setProblem('');
+            setConfirming('');
             setAdding((open) => !open);
           }}
           style={[styles.chip, styles.chipNew]}
@@ -137,6 +145,49 @@ export function CollectionBar({
           >
             <Text style={styles.makeText}>{busy ? '…' : 'Make it'}</Text>
           </Pressable>
+        </View>
+      ) : null}
+
+      {onDelete && selected && !entries.every((e) => e.collection_uid !== selected) ? (
+        <View style={styles.manage}>
+          {confirming === selected ? (
+            <>
+              <Text style={styles.warn}>
+                Delete this collection? The cards stay in your collection —
+                only the grouping goes.
+              </Text>
+              <Pressable
+                style={styles.reallyDelete}
+                disabled={busy}
+                onPress={() => {
+                  const target = entries.find((e) => e.collection_uid === selected);
+                  if (!target) return;
+                  setBusy(true);
+                  void onDelete(selected, target.name)
+                    .then(() => {
+                      setConfirming('');
+                      onSelect('');
+                    })
+                    .catch((err) => setProblem((err as Error).message))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                <Text style={styles.reallyDeleteText}>
+                  {busy ? '…' : 'Yes, delete it'}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.cancel} onPress={() => setConfirming('')}>
+                <Text style={styles.cancelText}>Keep it</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable
+              style={styles.manageButton}
+              onPress={() => setConfirming(selected)}
+            >
+              <Text style={styles.manageText}>Delete this collection</Text>
+            </Pressable>
+          )}
         </View>
       ) : null}
 
@@ -179,4 +230,18 @@ const styles = StyleSheet.create({
   },
   makeText: { color: '#fff', fontWeight: '700' },
   problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
+  manage: { gap: 8 },
+  manageButton: { paddingVertical: 6 },
+  manageText: { color: '#8a8f9c', fontSize: 12 },
+  warn: { color: '#ecc94b', fontSize: 12, lineHeight: 18 },
+  reallyDelete: {
+    borderColor: '#e53e3e',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 11,
+    alignItems: 'center',
+  },
+  reallyDeleteText: { color: '#e53e3e', fontWeight: '700', fontSize: 13 },
+  cancel: { padding: 8, alignItems: 'center' },
+  cancelText: { color: '#8a8f9c', fontSize: 13 },
 });

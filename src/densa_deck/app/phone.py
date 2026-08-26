@@ -517,6 +517,24 @@ class PhoneBridge:
         # while keeping the picture.
         # Collections behave as filters: adding to one never removes from
         # another, and removing from one never removes the card.
+        # Deleting a collection means the GROUPING goes and the cards stay.
+        # `discard_cards` — which removes the copies from the master
+        # collection too — is deliberately NOT reachable from the phone: it is
+        # irreversible, and a mis-tap on a handset is not the place for it.
+        if route == "collection/delete":
+            store = api._get_collection_store()
+            found = store.collection_by_uid(payload.get("collection_uid", ""))
+            if not found:
+                return {"ok": False, "error": "No such collection."}
+            return _unwrap(api.delete_collection(found["collection_id"]))
+        if route == "collection/rename":
+            store = api._get_collection_store()
+            found = store.collection_by_uid(payload.get("collection_uid", ""))
+            if not found:
+                return {"ok": False, "error": "No such collection."}
+            return _unwrap(api.rename_collection(
+                found["collection_id"], payload.get("name", "")))
+
         if route == "collection/add-to":
             return _unwrap(api.collection_add_to(
                 int(payload.get("item_id", 0) or 0),

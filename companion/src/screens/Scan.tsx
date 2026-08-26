@@ -202,10 +202,21 @@ export function ScanScreen({ state }: Props) {
         // silently is worse than no card, because you will not know to look
         // for it.
         setResult(reply);
+        // "Could not read that one" is true and useless. What the desktop
+        // actually got off the card is the whole diagnosis: no text at all
+        // means the picture was the problem, text with the wrong name means
+        // the read was, and a name it could not find means the catalogue is.
+        const read = (reply.capture?.text ?? '').replace(/\s+/g, ' ').trim();
         setStatus(
           reply.candidates?.length
             ? 'Which printing is this?'
-            : 'Could not read that one',
+            : reply.capture?.card_detected === false
+              ? 'No card found in the picture. Fill more of the frame, or ' +
+                'zoom in so the phone uses the other lens.'
+              : read
+                ? `Read "${read.slice(0, 70)}" but matched nothing.`
+                : 'Nothing legible in that picture. Try more light, or lock ' +
+                  'the focus once it looks sharp.',
         );
       } catch (err) {
         scanner.current.failed();
