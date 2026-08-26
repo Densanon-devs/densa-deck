@@ -20,7 +20,8 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
-import { cardImageUrl, prefetchCollectionArt } from '../lib/images.ts';
+import { artQueue, artSource, cardImageUrl } from '../lib/images.ts';
+import { ArtWarmer } from './ArtWarmer.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
@@ -43,6 +44,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   // hundreds of rows each carrying three buttons is unusable.
   const [open, setOpen] = useState('');
   const [caching, setCaching] = useState('');
+  const [warming, setWarming] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setRows(await state.cards(chosen, search || undefined));
@@ -89,7 +91,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   /**
    * Pull the collection's art onto the phone ahead of time.
    *
-   * Art seen once is cached by the phone already. This is for the card you
+   * Art seen once is already cached by the phone. This is for the card you
    * have NOT opened — because the moment you want to flip through your
    * collection is usually the moment you have no signal, in a shop, holding
    * something you might trade for.
@@ -97,21 +99,13 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   const cacheArt = useCallback(async () => {
     setProblem('');
     const all = await state.cards();
-    const result = await prefetchCollectionArt(
-      all.map((row) => row.printing_id),
-      {
-        // Supplied here rather than imported by the library: this is the one
-        // piece that is genuinely platform code.
-        prefetch: (url) => Image.prefetch(url),
-        onProgress: (p) => setCaching(`Saving art ${p.done}/${p.total}`),
-      },
-    );
-    setCaching(
-      result.failed
-        ? `Saved ${result.done - result.failed} of ${result.total}. ` +
-          `${result.failed} could not be fetched — try again with a better connection.`
-        : `All ${result.total} cards' art is on this phone.`,
-    );
+    const queue = artQueue(all.map((row) => row.printing_id));
+    if (!queue.length) {
+      setCaching('No art to fetch.');
+      return;
+    }
+    setCaching(`Saving art 0/${queue.length}`);
+    setWarming(queue);
   }, [state]);
 
   const syncNow = useCallback(async () => {
@@ -137,6 +131,19 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
         value={search}
         onChangeText={setSearch}
         autoCorrect={false}
+      />
+
+      <ArtWarmer
+        queue={warming}
+        onProgress={(done, total) => setCaching(`Saving art ${done}/${total}`)}
+        onDone={(failed) => {
+          setWarming([]);
+          setCaching(
+            failed
+              ? `${failed} could not be fetched. Try again with a better connection.`
+              : 'All card art is on this phone.',
+          );
+        }}
       />
 
       <View style={styles.artRow}>
@@ -193,7 +200,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                   all — the phone's image cache answers it. */}
               {cardImageUrl(item.printing_id, 'small') ? (
                 <Image
-                  source={{ uri: cardImageUrl(item.printing_id, 'small') }}
+                  source={artSource(item.printing_id, 'small')}
                   style={styles.thumb}
                   resizeMode="cover"
                 />

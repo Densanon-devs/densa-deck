@@ -25,6 +25,8 @@
  * of the screens is that it can be tested there.
  */
 
+import { VERSION } from './version.ts';
+
 export type ImageSize =
   | 'small'
   | 'normal'
@@ -34,6 +36,38 @@ export type ImageSize =
   | 'border_crop';
 
 const CDN = 'https://cards.scryfall.io';
+
+/**
+ * Who we say we are when asking for a picture.
+ *
+ * Not optional politeness — Scryfall's CDN answers **HTTP 400** to the
+ * `okhttp/x.y.z` User-Agent that React Native's image loader sends by
+ * default. Reproduced against the live service:
+ *
+ *     curl -A "okhttp/4.9.2"    -> 400
+ *     curl -A "DensaDeck/0.2.2" -> 200
+ *     curl  (no UA at all)      -> 200
+ *
+ * So every card in the app failed to load while the same URL worked from a
+ * browser and from the desktop, which is exactly how it looked. Scryfall ask
+ * clients to identify themselves; this does, and it is what makes the request
+ * succeed at all.
+ */
+export const USER_AGENT = `DensaDeck/${VERSION} (companion; Android)`;
+
+/** Headers every art request must carry. */
+export const ART_HEADERS: Record<string, string> = {
+  'User-Agent': USER_AGENT,
+  Accept: 'image/jpeg,image/png,image/*;q=0.8',
+};
+
+/** What to hand an <Image source>. Empty uri means "no art for this". */
+export function artSource(
+  printingId: string,
+  size: ImageSize = 'normal',
+): { uri: string; headers: Record<string, string> } {
+  return { uri: cardImageUrl(printingId, size), headers: ART_HEADERS };
+}
 
 /**
  * A Scryfall id, loosely.
@@ -74,60 +108,30 @@ export interface PrefetchProgress {
 }
 
 /**
- * Pull the collection's art onto the phone before it is needed.
+ * The list of art to fetch, deduplicated.
  *
- * Runs a few at a time rather than all at once: a thousand simultaneous image
- * requests is rude to Scryfall and will be throttled anyway, and it would
- * saturate the connection the app also needs for syncing.
+ * A collection holds a foil and a nonfoil of the same printing; fetching that
+ * JPEG twice is exactly what Scryfall ask clients not to do.
  *
- * Failures are counted, not thrown. Half a collection cached is strictly
- * better than none, and the one card that failed will simply load when it is
- * next opened with signal.
+ * There is deliberately no `Image.prefetch` here. On Android it takes a URL
+ * and nothing else — no headers — and an art request without a User-Agent is
+ * answered 400 by Scryfall's CDN. So warming the cache has to go through a
+ * real `<Image>` with real headers, which is what `ArtWarmer` does. A prefetch
+ * helper that quietly 400'd everything would look like it was working.
  */
-export async function prefetchCollectionArt(
+export function artQueue(
   printingIds: string[],
-  options: {
-    size?: ImageSize;
-    concurrency?: number;
-    onProgress?: (progress: PrefetchProgress) => void;
-    shouldStop?: () => boolean;
-  } & { prefetch: (url: string) => Promise<unknown> },
-): Promise<PrefetchProgress> {
-  const { size = 'normal', concurrency = 4, onProgress, shouldStop, prefetch } =
-    options;
-
-  const urls = [...new Set(printingIds)]
-    .map((id) => cardImageUrl(id, size))
-    .filter(Boolean);
-
-  const progress: PrefetchProgress = { done: 0, total: urls.length, failed: 0 };
-  if (!urls.length) {
-    onProgress?.(progress);
-    return progress;
+  size: ImageSize = 'normal',
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of printingIds) {
+    const url = cardImageUrl(id, size);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(id);
   }
-
-  let next = 0;
-  const worker = async () => {
-    for (;;) {
-      if (shouldStop?.()) return;
-      const index = next;
-      next += 1;
-      const url = urls[index];
-      if (!url) return;
-      try {
-        await prefetch(url);
-      } catch {
-        progress.failed += 1;
-      }
-      progress.done += 1;
-      onProgress?.({ ...progress });
-    }
-  };
-
-  await Promise.all(
-    Array.from({ length: Math.max(1, concurrency) }, () => worker()),
-  );
-  return progress;
+  return out;
 }
 
 /** A card that will exist for as long as Magic does, for testing the path. */
@@ -141,31 +145,39 @@ export interface ArtReach {
 /**
  * Can this phone actually fetch card art?
  *
- * Worth asking separately from "can it reach the PC", because they are
- * different networks and they fail independently. Art comes from Scryfall
- * over the public internet; the collection comes from a machine on the
- * tailnet. Being connected to one says nothing about the other, and the app
- * was reporting an image that would not load as though the user should
- * already know which of the two was missing.
+ * Worth asking separately from "can it reach the PC". They are different
+ * networks that fail independently: art comes from Scryfall over the public
+ * internet, the collection from a machine on the tailnet. Being connected to
+ * one says nothing about the other.
  */
 export async function checkArtReachable(
   fetchImpl: typeof fetch = fetch,
   url: string = PROBE_URL,
 ): Promise<ArtReach> {
   try {
-    const response = await fetchImpl(url, { method: 'GET' });
+    const response = await fetchImpl(url, {
+      method: 'GET',
+      // The same headers a real art request sends. A probe without them would
+      // report a 400 that only existed because the probe was anonymous.
+      headers: ART_HEADERS,
+    });
     if (response.ok) {
       return { ok: true, detail: 'Card art loads. Scryfall is reachable.' };
     }
     return {
       ok: false,
-      detail: `Scryfall answered ${response.status}. That is their end, not yours.`,
+      detail:
+        response.status === 400
+          ? 'Scryfall answered 400. That is what they return to a request ' +
+            'that does not identify itself — the app should be sending a ' +
+            'User-Agent and evidently is not.'
+          : `Scryfall answered ${response.status}. That is their end, not yours.`,
     };
   } catch (err) {
     const message = (err as Error)?.message || String(err);
     return {
       ok: false,
-      // The two that actually happen, and they look identical otherwise: no
+      // The two that actually happen and look identical otherwise: no
       // internet at all, and a device clock wrong enough to fail TLS.
       detail:
         `Could not reach Scryfall: ${message}. Card art needs ordinary ` +

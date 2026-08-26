@@ -63,6 +63,10 @@ BEHAVIOUR = {
     "LAN/tunnel failover": "isTunnelAddr",
     "stale LAN self-heal": "healedLanHost",
     "catalogue search route": "cards/search",
+    # Scryfall answer HTTP 400 to the okhttp User-Agent React Native sends
+    # by default, so without this EVERY card image fails while the same
+    # URL works in a browser. Reproduced live: okhttp -> 400, DensaDeck -> 200.
+    "art User-Agent": "(companion; Android)",
     "sync push route": "sync/push",
     # The camera crashed the app because nothing ever asked for it, and the
     # crash reported nothing because nothing was catching. Both fixes are

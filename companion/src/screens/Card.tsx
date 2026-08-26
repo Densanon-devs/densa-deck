@@ -32,7 +32,12 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
-import { checkArtReachable, cardImageUrl, scryfallPageUrl } from '../lib/images.ts';
+import {
+  artSource,
+  cardImageUrl,
+  checkArtReachable,
+  scryfallPageUrl,
+} from '../lib/images.ts';
 import type { CardDetail, CardFace } from '../lib/protocol.ts';
 import type { StackRow } from '../lib/store.ts';
 import { reporting } from './report.ts';
@@ -85,7 +90,7 @@ export function CardScreen({ state, stack, onClose }: Props) {
 
       {art && !artFailed ? (
         <Image
-          source={{ uri: art }}
+          source={artSource(stack.printing_id, 'normal')}
           style={styles.art}
           resizeMode="contain"
           // The real error, not a guess at it. "Needs internet" was a

@@ -18,9 +18,12 @@ import { strict as assert } from 'node:assert';
 import { describe, test } from 'node:test';
 
 import {
+  ART_HEADERS,
+  USER_AGENT,
+  artQueue,
+  artSource,
   cardImageUrl,
   checkArtReachable,
-  prefetchCollectionArt,
   scryfallPageUrl,
 } from '../src/lib/images.ts';
 
@@ -71,104 +74,61 @@ describe('where the art comes from', () => {
   });
 });
 
-describe('warming the cache before you need it', () => {
-  const ids = (n) =>
-    Array.from({ length: n }, (_, i) =>
-      `${(i % 10).toString(16)}7ed0a14-1a98-4190-b195-f84fa42d43${(i % 100)
-        .toString()
-        .padStart(2, '0')}`,
-    );
-
-  test('it fetches each card once', async () => {
-    const seen = [];
-    const result = await prefetchCollectionArt(ids(5), {
-      prefetch: async (url) => seen.push(url),
-    });
-    assert.equal(result.total, 5);
-    assert.equal(result.done, 5);
-    assert.equal(new Set(seen).size, 5);
+describe('identifying ourselves to Scryfall', () => {
+  test('every art request carries a User-Agent', () => {
+    // Not politeness. Scryfall's CDN answers 400 to the `okhttp/x.y.z` that
+    // React Native's image loader sends by default, so without this EVERY
+    // card in the app fails while the same URL works in a browser.
+    //   curl -A "okhttp/4.9.2"    -> 400
+    //   curl -A "DensaDeck/0.2.2" -> 200
+    assert.ok(ART_HEADERS['User-Agent']);
+    assert.match(ART_HEADERS['User-Agent'], /DensaDeck/);
   });
 
-  test('a card listed twice is fetched once', async () => {
-    // A collection holds foils and nonfoils of the same printing. Fetching
-    // the same JPEG twice is exactly what Scryfall asks clients not to do.
-    let calls = 0;
-    const result = await prefetchCollectionArt([DEATH_WIND, DEATH_WIND, DEATH_WIND], {
-      prefetch: async () => {
-        calls += 1;
-      },
-    });
-    assert.equal(calls, 1);
-    assert.equal(result.total, 1);
+  test('the User-Agent names the app and its version', () => {
+    // Scryfall ask clients to identify themselves; a version makes a
+    // misbehaving build traceable to a release rather than to "the app".
+    assert.match(USER_AGENT, /^DensaDeck\/\d+\.\d+\.\d+/);
   });
 
-  test('it does not open a thousand connections at once', async () => {
-    // Rude to Scryfall, throttled anyway, and it would saturate the same
-    // connection the app needs for syncing.
-    let live = 0;
-    let peak = 0;
-    await prefetchCollectionArt(ids(40), {
-      concurrency: 4,
-      prefetch: async () => {
-        live += 1;
-        peak = Math.max(peak, live);
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        live -= 1;
-      },
-    });
-    assert.ok(peak <= 4, `ran ${peak} at once`);
+  test('it does not pretend to be a browser', () => {
+    // Spoofing a browser UA would work and is exactly the thing that gets a
+    // client blocked later.
+    assert.ok(!/Mozilla|Chrome|Safari|okhttp/i.test(USER_AGENT));
   });
 
-  test('one failure does not abandon the rest', async () => {
-    // Half a collection cached is strictly better than none, and the card
-    // that failed will load when it is next opened with signal.
-    const result = await prefetchCollectionArt(ids(6), {
-      prefetch: async (url) => {
-        if (url.includes('/3/')) throw new Error('timed out');
-      },
-    });
-    assert.equal(result.done, 6);
-    assert.ok(result.failed >= 1);
+  test('a source carries both the URL and the headers', () => {
+    const source = artSource(DEATH_WIND, 'small');
+    assert.match(source.uri, /cards\.scryfall\.io/);
+    assert.equal(source.headers['User-Agent'], USER_AGENT);
   });
 
-  test('unusable ids are skipped rather than fetched', async () => {
-    const seen = [];
-    const result = await prefetchCollectionArt(['', 'none', DEATH_WIND], {
-      prefetch: async (url) => seen.push(url),
-    });
-    assert.equal(result.total, 1);
-    assert.equal(seen.length, 1);
+  test('a source for an unusable id has no URL but is still shaped right', () => {
+    // The screen checks `uri`; a missing headers object would crash it.
+    const source = artSource('');
+    assert.equal(source.uri, '');
+    assert.ok(source.headers);
+  });
+});
+
+describe('the queue of art to fetch', () => {
+  test('a printing listed twice is fetched once', () => {
+    // A collection holds a foil and a nonfoil of the same printing, and
+    // fetching that JPEG twice is what Scryfall ask clients not to do.
+    assert.deepEqual(artQueue([DEATH_WIND, DEATH_WIND]), [DEATH_WIND]);
   });
 
-  test('an empty collection reports done rather than hanging', async () => {
-    const result = await prefetchCollectionArt([], { prefetch: async () => {} });
-    assert.deepEqual(result, { done: 0, total: 0, failed: 0 });
+  test('unusable ids are dropped rather than queued', () => {
+    assert.deepEqual(artQueue(['', 'none', DEATH_WIND]), [DEATH_WIND]);
   });
 
-  test('it can be stopped part way', async () => {
-    // Leaving a screen should not leave forty downloads running.
-    let calls = 0;
-    let stop = false;
-    await prefetchCollectionArt(ids(40), {
-      concurrency: 2,
-      shouldStop: () => stop,
-      prefetch: async () => {
-        calls += 1;
-        if (calls >= 4) stop = true;
-      },
-    });
-    assert.ok(calls < 40, `kept going: ${calls}`);
+  test('an empty collection gives an empty queue', () => {
+    assert.deepEqual(artQueue([]), []);
   });
 
-  test('progress is reported as it goes', async () => {
-    // A silent thirty-second download looks like a button that did nothing.
-    const seen = [];
-    await prefetchCollectionArt(ids(3), {
-      concurrency: 1,
-      prefetch: async () => {},
-      onProgress: (p) => seen.push(p.done),
-    });
-    assert.deepEqual(seen, [1, 2, 3]);
+  test('order is preserved so progress reads sensibly', () => {
+    const other = '3ad02b56-13ec-46ef-92bd-ae078b8bb517';
+    assert.deepEqual(artQueue([DEATH_WIND, other]), [DEATH_WIND, other]);
   });
 });
 
@@ -186,6 +146,24 @@ describe('is card art reachable at all', () => {
     assert.equal(result.ok, false);
     assert.match(result.detail, /503/);
     assert.match(result.detail, /their end/);
+  });
+
+  test('a 400 is named as the missing User-Agent that it is', async () => {
+    // This exact failure shipped. "Scryfall answered 400, that is their end"
+    // would have sent us looking in the wrong place for another evening.
+    const result = await checkArtReachable(async () => ({ ok: false, status: 400 }));
+    assert.match(result.detail, /User-Agent/);
+  });
+
+  test('the probe sends the same headers a real request does', async () => {
+    // A probe without them would report a 400 caused by the probe, and the
+    // app would be blamed for a fault in its own diagnostics.
+    let sent;
+    await checkArtReachable(async (_url, init) => {
+      sent = init?.headers;
+      return { ok: true, status: 200 };
+    });
+    assert.equal(sent?.['User-Agent'], USER_AGENT);
   });
 
   test('no connection says what art actually needs', async () => {
