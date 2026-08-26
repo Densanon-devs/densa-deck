@@ -14,8 +14,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import type { AppState } from '../lib/app-state.ts';
+import type { AppSnapshot, AppState } from '../lib/app-state.ts';
 import type { EndpointReport } from '../lib/client.ts';
+import { describeConnection } from '../lib/status.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -27,6 +28,9 @@ export function ConnectionScreen({ state, onClose }: Props) {
   const [reports, setReports] = useState<EndpointReport[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
+
+  useEffect(() => state.subscribe(setSnapshot), [state]);
 
   const run = useCallback(async () => {
     setBusy(true);
@@ -55,6 +59,10 @@ export function ConnectionScreen({ state, onClose }: Props) {
           <Text style={styles.close}>Done</Text>
         </Pressable>
       </View>
+
+      <Text style={styles.summary}>
+        {describeConnection(snapshot ?? { connection: 'unknown', pendingEdits: 0 }).text}
+      </Text>
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
@@ -131,6 +139,7 @@ const styles = StyleSheet.create({
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700', flex: 1 },
   close: { color: '#e53e3e', fontSize: 16, fontWeight: '600' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 20 },
+  summary: { color: '#e4e6eb', fontSize: 15, lineHeight: 22 },
   row: {
     borderColor: '#2d3142',
     borderWidth: 1,

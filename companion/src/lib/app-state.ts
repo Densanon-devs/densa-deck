@@ -23,6 +23,7 @@ import type {
 } from './protocol.ts';
 import { wishlistFromDecks } from './decks.ts';
 import type { Deck, WishlistRow } from './decks.ts';
+import type { Via } from './reach.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
 import { SyncEngine } from './sync.ts';
 
@@ -33,6 +34,14 @@ export interface AppSnapshot {
   pendingEdits: number;
   lastSyncAt?: string;
   lastError?: string;
+  /**
+   * Which path the last exchange took.
+   *
+   * Worth surfacing rather than hiding: "connected" over Tailscale from the
+   * sofa and "connected" over Wi-Fi in the same room are different enough
+   * that someone debugging their own setup wants to know which happened.
+   */
+  via?: Via;
 }
 
 const LAST_SYNC_KEY = 'sync.last_at';
@@ -76,20 +85,22 @@ export class AppState {
     const outcome = await this.engine.sync();
     const pending = await this.engine.pending();
 
+    const via = this.client.via;
+
     if (outcome.unpaired) {
       this.emit({ connection: 'unpaired', pendingEdits: pending,
-                  lastError: outcome.error });
+                  lastError: outcome.error, via: null });
     } else if (outcome.offline) {
       this.emit({ connection: 'offline', pendingEdits: pending,
-                  lastError: undefined });
+                  lastError: undefined, via: null });
     } else if (outcome.ok) {
       const now = new Date().toISOString();
       await this.store.setMeta(LAST_SYNC_KEY, now);
       this.emit({ connection: 'connected', pendingEdits: pending,
-                  lastSyncAt: now, lastError: undefined });
+                  lastSyncAt: now, lastError: undefined, via });
     } else {
       this.emit({ connection: 'connected', pendingEdits: pending,
-                  lastError: outcome.error });
+                  lastError: outcome.error, via });
     }
 
     // The desktop had more than one round could carry; keep going rather than

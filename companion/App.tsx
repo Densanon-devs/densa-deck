@@ -26,6 +26,8 @@ import {
 } from 'react-native-safe-area-context';
 
 import { AppState, buildAppState } from './src/lib/app-state.ts';
+import type { AppSnapshot } from './src/lib/app-state.ts';
+import { describeConnection } from './src/lib/status.ts';
 import type { Crash } from './src/lib/crash.ts';
 import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
 import type { Pairing } from './src/lib/client.ts';
@@ -85,7 +87,7 @@ function Shell() {
   const [store, setStore] = useState<LocalStore | null>(null);
   const [tab, setTab] = useState<Tab>('collection');
   const [openDeck, setOpenDeck] = useState<string | null>(null);
-  const [banner, setBanner] = useState('');
+  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [fatal, setFatal] = useState<Crash | null>(null);
   const [showConnection, setShowConnection] = useState(false);
 
@@ -97,22 +99,13 @@ function Shell() {
   const connect = useCallback(async (local: LocalStore, pairing: Pairing) => {
     const device = await deviceId(local, uuid);
     const state = buildAppState(local, pairing, device, uuid);
-    state.subscribe((snapshot) => {
-      if (snapshot.connection === 'unpaired') {
+    state.subscribe((next) => {
+      setSnapshot(next);
+      if (next.connection === 'unpaired') {
         // The desktop revoked this phone; there is nothing to retry, so say
         // so and send the user back to pairing rather than looping.
-        setPhase({ kind: 'pairing', reason: snapshot.lastError });
-        return;
+        setPhase({ kind: 'pairing', reason: next.lastError });
       }
-      setBanner(
-        snapshot.connection === 'offline'
-          ? snapshot.pendingEdits > 0
-            ? `Offline — ${snapshot.pendingEdits} change${
-                snapshot.pendingEdits === 1 ? '' : 's'
-              } waiting to sync`
-            : 'Offline — your collection is still here'
-          : '',
-      );
     });
     // Deliberately not awaited: a slow or absent desktop must not hold up the
     // first paint of a screen whose data is already local. Not being awaited
@@ -155,6 +148,10 @@ function Shell() {
   // A floor under each inset: the bars are hidden, so the system reports
   // nothing for them, but a punch-hole camera still occupies the top of the
   // screen and a swipe brings the bars back on top of whatever is there.
+  const status = describeConnection(
+    snapshot ?? { connection: 'unknown', pendingEdits: 0 },
+  );
+
   const frame = {
     paddingTop: Math.max(insets.top, 10),
     paddingBottom: Math.max(insets.bottom, 0),
@@ -174,13 +171,23 @@ function Shell() {
   return (
     <View style={[styles.app, { paddingTop: frame.paddingTop, paddingLeft: frame.paddingLeft, paddingRight: frame.paddingRight }]}>
       <StatusBar hidden />
-      {banner ? (
+      {/*
+        Always here, never conditional. "Nothing is wrong" and "I have not
+        checked" look identical when both are silence, and they are entirely
+        different situations to be in while filing a box of cards.
+      */}
+      {phase.kind === 'ready' ? (
         <Pressable
-          style={styles.banner}
-          onPress={() => setShowConnection(true)}
+          style={[styles.banner, styles[`banner_${status.tone}`]]}
+          onPress={() => setShowConnection((open) => !open)}
         >
-          <Text style={styles.bannerText}>{banner}</Text>
-          <Text style={styles.bannerHint}>Tap to see why</Text>
+          <View style={[styles.dot, styles[`dot_${status.tone}`]]} />
+          <Text style={[styles.bannerText, styles[`text_${status.tone}`]]}>
+            {status.headline}
+          </Text>
+          <Text style={styles.bannerHint}>
+            {showConnection ? 'Close' : 'Details'}
+          </Text>
         </Pressable>
       ) : null}
 
@@ -276,9 +283,31 @@ const styles = StyleSheet.create({
   body: { flex: 1 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   muted: { color: '#8a8f9c' },
-  banner: { backgroundColor: '#232837', padding: 10 },
-  bannerText: { color: '#ecc94b', textAlign: 'center', fontSize: 13 },
-  bannerHint: { color: '#8a8f9c', textAlign: 'center', fontSize: 11, marginTop: 2 },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1a1d27',
+    borderBottomWidth: 1,
+    borderBottomColor: '#2d3142',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  banner_good: { backgroundColor: '#16241c' },
+  banner_warn: { backgroundColor: '#2a2517' },
+  banner_bad: { backgroundColor: '#2a1919' },
+  banner_idle: { backgroundColor: '#1a1d27' },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  dot_good: { backgroundColor: '#38a169' },
+  dot_warn: { backgroundColor: '#ecc94b' },
+  dot_bad: { backgroundColor: '#e53e3e' },
+  dot_idle: { backgroundColor: '#8a8f9c' },
+  bannerText: { flex: 1, fontSize: 13 },
+  text_good: { color: '#68d391' },
+  text_warn: { color: '#ecc94b' },
+  text_bad: { color: '#fc8181' },
+  text_idle: { color: '#8a8f9c' },
+  bannerHint: { color: '#8a8f9c', fontSize: 11 },
   tabs: {
     flexDirection: 'row',
     borderTopWidth: 1,

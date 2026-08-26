@@ -50,6 +50,7 @@ SCREENS = {
     "connection diagnostics": "Nothing answered",
     "making a collection": "New collection",
     "scan target picker": "Scanning into",
+    "connection strip": "Connected over",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
