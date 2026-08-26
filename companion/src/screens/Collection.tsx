@@ -19,6 +19,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
 
@@ -69,29 +70,16 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
         autoCorrect={false}
       />
 
-      <FlatList
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chips}
-        data={[
-          { collection_uid: '', name: 'Everything', cards: 0 } as CollectionRow,
-          ...collections,
-        ]}
-        keyExtractor={(c) => c.collection_uid || 'all'}
-        renderItem={({ item }) => {
-          const active = (chosen ?? '') === item.collection_uid;
-          return (
-            <Pressable
-              onPress={() => setChosen(item.collection_uid || undefined)}
-              style={[styles.chip, active && styles.chipActive]}
-            >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                {item.name}
-                {item.collection_uid ? ` (${item.cards})` : ''}
-              </Text>
-            </Pressable>
-          );
+      <CollectionBar
+        collections={collections}
+        selected={chosen ?? ''}
+        onSelect={(uid) => setChosen(uid || undefined)}
+        onCreate={async (name) => {
+          const uid = await state.newCollection(name);
+          await load();
+          return uid;
         }}
+        includeEverything
       />
 
       <FlatList

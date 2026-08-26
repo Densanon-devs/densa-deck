@@ -16,8 +16,14 @@
  *   * a filed card must be impossible to miss, or the same card goes in six
  *     times without anyone noticing.
  *
- * The controls stay behind a button. An earlier version left every option on
- * screen at once and there was no room left for the camera.
+ * The controls are on screen rather than behind a button. They were behind
+ * one, and what came back was "not seeing zoom options" — a control nobody
+ * finds is a control that does not exist. Two compact rows, not the wall of
+ * options the web version had.
+ *
+ * Which collection is being scanned into is picked here too, and remembered.
+ * A scanning session is one shelf at a time, and a target that reset whenever
+ * the tab changed would quietly scatter half a box into the wrong place.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -44,18 +50,20 @@ import {
   identifyPhoto,
 } from '../lib/scanner.ts';
 import type { ScanCandidate, ScanResult } from '../lib/scanner.ts';
+import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
+import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
+import { CollectionBar } from './CollectionBar.tsx';
+import { reporting } from './report.ts';
 
 interface Props {
   state: AppState;
-  collectionUid: string;
-  collectionName: string;
 }
 
 /** How often the loop wakes to ask whether it is time for another picture. */
 const TICK_MS = 250;
 
-export function ScanScreen({ state, collectionUid, collectionName }: Props) {
+export function ScanScreen({ state }: Props) {
   const [status, setStatus] = useState('Point at a card');
   const [result, setResult] = useState<ScanResult | null>(null);
   const [flash, setFlash] = useState<{ name: string; copy: number } | null>(null);
@@ -66,6 +74,12 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
     DEFAULT_CAMERA_SETTINGS,
   );
   const [connection, setConnection] = useState<Connection>('unknown');
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
+  // Starts at the default rather than empty: a card filed in the moment
+  // between mounting and the stored target arriving would go nowhere
+  // nameable.
+  const [target, setTarget] = useState(DEFAULT_COLLECTION_UID);
+  const [problem, setProblem] = useState('');
 
   const guard = useRef(new RepeatGuard());
   const scanner = useRef(new AutoScanner());
@@ -74,13 +88,30 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
   // effect ran, and fire a second capture on top of the one in flight.
   const busyRef = useRef(false);
 
+  const loadCollections = useCallback(async () => {
+    setCollections(await state.collections());
+  }, [state]);
+
   useEffect(() => {
     void state
       .cameraSettings()
       .then(setSettings)
       .catch((err) => recordCrash(err, 'camera settings', false));
+    void state.scanTarget().then(setTarget).catch(reporting('scan target', setProblem));
+    void loadCollections().catch(reporting('your collections', setProblem));
     return state.subscribe((snapshot) => setConnection(snapshot.connection));
-  }, [state]);
+  }, [state, loadCollections]);
+
+  const chooseTarget = useCallback(
+    (uid: string) => {
+      if (!uid) return;
+      setTarget(uid);
+      void state
+        .rememberScanTarget(uid)
+        .catch(reporting('remembering where to scan', setProblem));
+    },
+    [state],
+  );
 
   const change = useCallback(
     (patch: Partial<CameraSettings>) => {
@@ -101,13 +132,13 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
         printing_id: candidate.printing_id,
         card_name: candidate.name,
         finish,
-        collection_uid: collectionUid,
+        collection_uid: target,
       });
       setFlash({ name: candidate.name, copy });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
-    [state, collectionUid],
+    [state, target],
   );
 
   const handlePhoto = useCallback(
@@ -193,6 +224,23 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
   }, [auto, connection, capture]);
 
   const offline = connection === 'offline' || connection === 'unpaired';
+  // A phone that has never synced has no collection rows yet, and a picker
+  // with nothing in it but "New collection" suggests the default one does not
+  // exist. It always does.
+  const shelves = collections.some(
+    (c) => c.collection_uid === DEFAULT_COLLECTION_UID,
+  )
+    ? collections
+    : [
+        {
+          collection_uid: DEFAULT_COLLECTION_UID,
+          name: 'Main Collection',
+          cards: 0,
+        } as CollectionRow,
+        ...collections,
+      ];
+  const targetName =
+    shelves.find((c) => c.collection_uid === target)?.name ?? 'Main Collection';
 
   return (
     <View style={styles.screen}>
@@ -207,7 +255,7 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
       ) : null}
 
       <View style={styles.header}>
-        <Text style={styles.target}>Scanning into {collectionName}</Text>
+        <Text style={styles.target}>Scanning into {targetName}</Text>
         <Pressable
           style={[styles.chip, auto && styles.chipOn]}
           onPress={() => {
@@ -227,6 +275,19 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
         </Pressable>
       </View>
 
+      <CollectionBar
+        collections={shelves}
+        selected={target}
+        onSelect={chooseTarget}
+        onCreate={async (name) => {
+          const uid = await state.newCollection(name);
+          await loadCollections();
+          return uid;
+        }}
+        showCounts={false}
+      />
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
+
       <View style={styles.cameraBox}>
         <CameraGate purpose="Scanning a card means taking a picture of it. Pictures are read and discarded — none are kept.">
           <CameraView
@@ -238,14 +299,6 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
             autofocus={settings.autofocus}
             animateShutter={false}
           />
-          <Pressable
-            style={styles.gear}
-            onPress={() => setShowSettings((open) => !open)}
-          >
-            <Text style={styles.gearText}>
-              {showSettings ? 'Hide camera' : 'Camera'}
-            </Text>
-          </Pressable>
           <Pressable
             style={styles.shutter}
             disabled={busy}
@@ -262,60 +315,68 @@ export function ScanScreen({ state, collectionUid, collectionName }: Props) {
 
       <Text style={styles.status}>{status}</Text>
 
+      {/*
+        Always on screen, not behind a button. It was behind one, and the
+        answer that came back was "not seeing zoom options" — a control nobody
+        finds is a control that does not exist. Two rows is the compromise:
+        present, but not the wall of options the web version had.
+      */}
+      <View style={styles.panel}>
+        <View style={styles.settingRow}>
+          <Text style={styles.settingName}>Zoom</Text>
+          <Pressable
+            style={styles.step}
+            onPress={() => change({ zoom: stepZoom(settings.zoom, -1) })}
+          >
+            <Text style={styles.stepText}>-</Text>
+          </Pressable>
+          <View style={styles.track}>
+            <View style={[styles.fill, { width: `${settings.zoom * 100}%` }]} />
+          </View>
+          <Pressable
+            style={styles.step}
+            onPress={() => change({ zoom: stepZoom(settings.zoom, 1) })}
+          >
+            <Text style={styles.stepText}>+</Text>
+          </Pressable>
+          <Text style={styles.settingValue}>{zoomLabel(settings.zoom)}</Text>
+        </View>
+
+        <View style={styles.settingRow}>
+          <Pressable
+            style={[styles.toggle, settings.torch && styles.toggleOn]}
+            onPress={() => change({ torch: !settings.torch })}
+          >
+            <Text style={styles.toggleText}>
+              {settings.torch ? 'Torch on' : 'Torch off'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.toggle,
+              settings.autofocus === 'off' && styles.toggleOn,
+            ]}
+            onPress={() =>
+              change({
+                autofocus: settings.autofocus === 'on' ? 'off' : 'on',
+              })
+            }
+          >
+            <Text style={styles.toggleText}>
+              {settings.autofocus === 'on' ? 'Focus: auto' : 'Focus: locked'}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={styles.toggle}
+            onPress={() => setShowSettings((open) => !open)}
+          >
+            <Text style={styles.toggleText}>{showSettings ? 'Hide' : 'Help'}</Text>
+          </Pressable>
+        </View>
+      </View>
+
       {showSettings ? (
         <View style={styles.panel}>
-          <View style={styles.settingRow}>
-            <Text style={styles.settingName}>Zoom</Text>
-            <Pressable
-              style={styles.step}
-              onPress={() => change({ zoom: stepZoom(settings.zoom, -1) })}
-            >
-              <Text style={styles.stepText}>-</Text>
-            </Pressable>
-            <View style={styles.track}>
-              <View
-                style={[styles.fill, { width: `${settings.zoom * 100}%` }]}
-              />
-            </View>
-            <Pressable
-              style={styles.step}
-              onPress={() => change({ zoom: stepZoom(settings.zoom, 1) })}
-            >
-              <Text style={styles.stepText}>+</Text>
-            </Pressable>
-            <Text style={styles.settingValue}>{zoomLabel(settings.zoom)}</Text>
-          </View>
-
-          <View style={styles.settingRow}>
-            <Text style={styles.settingName}>Light</Text>
-            <Pressable
-              style={[styles.toggle, settings.torch && styles.toggleOn]}
-              onPress={() => change({ torch: !settings.torch })}
-            >
-              <Text style={styles.toggleText}>
-                {settings.torch ? 'Torch on' : 'Torch off'}
-              </Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.settingRow}>
-            <Text style={styles.settingName}>Focus</Text>
-            <Pressable
-              style={[
-                styles.toggle,
-                settings.autofocus === 'off' && styles.toggleOn,
-              ]}
-              onPress={() =>
-                change({
-                  autofocus: settings.autofocus === 'on' ? 'off' : 'on',
-                })
-              }
-            >
-              <Text style={styles.toggleText}>
-                {settings.autofocus === 'on' ? 'Auto' : 'Locked'}
-              </Text>
-            </Pressable>
-          </View>
 
           <Text style={styles.hint}>
             Zoom is the lens control. Android gives no way to ask for the
@@ -439,6 +500,7 @@ const styles = StyleSheet.create({
   toggleOn: { backgroundColor: '#2d3142' },
   toggleText: { color: '#e4e6eb', fontSize: 13 },
   hint: { color: '#8a8f9c', fontSize: 12, lineHeight: 18 },
+  problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
   picker: { maxHeight: 260 },
   candidate: {
     borderColor: '#2d3142',

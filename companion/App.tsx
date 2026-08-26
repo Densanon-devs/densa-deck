@@ -33,7 +33,7 @@ import { DeckStore } from './src/lib/decks.ts';
 import { deviceId, loadPairing, savePairing } from './src/lib/pairing.ts';
 import { openDeviceDatabase } from './src/lib/sqlite.ts';
 import { uuid } from './src/lib/uuid.ts';
-import { DEFAULT_COLLECTION_UID, LocalStore } from './src/lib/store.ts';
+import { LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
 import { ConnectionScreen } from './src/screens/Connection.tsx';
@@ -244,11 +244,7 @@ function Shell() {
         ) : null}
 
         {phase.kind === 'ready' && !showConnection && tab === 'scan' ? (
-          <ScanScreen
-            state={phase.state}
-            collectionUid={DEFAULT_COLLECTION_UID}
-            collectionName="Main Collection"
-          />
+          <ScanScreen state={phase.state} />
         ) : null}
       </View>
       </ErrorBoundary>

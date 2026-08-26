@@ -23,7 +23,7 @@ import type {
 } from './protocol.ts';
 import { wishlistFromDecks } from './decks.ts';
 import type { Deck, WishlistRow } from './decks.ts';
-import { LocalStore } from './store.ts';
+import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
 import { SyncEngine } from './sync.ts';
 
 export type Connection = 'connected' | 'offline' | 'unpaired' | 'unknown';
@@ -36,6 +36,7 @@ export interface AppSnapshot {
 }
 
 const LAST_SYNC_KEY = 'sync.last_at';
+const SCAN_TARGET_KEY = 'scan.collection_uid';
 
 export class AppState {
   private store: LocalStore;
@@ -110,6 +111,28 @@ export class AppState {
 
   async rememberCameraSettings(settings: CameraSettings): Promise<void> {
     await saveCameraSettings(this.store, settings);
+  }
+
+  /**
+   * Which collection the scanner files into.
+   *
+   * Kept, because a scanning session is one shelf at a time — a target that
+   * reset to the default whenever the tab changed would quietly scatter half
+   * a box into the wrong place.
+   */
+  async scanTarget(): Promise<string> {
+    const stored = await this.store.getMeta(SCAN_TARGET_KEY);
+    if (!stored) return DEFAULT_COLLECTION_UID;
+    // A collection deleted on the desktop must not strand the scanner
+    // pointing at something that no longer exists.
+    const known = await this.store.listCollections();
+    return known.some((c) => c.collection_uid === stored)
+      ? stored
+      : DEFAULT_COLLECTION_UID;
+  }
+
+  async rememberScanTarget(uid: string): Promise<void> {
+    await this.store.setMeta(SCAN_TARGET_KEY, uid);
   }
 
   async refreshPending(): Promise<void> {
