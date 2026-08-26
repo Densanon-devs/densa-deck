@@ -551,6 +551,9 @@ class PhoneBridge:
             return _unwrap(api.get_overlaps(
                 int(payload.get("min_collections", 2) or 2)))
 
+        if route == "cards/sets":
+            return _unwrap(api.list_sets())
+
         if route == "cards/detail":
             return _unwrap(api.get_card_detail(
                 payload.get("printing_id", ""),

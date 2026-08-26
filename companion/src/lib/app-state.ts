@@ -17,6 +17,7 @@ import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
   CardDetail,
+  CatalogueSet,
   OverlapsReply,
   CardQuery,
   CardSearchReply,
@@ -260,6 +261,11 @@ export class AppState {
    * through here — that is a Scryfall URL the phone loads directly — so this
    * failing costs the rules text and nothing else.
    */
+  /** Every set in the catalogue, newest first. Needs the desktop. */
+  async sets(): Promise<{ sets: CatalogueSet[] }> {
+    return this.client.call<{ sets: CatalogueSet[] }>('cards/sets', {});
+  }
+
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {
     return this.client.call<CardDetail>('cards/detail', {
       printing_id: printingId,

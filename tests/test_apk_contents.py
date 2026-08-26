@@ -39,6 +39,7 @@ SCREENS = {
     "deck editing": "Still needed",
     "card browser": "Browse cards",
     "browser filters": "Only mine",
+    "rules text search": "Rules text",
     "analyst": "Analyse on my PC",
     "wishlist": "part of your collection",
     "scanner": "Point at a card",

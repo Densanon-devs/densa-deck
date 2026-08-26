@@ -432,9 +432,13 @@ class CardDatabase:
         types: list[str] | None = None,
         format_legal: str | None = None,
         rarity: str | None = None,
+        rarities: list[str] | None = None,
         max_price: float | None = None,
         ownership: str | None = None,
         set_code: str | None = None,
+        set_codes: list[str] | None = None,
+        text: str | None = None,
+        sort: str = "name",
         limit: int = 60,
         offset: int = 0,
     ) -> tuple[list[Card], int]:
@@ -487,13 +491,37 @@ class CardDatabase:
             conditions.append("cmc <= ?")
             params.append(float(cmc_max))
 
+        # One set, or several. Picking two sets means "either", the way
+        # every other multi-select here behaves — a card cannot be in two
+        # sets at once, so an AND would return nothing and look broken.
+        wanted_sets = [s.strip().lower() for s in (set_codes or []) if s and s.strip()]
         if set_code and set_code.strip():
-            conditions.append("set_code = ? COLLATE NOCASE")
-            params.append(set_code.strip().lower())
+            wanted_sets.append(set_code.strip().lower())
+        if wanted_sets:
+            marks = ",".join("?" for _ in wanted_sets)
+            conditions.append(f"LOWER(set_code) IN ({marks})")
+            params.extend(wanted_sets)
 
+        wanted_rarities = [r.strip().lower() for r in (rarities or []) if r and r.strip()]
         if rarity and rarity.strip():
-            conditions.append("rarity = ? COLLATE NOCASE")
-            params.append(rarity.strip().lower())
+            wanted_rarities.append(rarity.strip().lower())
+        if wanted_rarities:
+            marks = ",".join("?" for _ in wanted_rarities)
+            conditions.append(f"LOWER(rarity) IN ({marks})")
+            params.extend(wanted_rarities)
+
+        # Rules text. "deathtouch" should find every card that has it, which
+        # is a different question from every card CALLED deathtouch — so this
+        # is its own filter rather than folded into `name`, and it searches
+        # the oracle text and the keyword list together. A keyword is often
+        # only in `keywords` and never spelled out in the rules box.
+        if text and text.strip():
+            needle = f"%{text.strip()}%"
+            conditions.append(
+                "(oracle_text LIKE ? COLLATE NOCASE"
+                " OR keywords LIKE ? COLLATE NOCASE"
+                " OR type_line LIKE ? COLLATE NOCASE)")
+            params.extend([needle, needle, needle])
 
         if max_price is not None:
             # Cards with NULL price are kept — we treat "unknown" as
@@ -596,11 +624,29 @@ class CardDatabase:
         ).fetchone()
         total = int(total_row[0]) if total_row else 0
 
-        # Results — sorted by name so pagination is stable and the user
-        # sees the same ordering on repeat queries.
+        # Name is the default because pagination has to be stable and it is
+        # the only field guaranteed unique. Every other sort therefore falls
+        # back to it, or two cards of the same cost would swap places between
+        # pages and one of them would never be seen.
+        #
+        # Rarity sorts by scarcity rather than alphabetically: "common,
+        # mythic, rare, uncommon" is the alphabetical order and is useless.
+        orderings = {
+            "name": "name COLLATE NOCASE",
+            "cmc": "cmc ASC, name COLLATE NOCASE",
+            "cmc_desc": "cmc DESC, name COLLATE NOCASE",
+            "rarity": (
+                "CASE LOWER(rarity) WHEN 'mythic' THEN 0 WHEN 'rare' THEN 1"
+                " WHEN 'uncommon' THEN 2 WHEN 'common' THEN 3 ELSE 4 END,"
+                " name COLLATE NOCASE"
+            ),
+            "price": "COALESCE(price_usd, 0) DESC, name COLLATE NOCASE",
+        }
+        order_by = orderings.get((sort or "name").lower(), orderings["name"])
+
         page_rows = conn.execute(
             f"""SELECT data_json FROM cards {where_clause}
-                ORDER BY name COLLATE NOCASE
+                ORDER BY {order_by}
                 LIMIT ? OFFSET ?""",
             params + [int(limit), int(offset)],
         ).fetchall()

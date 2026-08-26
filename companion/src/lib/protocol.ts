@@ -212,6 +212,12 @@ export interface CardQuery extends Record<string, unknown> {
   rarity?: string;
   max_price?: number;
   set_code?: string;
+  /** Any of these sets. A card cannot be in two, so picking two means "either". */
+  set_codes?: string[];
+  rarities?: string[];
+  /** Rules text, keywords and type line — "deathtouch" finds every card with it. */
+  text?: string;
+  sort?: 'name' | 'cmc' | 'cmc_desc' | 'rarity' | 'price';
   /** Omit for the whole catalogue. */
   ownership?: 'owned' | 'unowned';
   limit?: number;
@@ -276,4 +282,9 @@ export interface OverlapCard {
 export interface OverlapsReply {
   cards: OverlapCard[];
   overcommitted: number;
+}
+
+export interface CatalogueSet {
+  set_code: string;
+  cards: number;
 }

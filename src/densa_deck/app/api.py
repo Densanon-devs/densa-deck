@@ -1174,8 +1174,12 @@ class AppApi:
             types=query.get("types"),
             format_legal=query.get("format_legal"),
             rarity=query.get("rarity"),
+            rarities=query.get("rarities"),
             max_price=query.get("max_price"),
             set_code=query.get("set_code"),
+            set_codes=query.get("set_codes"),
+            text=query.get("text"),
+            sort=query.get("sort") or "name",
             ownership=ownership,
             limit=limit,
             offset=offset,
@@ -1300,6 +1304,22 @@ class AppApi:
             "cards": rows,
             "overcommitted": sum(1 for r in rows if r["overcommitted"]),
         }
+
+    @_safe
+    def list_sets(self, limit: int = 400) -> dict:
+        """Every set in the catalogue, newest first.
+
+        Newest first because that is what people are opening and sorting
+        alphabetically would bury this year's under three decades of others.
+        """
+        db = self._get_db()
+        conn = db.connect()
+        rows = conn.execute(
+                """SELECT set_code, COUNT(*) AS n
+                     FROM cards WHERE set_code != ''
+                    GROUP BY set_code ORDER BY MAX(rowid) DESC LIMIT ?""",
+            (int(limit),)).fetchall()
+        return {"sets": [{"set_code": r[0], "cards": r[1]} for r in rows]}
 
     @_safe
     def get_card_detail(self, printing_id: str = "", card_name: str = "") -> dict:
