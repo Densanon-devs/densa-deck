@@ -24,6 +24,7 @@ import { artQueue, artSource, cardImageUrl } from '../lib/images.ts';
 import { ArtWarmer } from './ArtWarmer.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
+import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
 
 interface Props {
@@ -44,6 +45,10 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   // hundreds of rows each carrying three buttons is unusable.
   const [open, setOpen] = useState('');
   const [caching, setCaching] = useState('');
+  // A true delete is never one tap. Viewing a filtered list and tapping
+  // "Remove" destroyed the card instead of taking it out of the list,
+  // which is precisely what a filter must not be able to do.
+  const [confirmDelete, setConfirmDelete] = useState('');
   const [warming, setWarming] = useState<string[]>([]);
 
   const load = useCallback(async () => {
@@ -107,6 +112,25 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
     setCaching(`Saving art 0/${queue.length}`);
     setWarming(queue);
   }, [state]);
+
+  /**
+   * Take a card out of the list being viewed, leaving the card alone.
+   *
+   * The thing people mean when they are looking at "Test scans" and want a
+   * card gone from it. Deleting the card is a separate action, and it is the
+   * one that used to happen by accident.
+   */
+  const takeOutOfList = useCallback(
+    async (row: StackRow) => {
+      if (!chosen || chosen === DEFAULT_COLLECTION_UID) return;
+      if (row.collection_uid === chosen) return;
+      setProblem('');
+      await state.setListMembership(row, chosen, false);
+      setOpen('');
+      await load();
+    },
+    [state, chosen, load],
+  );
 
   const syncNow = useCallback(async () => {
     setBusy(true);
@@ -235,16 +259,60 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                   <Text style={styles.editText}>+1</Text>
                 </Pressable>
                 <View style={styles.grow} />
-                <Pressable
-                  style={[styles.editButton, styles.removeButton]}
-                  onPress={() => void adjust(item, -item.quantity)}
-                >
-                  <Text style={styles.removeText}>
-                    {item.quantity > 1
-                      ? `Remove all ${item.quantity}`
-                      : 'Remove it'}
-                  </Text>
-                </Pressable>
+                {/*
+                  Taking a card out of the list you are looking at is the
+                  thing people mean, and it is reversible. Destroying it is a
+                  different action and now says so.
+                */}
+                {/*
+                  Only when membership is what puts it here. A card FILED in
+                  this collection is at home in it, and removing a membership
+                  row it does not have would be a button that silently does
+                  nothing — worse than not offering it.
+                */}
+                {chosen &&
+                chosen !== DEFAULT_COLLECTION_UID &&
+                item.collection_uid !== chosen ? (
+                  <Pressable
+                    style={styles.editButton}
+                    onPress={() =>
+                      void takeOutOfList(item).catch(
+                        reporting('taking it out of the list', setProblem),
+                      )
+                    }
+                  >
+                    <Text style={styles.editText}>Take out of list</Text>
+                  </Pressable>
+                ) : null}
+
+                {confirmDelete === item.stack_key ? (
+                  <>
+                    <Pressable
+                      style={[styles.editButton, styles.removeButton]}
+                      onPress={() => {
+                        setConfirmDelete('');
+                        void adjust(item, -item.quantity);
+                      }}
+                    >
+                      <Text style={styles.removeText}>
+                        Yes, delete {item.quantity > 1 ? `all ${item.quantity}` : 'it'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.editButton}
+                      onPress={() => setConfirmDelete('')}
+                    >
+                      <Text style={styles.editText}>Keep</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <Pressable
+                    style={[styles.editButton, styles.removeButton]}
+                    onPress={() => setConfirmDelete(item.stack_key)}
+                  >
+                    <Text style={styles.removeText}>Delete card</Text>
+                  </Pressable>
+                )}
                 <Pressable
                   style={styles.editButton}
                   onPress={() => onOpenCard?.(item)}
