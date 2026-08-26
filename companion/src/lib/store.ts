@@ -367,11 +367,19 @@ export class LocalStore {
   }
 
   async listCollections(): Promise<CollectionRow[]> {
+    // Counts membership as well as filing, because that is what the list
+    // itself shows. Counting only `stacks.collection_uid` meant ticking a
+    // card into a collection changed the list and not the number beside it,
+    // which reads as the tick not having worked.
     return this.db.all<CollectionRow>(
-      `SELECT c.*, COALESCE(SUM(s.quantity), 0) AS cards
+      `SELECT c.*, (
+         SELECT COALESCE(SUM(s.quantity), 0) FROM stacks s
+          WHERE s.quantity > 0
+            AND (s.collection_uid = c.collection_uid
+                 OR s.stack_key IN (SELECT stack_key FROM stack_collections
+                                     WHERE collection_uid = c.collection_uid))
+       ) AS cards
        FROM collections c
-       LEFT JOIN stacks s ON s.collection_uid = c.collection_uid
-       GROUP BY c.collection_uid
        ORDER BY c.is_default DESC, c.name`,
     );
   }

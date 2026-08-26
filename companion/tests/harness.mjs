@@ -168,6 +168,10 @@ export class MemoryDatabase {
     if (/FROM stacks/i.test(text) && /SELECT \*/i.test(text)) {
       return this._selectStacks(text, params);
     }
+    // Checked BEFORE the membership branch: the collection query mentions
+    // stack_collections in a subquery, and dispatching on substrings means
+    // whichever test runs first wins. It cost a green suite once.
+    if (/FROM collections c/i.test(text)) return this._selectCollections();
     // Collections are filters: a stack can be in several lists at once, so
     // the fake engine has to answer the membership queries too or every test
     // about lists asserts against a store that cannot store them.
@@ -181,7 +185,6 @@ export class MemoryDatabase {
       }
       return [...rows];
     }
-    if (/FROM collections c/i.test(text)) return this._selectCollections();
     if (/FROM sync_events/i.test(text)) return this._selectEvents(text, params);
     if (/FROM decks/i.test(text)) {
       return [...this._table('decks')].sort((a, b) =>
@@ -219,6 +222,31 @@ export class MemoryDatabase {
   }
 
   _selectCollections() {
+    // Counts membership as well as filing, mirroring the real query: a card
+    // ticked into a list counts toward it even though it is filed elsewhere.
+    const members = this._table('stack_collections');
+    const stacks = this._table('stacks').filter((r) => r.quantity > 0);
+    return [...this._table('collections')]
+      .sort((a, b) =>
+        (b.is_default ? 1 : 0) - (a.is_default ? 1 : 0) ||
+        String(a.name).localeCompare(String(b.name)),
+      )
+      .map((c) => {
+        const keys = new Set(
+          members
+            .filter((m) => m.collection_uid === c.collection_uid)
+            .map((m) => m.stack_key),
+        );
+        const cards = stacks
+          .filter(
+            (s) => s.collection_uid === c.collection_uid || keys.has(s.stack_key),
+          )
+          .reduce((n, s) => n + s.quantity, 0);
+        return { ...c, cards };
+      });
+  }
+
+  _selectCollectionsLegacy() {
     const stacks = this._table('stacks');
     return this._table('collections')
       .map((c) => ({

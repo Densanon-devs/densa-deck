@@ -618,6 +618,43 @@ def identify_card(text: str, card_db, *, name_hint: str = "") -> ScanResult:
             identity.name = option
             printings = found
             break
+    # A card whose printed name is one FACE of a two-part card.
+    #
+    # Scryfall stores an adventure, split or transforming card under both
+    # halves joined by `//` — "Velvetwing Butterflies // Gaze in Wonder" — but
+    # the name printed at the top of the card, and therefore the only one OCR
+    # can read, is the front face alone. `printings_for_card` matches the
+    # stored name and finds nothing; `lookup_by_name` already knows how to
+    # resolve a face, and this is simply asking it.
+    #
+    # 835 cards in the catalogue have a `//` name. Every one of them was
+    # unscannable, which is most of "some cards aren't scanning".
+    #
+    # Exact resolution, not fuzzy: a face name is the card's real name, so
+    # this is as trustworthy as matching the whole thing and stays eligible
+    # for auto-add.
+    if not printings:
+        # Every line, not only the ones the name heuristic liked.
+        #
+        # `_candidate_names` is tuned to avoid mistaking rules text for a
+        # name, and it discards plenty that IS one — measured against the
+        # catalogue, it rejects "Flaxen Intruder" and "Tithing Blade"
+        # outright. That is the right trade for a fuzzy match, where a bad
+        # candidate becomes a wrong card. It is the wrong trade here, because
+        # what follows is an EXACT catalogue lookup: a line that resolves to a
+        # real card is a real card, and a line that does not costs nothing.
+        lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+        for option in [*name_options, *lines]:
+            if not option:
+                continue
+            resolved = card_db.lookup_by_name(option)
+            if resolved and resolved.name != option:
+                found = card_db.printings_for_card(resolved.name)
+                if found:
+                    identity.name = resolved.name
+                    printings = found
+                    break
+
     if not printings:
         for option in name_options:
             match = _fuzzy_card_name(option, card_db)

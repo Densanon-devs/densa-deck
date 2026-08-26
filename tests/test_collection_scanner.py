@@ -22,6 +22,7 @@ from densa_deck.collection.scanner import (
     parse_card_footer,
 )
 from densa_deck.data.database import CardDatabase, printing_row_from_scryfall
+from densa_deck.models import Card, CardLayout
 
 SKITH_SOM = "skith-som"
 SKITH_MUL = "skith-mul"
@@ -600,3 +601,65 @@ class TestMultiplesAndUndo:
         session.undo_copy(printing["printing_id"], "nonfoil")
         assert session.unpriced == 0
         assert session.value_usd == 0.0
+
+
+class TestTwoPartCards:
+    """Adventures, splits and transforming cards.
+
+    Scryfall stores these under both halves joined by `//` —
+    "Velvetwing Butterflies // Gaze in Wonder" — but the name printed at the
+    top of the card, and therefore the only one OCR can read, is the front
+    face alone. `printings_for_card` matches the stored name and finds
+    nothing.
+
+    835 cards in this catalogue have a `//` name. Every one of them was
+    unscannable, which is most of "some cards aren't scanning".
+    """
+
+    @staticmethod
+    def _adventure(db):
+        """The printing AND the oracle card.
+
+        `lookup_by_name` reads the `cards` table — that is where the face
+        names live — so a fixture with printings alone cannot exercise this.
+        """
+        db.upsert_printings([
+            printing_row_from_scryfall(
+                _raw("hob-30", "Velvetwing Butterflies // Gaze in Wonder",
+                     "hob", "30", oracle="o-vb"), "t")])
+        db.upsert_cards([
+            Card(scryfall_id="hob-30", oracle_id="o-vb",
+                 name="Velvetwing Butterflies // Gaze in Wonder",
+                 layout=CardLayout.ADVENTURE, cmc=3, mana_cost="{2}{G}",
+                 type_line="Creature — Insect", color_identity=["G"])])
+
+    def test_a_face_name_finds_the_card(self, db):
+        self._adventure(db)
+        result = identify_card("Velvetwing Butterflies", db)
+        assert result.best is not None
+        assert result.best["name"].startswith("Velvetwing Butterflies")
+
+    def test_it_is_trusted_enough_to_file(self, db):
+        """A face name IS the card's real name, so this is as good as
+        matching the whole thing — not a fuzzy guess."""
+        self._adventure(db)
+        assert identify_card("Velvetwing Butterflies", db).auto_addable
+
+    def test_the_real_ocr_text_that_failed(self, db):
+        """Verbatim from the phone, including what OCR made of the reprint
+        of the name in the art box."""
+        self._adventure(db)
+        text = ("Velvetwing Butterflies Velvetwing Buttcrflics 34 . "
+                "may cast the gre la")
+        result = identify_card(text, db)
+        assert result.best["collector_number"] == "30"
+
+    def test_the_whole_name_still_works(self, db):
+        self._adventure(db)
+        result = identify_card("Velvetwing Butterflies // Gaze in Wonder", db)
+        assert result.best["collector_number"] == "30"
+
+    def test_a_name_that_is_nobody_s_face_still_matches_nothing(self, db):
+        """The resolution is exact, so it must not have widened anything."""
+        result = identify_card("Definitely Not A Real Card At All", db)
+        assert not result.auto_addable
