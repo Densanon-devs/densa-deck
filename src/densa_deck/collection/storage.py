@@ -354,6 +354,41 @@ class CollectionStore:
 
     # --------------------------------------------------------- mutation
 
+    def stack_quantity(
+        self,
+        printing_id: str,
+        *,
+        finish: Finish | str = Finish.NONFOIL,
+        condition: Condition | str = Condition.NM,
+        language: str = "en",
+        collection_id: int | None = None,
+    ) -> int:
+        """How many of one exact stack are held, or zero.
+
+        Exists for the first-sync baseline, which has to turn an absolute
+        quantity into the delta that reaches it. Reads the same four-part
+        natural key `add_copies` writes: anything less would set the wrong
+        stack, and a foil is not a nonfoil.
+        """
+        finish = finish.value if isinstance(finish, Finish) else str(finish)
+        condition = (condition.value if isinstance(condition, Condition)
+                     else str(condition))
+        with self._connect() as conn:
+            # `None` means the default collection, exactly as it does for
+            # add_copies. Treating it as a NULL collection_id instead would
+            # read a stack that can never exist — rows are NOT NULL — and
+            # quietly answer zero for cards that are plainly there.
+            collection = (collection_id if collection_id is not None
+                          else self._ensure_default_collection(conn))
+            conn.commit()
+            row = conn.execute(
+                "SELECT quantity FROM collection_items "
+                "WHERE printing_id = ? AND finish = ? AND condition = ? "
+                "AND language = ? AND collection_id = ?",
+                (printing_id, finish, condition, language, collection),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def add_copies(
         self,
         printing_id: str,

@@ -289,10 +289,22 @@ class TestScannerApi:
         assert r["ok"] is False
         assert r["error_type"] == "PrintingsRequired"
 
-    def test_identify_exact_from_footer(self, api_with_printings):
-        d = _data(api_with_printings.scan_identify("0410/0500 U\nCMM \u2022 EN"))
+    def test_identify_exact_from_footer_and_name(self, api_with_printings):
+        """A footer plus the card's own name is what auto-adds now.
+
+        The footer alone used to be enough. One misread digit lands on a
+        different real printing, so the key has to be corroborated \u2014 the whole
+        argument is in test_collection_scanner.py.
+        """
+        d = _data(api_with_printings.scan_identify(
+            "Sol Ring\n0410/0500 U\nCMM \u2022 EN"))
         assert d["confidence"] == "exact"
         assert d["auto_addable"] is True
+        assert d["candidates"][0]["printing_id"] == CMM
+
+    def test_identify_footer_alone_offers_without_filing(self, api_with_printings):
+        d = _data(api_with_printings.scan_identify("0410/0500 U\nCMM \u2022 EN"))
+        assert d["auto_addable"] is False
         assert d["candidates"][0]["printing_id"] == CMM
 
     def test_identify_ambiguous_by_name(self, api_with_printings):

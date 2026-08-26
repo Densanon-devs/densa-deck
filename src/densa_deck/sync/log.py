@@ -39,6 +39,9 @@ DEVICE_ID_FILE = Path.home() / ".densa-deck" / "device.json"
 # over the wire to a TypeScript client, and an unknown kind from a newer peer
 # must be storable and forwardable rather than a parse error.
 KIND_STACK_DELTA = "stack-delta"
+# Absolute, and used ONLY for the first-sync baseline. See
+# SyncApplier._apply_stack_set for why it is confined to that.
+KIND_STACK_SET = "stack-set"
 KIND_COLLECTION_UPSERT = "collection-upsert"
 KIND_COLLECTION_DELETE = "collection-delete"
 KIND_DECK_UPSERT = "deck-upsert"

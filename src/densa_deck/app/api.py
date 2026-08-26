@@ -3187,6 +3187,33 @@ class AppApi:
         exchange.
         """
         sync = self._get_sync()
+
+        # A device that has never synced gets the collection as it stands, not
+        # a replay of the log.
+        #
+        # The log only holds what has happened SINCE logging existed. This
+        # installation had ten stacks and five events — the other five predate
+        # it — so a phone replaying from zero could never learn about half the
+        # collection, and no amount of syncing would ever fix it. That is not
+        # a transport failure: those cards are simply not in the stream.
+        #
+        # The baseline is absolute (`stack-set`) rather than a pile of deltas,
+        # and it REPLACES the log for this exchange rather than preceding it.
+        # Sending both would double every card that does have events, since
+        # the current quantities already include them.
+        if int(since) <= 0:
+            events, cursor = self._sync_baseline(sync)
+            if peer:
+                sync.log.set_peer_cursor(peer, 0)
+            return {
+                "events": events,
+                "cursor": cursor,
+                "head": cursor,
+                "device": sync.log.device,
+                "baseline": True,
+                "more": False,
+            }
+
         events, cursor = sync.log.since(int(since), limit=int(limit),
                                         exclude_device=peer or "")
         if peer:
@@ -3200,6 +3227,78 @@ class AppApi:
             # so a large backlog does not need guessing at.
             "more": cursor < sync.log.head(),
         }
+
+    def _sync_baseline(self, sync) -> tuple[list[dict], int]:
+        """The whole collection as events, for a device starting from nothing.
+
+        Every uid is derived from the stack itself and the log head it was
+        taken at, so a phone that asks twice gets byte-identical events and
+        the second set is recognised as duplicates. A random uid here would
+        double the collection on any retried first sync — and a first sync is
+        exactly when a connection is most likely to be interrupted.
+        """
+        from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
+        from densa_deck.sync.log import (
+            KIND_COLLECTION_UPSERT,
+            KIND_STACK_SET,
+            SyncEvent,
+        )
+
+        store = self._get_collection_store()
+        head = sync.log.head()
+        device = sync.log.device
+        events: list[dict] = []
+
+        # Collections first: a stack naming a collection that does not exist
+        # yet would be filed as unsorted on the far side.
+        for collection in store.list_collections():
+            uid = collection.get("collection_uid") or ""
+            if not uid:
+                continue
+            events.append(SyncEvent(
+                event_uid=f"baseline-{head}-collection-{uid}",
+                device=device,
+                kind=KIND_COLLECTION_UPSERT,
+                payload={
+                    "collection_uid": uid,
+                    "name": collection.get("name", "Collection"),
+                    "kind": collection.get("kind", "collection"),
+                    "notes": collection.get("notes", ""),
+                },
+            ).to_dict())
+
+        # One lookup per collection rather than one per stack.
+        uid_of = {c["collection_id"]: c.get("collection_uid", "")
+                  for c in store.list_collections()}
+
+        items, _ = store.list_items(limit=100000)
+        for item in items:
+            if item.quantity <= 0:
+                continue
+            collection_uid = uid_of.get(
+                getattr(item, "collection_id", None), "") or DEFAULT_COLLECTION_UID
+            uid = "-".join([
+                f"baseline-{head}-stack", item.printing_id, item.finish,
+                item.condition, item.language, collection_uid,
+            ])
+            events.append(SyncEvent(
+                event_uid=uid,
+                device=device,
+                kind=KIND_STACK_SET,
+                payload={
+                    "printing_id": item.printing_id,
+                    "card_name": item.card_name,
+                    "oracle_id": item.oracle_id,
+                    "finish": item.finish,
+                    "condition": item.condition,
+                    "language": item.language,
+                    "location": item.location,
+                    "collection_uid": collection_uid,
+                    "quantity": int(item.quantity),
+                },
+            ).to_dict())
+
+        return events, head
 
     @_safe
     def sync_push(self, events: list | None = None, peer: str = "",

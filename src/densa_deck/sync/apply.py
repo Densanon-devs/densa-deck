@@ -25,6 +25,7 @@ from densa_deck.sync.log import (
     KIND_DECK_DELETE,
     KIND_DECK_UPSERT,
     KIND_STACK_DELTA,
+    KIND_STACK_SET,
     SyncEvent,
     SyncLog,
 )
@@ -73,6 +74,7 @@ class SyncApplier:
 
         handler = {
             KIND_STACK_DELTA: self._apply_stack_delta,
+            KIND_STACK_SET: self._apply_stack_set,
             KIND_COLLECTION_UPSERT: self._apply_collection_upsert,
             KIND_COLLECTION_DELETE: self._apply_collection_delete,
             KIND_DECK_UPSERT: self._apply_deck_upsert,
@@ -125,6 +127,45 @@ class SyncApplier:
             location=p.get("location", ""),
             collection_id=collection_id,
             reason=p.get("reason", "sync"),
+        )
+        return {"applied": True, "kind": event.kind, "delta": delta}
+
+    def _apply_stack_set(self, event: SyncEvent) -> dict:
+        """Set a stack to an absolute quantity, rather than nudging it.
+
+        Only ever used for the first-sync baseline, and it has to be absolute:
+        a phone that has just been paired must end up agreeing with the
+        desktop exactly, and a pile of deltas whose starting point nobody
+        recorded cannot promise that.
+
+        Everything else in this system is a delta on purpose — two devices
+        editing the same stack offline both keep their change. An absolute set
+        is the one operation that CANNOT commute, which is why it is confined
+        to the moment a device has no state at all to conflict with.
+        """
+        p = event.payload
+        target = int(p.get("quantity") or 0)
+        collection_id = self._collection_for(p.get("collection_uid", ""))
+        current = self.store.stack_quantity(
+            p.get("printing_id", ""),
+            finish=p.get("finish", "nonfoil"),
+            condition=p.get("condition", "NM"),
+            language=p.get("language", "en"),
+            collection_id=collection_id,
+        )
+        delta = target - current
+        if not delta:
+            return {"applied": True, "kind": event.kind, "delta": 0}
+        self.store.add_copies(
+            p.get("printing_id", ""), p.get("card_name", "") or "Unknown card",
+            quantity=delta,
+            oracle_id=p.get("oracle_id", ""),
+            finish=p.get("finish", "nonfoil"),
+            condition=p.get("condition", "NM"),
+            language=p.get("language", "en"),
+            location=p.get("location", ""),
+            collection_id=collection_id,
+            reason="baseline",
         )
         return {"applied": True, "kind": event.kind, "delta": delta}
 

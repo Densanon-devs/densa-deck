@@ -114,10 +114,36 @@ class TestFooterParsing:
 
 
 class TestExactIdentification:
-    def test_set_and_number_gives_exact(self, db):
+    def test_set_and_number_finds_the_printing(self, db):
         r = identify_card("0079/0249 M\nSOM • EN", db)
+        assert r.best["printing_id"] == SKITH_SOM
+
+    def test_a_footer_nobody_confirmed_is_offered_not_filed(self, db):
+        """A key on its own is a guess, however specific it looks.
+
+        One misread digit lands on a different real printing, usually in the
+        same set. The name veto cannot catch that — it only fires when a name
+        was read AND resolves in the catalogue — so when the name is
+        unreadable (foil, glare, a crop that clipped it) there is nothing
+        contradicting a wrong key and it used to file silently.
+
+        The printing is still first in the list. It costs one tap, and the
+        alternative is a card in your inventory you have no reason to check.
+        """
+        r = identify_card("0079/0249 M\nSOM • EN", db)
+        assert not r.auto_addable
+        assert r.best["printing_id"] == SKITH_SOM
+
+    def test_the_same_footer_with_the_name_on_it_does_auto_add(self, db):
+        """The corroboration this asks for is the card saying its own name."""
+        r = identify_card("Skithiryx, the Blight Dragon\n0079/0249 M\nSOM • EN", db)
         assert r.confidence == CONFIDENCE_EXACT
         assert r.best["printing_id"] == SKITH_SOM
+        assert r.auto_addable
+
+    def test_a_clipped_name_still_corroborates(self, db):
+        """OCR routinely loses the tail of a long name; that is not doubt."""
+        r = identify_card("Skithiryx, the Blight Drag\n0079/0249 M\nSOM • EN", db)
         assert r.auto_addable
 
     def test_exact_beats_name_ambiguity(self, db):
@@ -483,7 +509,7 @@ class TestSetCodeCapitalisation:
         db.upsert_printings([
             printing_row_from_scryfall(
                 _raw("dtk-95", "Death Wind", "dtk", "95", oracle="o-d"), "t")])
-        result = identify_card("095/264 u DtKtEN", db)
+        result = identify_card("Death Wind\n095/264 u DtKtEN", db)
         assert result.confidence == CONFIDENCE_EXACT
         assert result.best["set_code"] == "dtk"
 

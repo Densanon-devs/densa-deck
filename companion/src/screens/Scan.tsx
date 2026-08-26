@@ -82,6 +82,13 @@ export function ScanScreen({ state }: Props) {
   // nameable.
   const [target, setTarget] = useState(DEFAULT_COLLECTION_UID);
   const [problem, setProblem] = useState('');
+  // The green flash is gone in under a second. What was filed has to stay on
+  // screen afterwards, because a wrong card is not always obvious in the
+  // moment and the alternative is finding it weeks later in the collection.
+  const [lastAdded, setLastAdded] = useState<{
+    candidate: ScanCandidate;
+    finish: string;
+  } | null>(null);
 
   const guard = useRef(new RepeatGuard());
   const scanner = useRef(new AutoScanner());
@@ -140,11 +147,35 @@ export function ScanScreen({ state }: Props) {
         collection_uid: target,
       });
       setFlash({ name: candidate.name, copy });
+      setLastAdded({ candidate, finish });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
     [state, target],
   );
+
+  /** Put back a card that should not have gone in. */
+  const undoLast = useCallback(async () => {
+    if (!lastAdded) return;
+    setProblem('');
+    try {
+      await state.addCard({
+        printing_id: lastAdded.candidate.printing_id,
+        card_name: lastAdded.candidate.name,
+        finish: lastAdded.finish,
+        collection_uid: target,
+        quantity: -1,
+      });
+      // The repeat guard held this card off for four seconds so it would not
+      // go in twice. Having just taken it out, that hold is wrong: the next
+      // frame is probably the same card being scanned again on purpose.
+      guard.current.reset();
+      setStatus(`Took ${lastAdded.candidate.name} back out`);
+      setLastAdded(null);
+    } catch (err) {
+      setProblem(recordCrash(err, 'undoing', false).message);
+    }
+  }, [lastAdded, state, target]);
 
   const handlePhoto = useCallback(
     async (base64: string) => {
@@ -324,6 +355,23 @@ export function ScanScreen({ state }: Props) {
       </View>
 
       <Text style={styles.status}>{status}</Text>
+
+      {lastAdded ? (
+        <View style={styles.undoRow}>
+          <Text style={styles.undoText} numberOfLines={1}>
+            Filed {lastAdded.candidate.name} ({lastAdded.candidate.set_code.toUpperCase()}{' '}
+            #{lastAdded.candidate.collector_number})
+          </Text>
+          <Pressable
+            style={styles.undoButton}
+            onPress={() => {
+              void undoLast();
+            }}
+          >
+            <Text style={styles.undoButtonText}>Wrong? Undo</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {/*
         Always on screen, not behind a button. It was behind one, and the
@@ -549,6 +597,25 @@ const styles = StyleSheet.create({
   toggleText: { color: '#e4e6eb', fontSize: 13 },
   hint: { color: '#8a8f9c', fontSize: 12, lineHeight: 18 },
   problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
+  undoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  undoText: { color: '#8a8f9c', fontSize: 12, flex: 1 },
+  undoButton: {
+    borderColor: '#e53e3e',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  undoButtonText: { color: '#e53e3e', fontSize: 12, fontWeight: '700' },
   picker: { gap: 0 },
   candidate: {
     borderColor: '#2d3142',

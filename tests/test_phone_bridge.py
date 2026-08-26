@@ -397,8 +397,10 @@ class TestScopedSurface:
 class TestScanFlow:
     def test_identify_exact(self, bridge):
         bridge.start()
+        # The name is on the card as well as the footer: a key on its own is
+        # no longer trusted enough to file without a human looking at it.
         r = _post(bridge.port, "identify",
-                  {"text": "0410/0500 U\nCMM • EN"}, bridge.token)
+                  {"text": "Sol Ring\n0410/0500 U\nCMM • EN"}, bridge.token)
         assert r["confidence"] == "exact"
         assert r["candidates"][0]["printing_id"] == CMM
 

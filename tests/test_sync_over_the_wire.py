@@ -135,13 +135,32 @@ class TestReachability:
 
 
 class TestExchange:
-    def test_a_desktop_edit_is_offered_to_the_phone(self, desktop):
+    def test_a_phone_starting_from_nothing_gets_the_collection(self, desktop):
+        """`since=0` is a baseline, not a replay.
+
+        The log only holds what happened since logging existed, so replaying
+        it from zero misses every card that predates it — see
+        tests/test_sync_baseline.py, and a real installation where that was
+        half the collection.
+        """
         api, bridge = desktop
         api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
         pulled = _post(bridge, "sync/pull", {"since": 0, "peer": "phone-1"})
-        kinds = [e["kind"] for e in pulled["events"]]
-        assert "stack-delta" in kinds
+        assert pulled["baseline"] is True
+        sets = [e for e in pulled["events"] if e["kind"] == "stack-set"]
+        assert [e["payload"]["card_name"] for e in sets] == ["Sol Ring"]
         assert pulled["cursor"] > 0
+
+    def test_a_later_desktop_edit_is_offered_as_a_delta(self, desktop):
+        """Past the baseline it is deltas again, which is what commutes."""
+        api, bridge = desktop
+        api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
+        first = _post(bridge, "sync/pull", {"since": 0, "peer": "phone-1"})
+
+        api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
+        second = _post(bridge, "sync/pull",
+                       {"since": first["cursor"], "peer": "phone-1"})
+        assert [e["kind"] for e in second["events"]] == ["stack-delta"]
 
     def test_pulling_resumes_from_the_cursor(self, desktop):
         api, bridge = desktop
@@ -297,7 +316,7 @@ class TestTheCompanionPort:
         api, bridge = desktop
         api.scan_commit(SOL, "Sol Ring", "nonfoil", "NM")
         pulled = self._plain(bridge, "sync/pull", {"since": 0, "peer": "p1"})
-        assert any(e["kind"] == "stack-delta" for e in pulled["events"])
+        assert any(e["kind"] == "stack-set" for e in pulled["events"])
 
     def test_it_is_a_different_port_from_the_browser(self, desktop):
         _api, bridge = desktop

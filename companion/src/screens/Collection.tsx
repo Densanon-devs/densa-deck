@@ -35,6 +35,9 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
+  // Which row has its quantity controls out. One at a time: a list of
+  // hundreds of rows each carrying three buttons is unusable.
+  const [open, setOpen] = useState('');
 
   const load = useCallback(async () => {
     setRows(await state.cards(chosen, search || undefined));
@@ -44,6 +47,39 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   useEffect(() => {
     void load().catch(reporting('your collection', setProblem));
   }, [load]);
+
+  /**
+   * Change how many of a stack you own.
+   *
+   * A scan that filed the wrong card had no undo at all — the only way out
+   * was the desktop, which is exactly where you are not standing. Quantities
+   * are deltas all the way down to the sync log, so this is the same
+   * operation as scanning, with the sign flipped.
+   */
+  const adjust = useCallback(
+    async (row: StackRow, delta: number) => {
+      if (delta === 0) return;
+      setProblem('');
+      try {
+        await state.addCard({
+          printing_id: row.printing_id,
+          card_name: row.card_name,
+          oracle_id: row.oracle_id,
+          finish: row.finish,
+          condition: row.condition,
+          collection_uid: row.collection_uid,
+          quantity: delta,
+        });
+        // A stack that reaches zero stops existing, so its controls should
+        // not stay open over the row that took its place.
+        if (row.quantity + delta <= 0) setOpen('');
+        await load();
+      } catch (err) {
+        reporting('changing how many you own', setProblem)(err);
+      }
+    },
+    [state, load],
+  );
 
   const syncNow = useCallback(async () => {
     setBusy(true);
@@ -96,21 +132,56 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           </Text>
         }
         renderItem={({ item }) => (
-          <Pressable
-            style={styles.row}
-            onPress={() => onOpenCard?.(item.stack_key)}
-          >
-            <Text style={styles.count}>{item.quantity}</Text>
-            <View style={styles.grow}>
-              <Text style={styles.name}>{item.card_name}</Text>
-              {item.finish === 'foil' ? (
-                <Text style={styles.foil}>foil</Text>
+          <View>
+            <Pressable
+              style={styles.row}
+              onPress={() => {
+                onOpenCard?.(item.stack_key);
+                setOpen((current) =>
+                  current === item.stack_key ? '' : item.stack_key,
+                );
+              }}
+            >
+              <Text style={styles.count}>{item.quantity}</Text>
+              <View style={styles.grow}>
+                <Text style={styles.name}>{item.card_name}</Text>
+                {item.finish === 'foil' ? (
+                  <Text style={styles.foil}>foil</Text>
+                ) : null}
+              </View>
+              {item.price_usd != null ? (
+                <Text style={styles.price}>${item.price_usd.toFixed(2)}</Text>
               ) : null}
-            </View>
-            {item.price_usd != null ? (
-              <Text style={styles.price}>${item.price_usd.toFixed(2)}</Text>
+            </Pressable>
+
+            {open === item.stack_key ? (
+              <View style={styles.editRow}>
+                <Pressable
+                  style={styles.editButton}
+                  onPress={() => void adjust(item, -1)}
+                >
+                  <Text style={styles.editText}>-1</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.editButton}
+                  onPress={() => void adjust(item, 1)}
+                >
+                  <Text style={styles.editText}>+1</Text>
+                </Pressable>
+                <View style={styles.grow} />
+                <Pressable
+                  style={[styles.editButton, styles.removeButton]}
+                  onPress={() => void adjust(item, -item.quantity)}
+                >
+                  <Text style={styles.removeText}>
+                    {item.quantity > 1
+                      ? `Remove all ${item.quantity}`
+                      : 'Remove it'}
+                  </Text>
+                </Pressable>
+              </View>
             ) : null}
-          </Pressable>
+          </View>
         )}
       />
     </View>
@@ -119,6 +190,23 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 
 const styles = StyleSheet.create({
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19, paddingBottom: 6 },
+  editRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingBottom: 10,
+    paddingHorizontal: 4,
+  },
+  editButton: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  editText: { color: '#e4e6eb', fontSize: 15, fontWeight: '700' },
+  removeButton: { borderColor: '#e53e3e' },
+  removeText: { color: '#e53e3e', fontSize: 13, fontWeight: '600' },
   screen: { flex: 1, backgroundColor: '#0f1117', padding: 12 },
   search: {
     backgroundColor: '#1a1d27',

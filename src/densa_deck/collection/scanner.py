@@ -568,6 +568,34 @@ def identify_card(text: str, card_db, *, name_hint: str = "") -> ScanResult:
                 f"#{identity.collector_number} is '{hit['name']}'", 0.5)]
             result.confidence = CONFIDENCE_AMBIGUOUS
             return result
+        # The key alone is not enough to file a card without asking.
+        #
+        # A footer key is specific, which is why it was trusted outright. But
+        # a single misread digit lands on a DIFFERENT REAL PRINTING, usually
+        # in the same set, and the veto above cannot catch that: it only fires
+        # when a name was read AND resolves in the catalogue. When the name is
+        # unreadable — a foil, a glare, a crop that clipped it — there is
+        # nothing contradicting the key, so a wrong key sailed through as
+        # "exact" and filed the wrong card silently.
+        #
+        # So corroboration is now required, not merely the absence of
+        # contradiction. If the card says its own name and that name agrees,
+        # auto-add. If nothing on the card confirms the key, the printing is
+        # still offered first — one tap, not retyping — but a human looks at
+        # it. Nothing is lost except the guess.
+        names = [identity.name] if name_hint else _candidate_names(text)
+        corroborated = any(
+            _names_roughly_match(n, hit["name"]) for n in names if n
+        )
+        if not corroborated:
+            result.candidates = [ScanCandidate(
+                hit, CONFIDENCE_AMBIGUOUS,
+                f"{identity.set_code.upper()} #{identity.collector_number} "
+                f"reads as '{hit['name']}', but the card's name could not be "
+                f"read to confirm it", 0.6)]
+            result.confidence = CONFIDENCE_AMBIGUOUS
+            return result
+
         result.candidates = [ScanCandidate(
             hit, CONFIDENCE_EXACT,
             f"{hit['set_code'].upper()} #{hit['collector_number']} read from the card", 1.0)]

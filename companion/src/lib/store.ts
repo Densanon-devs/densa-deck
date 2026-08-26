@@ -164,6 +164,27 @@ export class LocalStore {
    * total asserts what the whole world holds and this device only knows what
    * it has seen.
    */
+  /**
+   * Set a stack to an absolute quantity.
+   *
+   * Used only by the first-sync baseline. Everything else here is a delta,
+   * deliberately, so two devices editing offline both keep their change — an
+   * absolute set cannot commute and would silently discard whichever edit
+   * arrived first. It is safe here and nowhere else, because a device taking
+   * a baseline has no state of its own to lose.
+   */
+  async setStackQuantity(row: StackDelta & { quantity: number }): Promise<void> {
+    const key = stackKey(row);
+    const existing = await this.db.get<{ quantity: number }>(
+      'SELECT quantity FROM stacks WHERE stack_key = ?',
+      [key],
+    );
+    const current = existing?.quantity ?? 0;
+    const wanted = Math.max(0, Math.trunc(row.quantity));
+    if (wanted === current) return;
+    await this.applyDelta({ ...row, delta: wanted - current });
+  }
+
   async applyDelta(delta: StackDelta): Promise<void> {
     const key = stackKey(delta);
     const now = new Date().toISOString();

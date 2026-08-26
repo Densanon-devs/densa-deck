@@ -236,6 +236,15 @@ export class SyncEngine {
       case 'stack-delta':
         await this.store.applyDelta(event.payload as unknown as StackDelta);
         return true;
+      case 'stack-set':
+        // The first-sync baseline. The desktop's log only holds what has
+        // happened since logging existed, so a phone replaying it from zero
+        // could never learn about cards that predate it — half this
+        // collection, as it turned out. The baseline sends the state instead.
+        await this.store.setStackQuantity(
+          event.payload as unknown as StackDelta & { quantity: number },
+        );
+        return true;
       case 'collection-upsert':
         await this.store.upsertCollection({
           collection_uid: String(event.payload.collection_uid ?? ''),
