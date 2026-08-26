@@ -1205,6 +1205,82 @@ class AppApi:
             return {"ok": False, "error": f"No card named '{name}'."}
         return _card_to_builder_dict(card, include_full=True)
 
+    @_safe
+    def get_card_detail(self, printing_id: str = "", card_name: str = "") -> dict:
+        """Everything needed to show a card: what it does, and what it looks like.
+
+        Addressed by PRINTING first and name second. Which printing you own
+        decides which art you see, and showing the wrong artwork for the card
+        in your hand would be worse than showing none.
+
+        The image is a Scryfall URL, never a file. Card art is hotlinked and
+        never rehosted or cached — see `data/images.py`.
+
+        Missing pieces are returned as empty rather than as an error. A card
+        whose oracle text is not in the local catalogue should still show its
+        art and what you own, and a card with no usable printing id should
+        still show its text.
+        """
+        from densa_deck.data.images import card_image_urls, scryfall_page_url
+
+        name = (card_name or "").strip()
+        detail: dict = {
+            "printing_id": printing_id or "",
+            "card_name": name,
+            "images": card_image_urls(printing_id or ""),
+            "scryfall_url": scryfall_page_url(printing_id or ""),
+        }
+
+        if not name and not printing_id:
+            return {"ok": False, "error": "A printing id or a card name is required."}
+
+        card = None
+        if name:
+            try:
+                card = self._get_db().lookup_by_name(name)
+            except Exception:
+                card = None
+
+        if card is not None:
+            detail.update({
+                "card_name": card.name,
+                "mana_cost": getattr(card, "mana_cost", "") or "",
+                "cmc": getattr(card, "cmc", 0),
+                "type_line": getattr(card, "type_line", "") or "",
+                "oracle_text": getattr(card, "oracle_text", "") or "",
+                "power": getattr(card, "power", "") or "",
+                "toughness": getattr(card, "toughness", "") or "",
+                "loyalty": getattr(card, "loyalty", "") or "",
+                "rarity": getattr(card, "rarity", "") or "",
+                "set_code": getattr(card, "set_code", "") or "",
+                "colors": list(getattr(card, "colors", []) or []),
+                "color_identity": list(getattr(card, "color_identity", []) or []),
+                "keywords": list(getattr(card, "keywords", []) or []),
+                "price_usd": getattr(card, "price_usd", None),
+                "legalities": {
+                    fmt: (val.value if hasattr(val, "value") else str(val))
+                    for fmt, val in (getattr(card, "legalities", {}) or {}).items()
+                },
+                # Both halves of a modal DFC or split card. A screen that
+                # shows only the front of Fable of the Mirror-Breaker is
+                # telling you half the card.
+                "faces": [
+                    {
+                        "name": getattr(f, "name", "") or "",
+                        "mana_cost": getattr(f, "mana_cost", "") or "",
+                        "type_line": getattr(f, "type_line", "") or "",
+                        "oracle_text": getattr(f, "oracle_text", "") or "",
+                        "power": getattr(f, "power", "") or "",
+                        "toughness": getattr(f, "toughness", "") or "",
+                    }
+                    for f in (getattr(card, "faces", []) or [])
+                ],
+            })
+        else:
+            detail["unknown_card"] = True
+
+        return detail
+
     def _builder_draft_path(self) -> Path:
         """Resolve the draft file path against THIS AppApi's db_path so
         tests and custom-DB-path installs don't leak drafts into the

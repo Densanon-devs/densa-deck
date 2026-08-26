@@ -27,6 +27,7 @@ import {
 
 import { AppState, buildAppState } from './src/lib/app-state.ts';
 import type { AppSnapshot } from './src/lib/app-state.ts';
+import type { StackRow } from './src/lib/store.ts';
 import { describeConnection } from './src/lib/status.ts';
 import type { Crash } from './src/lib/crash.ts';
 import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
@@ -37,6 +38,7 @@ import { openDeviceDatabase } from './src/lib/sqlite.ts';
 import { uuid } from './src/lib/uuid.ts';
 import { LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
+import { CardScreen } from './src/screens/Card.tsx';
 import { CollectionScreen } from './src/screens/Collection.tsx';
 import { ConnectionScreen } from './src/screens/Connection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
@@ -90,6 +92,7 @@ function Shell() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [fatal, setFatal] = useState<Crash | null>(null);
   const [showConnection, setShowConnection] = useState(false);
+  const [openCard, setOpenCard] = useState<StackRow | null>(null);
 
   useEffect(
     () => onCrash((crash) => crash.fatal && setFatal(crash)),
@@ -230,7 +233,15 @@ function Shell() {
         ) : null}
 
         {phase.kind === 'ready' && !showConnection && tab === 'collection' ? (
-          <CollectionScreen state={phase.state} />
+          openCard ? (
+            <CardScreen
+              state={phase.state}
+              stack={openCard}
+              onClose={() => setOpenCard(null)}
+            />
+          ) : (
+            <CollectionScreen state={phase.state} onOpenCard={setOpenCard} />
+          )
         ) : null}
 
         {phase.kind === 'ready' && !showConnection && tab === 'decks' ? (
@@ -265,6 +276,7 @@ function Shell() {
               onPress={() => {
                 setTab(entry.id);
                 if (entry.id !== 'decks') setOpenDeck(null);
+                if (entry.id !== 'collection') setOpenCard(null);
               }}
             >
               <Text style={[styles.tabText, tab === entry.id && styles.tabOn]}>

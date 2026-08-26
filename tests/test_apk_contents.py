@@ -53,6 +53,8 @@ SCREENS = {
     "connection strip": "Connected over",
     "undo a bad scan": "Wrong? Undo",
     "removing cards": "Remove it",
+    "card detail": "Rulings and printings",
+    "offline art": "Save art for offline",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.

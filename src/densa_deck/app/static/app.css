@@ -2490,3 +2490,30 @@ code {
   border-radius: var(--radius, 6px);
   white-space: nowrap;
 }
+
+/* ---- card detail -------------------------------------------------------
+   One card's art and rules text. The image is hotlinked to Scryfall and
+   never served from here; the browser's own cache means a card looked at
+   twice is fetched once. */
+.card-detail {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.card-detail-art { flex: 0 0 300px; max-width: 100%; }
+.card-art {
+  width: 100%;
+  border-radius: 4.75% / 3.5%;   /* the corner radius of a real card */
+  display: block;
+}
+.card-detail-text { flex: 1 1 280px; min-width: 260px; }
+.card-detail-type { font-size: 1.05rem; margin: 0 0 8px; }
+.card-detail-oracle { white-space: pre-wrap; line-height: 1.55; margin: 0 0 10px; }
+.card-detail-stat { font-weight: 700; font-size: 1.15rem; margin: 0 0 10px; }
+.card-detail-face {
+  border-top: 1px solid var(--line, #2d3142);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+.card-detail-credit { margin-top: 16px; font-size: 0.78rem; }

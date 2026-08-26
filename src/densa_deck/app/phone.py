@@ -511,6 +511,15 @@ class PhoneBridge:
         if route == "cards/search":
             return _unwrap(api.search_cards(payload.get("query") or {}))
 
+        # What one card is and does. The ART does not come through here — the
+        # phone loads that straight from Scryfall's CDN — so this carries only
+        # rules text, and a phone that cannot reach the desktop loses the text
+        # while keeping the picture.
+        if route == "cards/detail":
+            return _unwrap(api.get_card_detail(
+                payload.get("printing_id", ""),
+                payload.get("card_name", "")))
+
         # --- wishlist -----------------------------------------------------
         # Cards a deck wants that you do not own. Stored apart from the
         # collection, so nothing here counts toward what you have.

@@ -10,6 +10,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   FlatList,
+  Image,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -19,13 +20,16 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { cardImageUrl, prefetchCollectionArt } from '../lib/images.ts';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
 
 interface Props {
   state: AppState;
-  onOpenCard?: (stackKey: string) => void;
+  /** The whole row, not a key: the card screen needs the printing and the
+   *  finish to show the right art and the right price. */
+  onOpenCard?: (stack: StackRow) => void;
 }
 
 export function CollectionScreen({ state, onOpenCard }: Props) {
@@ -38,6 +42,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   // Which row has its quantity controls out. One at a time: a list of
   // hundreds of rows each carrying three buttons is unusable.
   const [open, setOpen] = useState('');
+  const [caching, setCaching] = useState('');
 
   const load = useCallback(async () => {
     setRows(await state.cards(chosen, search || undefined));
@@ -81,6 +86,34 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
     [state, load],
   );
 
+  /**
+   * Pull the collection's art onto the phone ahead of time.
+   *
+   * Art seen once is cached by the phone already. This is for the card you
+   * have NOT opened — because the moment you want to flip through your
+   * collection is usually the moment you have no signal, in a shop, holding
+   * something you might trade for.
+   */
+  const cacheArt = useCallback(async () => {
+    setProblem('');
+    const all = await state.cards();
+    const result = await prefetchCollectionArt(
+      all.map((row) => row.printing_id),
+      {
+        // Supplied here rather than imported by the library: this is the one
+        // piece that is genuinely platform code.
+        prefetch: (url) => Image.prefetch(url),
+        onProgress: (p) => setCaching(`Saving art ${p.done}/${p.total}`),
+      },
+    );
+    setCaching(
+      result.failed
+        ? `Saved ${result.done - result.failed} of ${result.total}. ` +
+          `${result.failed} could not be fetched — try again with a better connection.`
+        : `All ${result.total} cards' art is on this phone.`,
+    );
+  }, [state]);
+
   const syncNow = useCallback(async () => {
     setBusy(true);
     setProblem('');
@@ -105,6 +138,18 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
         onChangeText={setSearch}
         autoCorrect={false}
       />
+
+      <View style={styles.artRow}>
+        <Pressable
+          style={styles.artButton}
+          onPress={() => {
+            void cacheArt().catch(reporting('saving the art', setProblem));
+          }}
+        >
+          <Text style={styles.artButtonText}>Save art for offline</Text>
+        </Pressable>
+        {caching ? <Text style={styles.artStatus}>{caching}</Text> : null}
+      </View>
 
       <CollectionBar
         collections={collections}
@@ -135,14 +180,22 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           <View>
             <Pressable
               style={styles.row}
-              onPress={() => {
-                onOpenCard?.(item.stack_key);
+              onPress={() =>
                 setOpen((current) =>
                   current === item.stack_key ? '' : item.stack_key,
-                );
-              }}
+                )
+              }
             >
               <Text style={styles.count}>{item.quantity}</Text>
+              {/* The art you already fetched shows here with no request at
+                  all — the phone's image cache answers it. */}
+              {cardImageUrl(item.printing_id, 'small') ? (
+                <Image
+                  source={{ uri: cardImageUrl(item.printing_id, 'small') }}
+                  style={styles.thumb}
+                  resizeMode="cover"
+                />
+              ) : null}
               <View style={styles.grow}>
                 <Text style={styles.name}>{item.card_name}</Text>
                 {item.finish === 'foil' ? (
@@ -179,6 +232,12 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                       : 'Remove it'}
                   </Text>
                 </Pressable>
+                <Pressable
+                  style={styles.editButton}
+                  onPress={() => onOpenCard?.(item)}
+                >
+                  <Text style={styles.editText}>View</Text>
+                </Pressable>
               </View>
             ) : null}
           </View>
@@ -190,6 +249,17 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 
 const styles = StyleSheet.create({
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19, paddingBottom: 6 },
+  artRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 4 },
+  artButton: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  artButtonText: { color: '#8a8f9c', fontSize: 12 },
+  artStatus: { color: '#8a8f9c', fontSize: 12, flex: 1 },
+  thumb: { width: 34, height: 47, borderRadius: 3, backgroundColor: '#1a1d27' },
   editRow: {
     flexDirection: 'row',
     alignItems: 'center',

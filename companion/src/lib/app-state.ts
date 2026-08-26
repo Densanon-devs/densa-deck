@@ -16,6 +16,7 @@ import { DesktopClient } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
+  CardDetail,
   CardQuery,
   CardSearchReply,
   CollectionPage,
@@ -224,6 +225,21 @@ export class AppState {
    * app already has a method for would be reaching around the offline-first
    * rule, and browse/edit must never depend on the network.
    */
+  /**
+   * What one card is and does.
+   *
+   * Needs the desktop: the catalogue is 34,000 cards and the phone holds a
+   * mirror of what you OWN, not of every card in Magic. The art does not come
+   * through here — that is a Scryfall URL the phone loads directly — so this
+   * failing costs the rules text and nothing else.
+   */
+  async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {
+    return this.client.call<CardDetail>('cards/detail', {
+      printing_id: printingId,
+      card_name: cardName,
+    });
+  }
+
   get scanClient(): DesktopClient {
     return this.client;
   }

@@ -1022,6 +1022,20 @@ Mainboard:
 
   <!-- Printing picker: one row per physical version of a card, so the user
        records the object they actually have rather than a card name. -->
+  <!-- One card: its art and what it does. The image is hotlinked to
+       Scryfall and never served from here. -->
+  <div id="card-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal-panel modal-panel-wide">
+      <div class="modal-header">
+        <h2 id="card-modal-title">Card</h2>
+        <button id="card-close-btn" class="modal-close" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="card-modal-body" class="card-detail"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="printings-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
     <div class="modal-panel modal-panel-wide">
       <div class="modal-header">

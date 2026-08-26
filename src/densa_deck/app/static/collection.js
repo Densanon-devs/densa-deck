@@ -273,6 +273,9 @@
             <div class="collection-set subtle">${setTxt}</div>
           </div>
           <div class="collection-value">${val}</div>
+          <button class="btn btn-outline btn-slim" data-act="card"
+                  data-printing="${escape(it.printing_id || "")}"
+                  data-name="${escape(it.card_name)}">View</button>
           <button class="btn btn-outline btn-slim" data-act="printings"
                   data-name="${escape(it.card_name)}">Printings</button>
         </div>`;
@@ -283,6 +286,10 @@
       if (!btn) return;
       const act = btn.dataset.act;
       if (act === "printings") { openPrintings(btn.dataset.name); return; }
+      if (act === "card") {
+        openCard(btn.dataset.printing, btn.dataset.name);
+        return;
+      }
 
       const itemId = Number(btn.dataset.item);
       const item = state.items.find(i => i.item_id === itemId);
@@ -301,6 +308,89 @@
   }
 
   // -------------------------------------------------------- printings
+
+  /**
+   * One card: its art and what it does.
+   *
+   * The image is a Scryfall URL. Nothing is downloaded here and nothing is
+   * served from this app — that is the licence position, and the browser's
+   * own cache means a card looked at twice is only fetched once.
+   */
+  function cardImageUrl(printingId, size) {
+    const id = String(printingId || "").trim().toLowerCase();
+    if (id.length < 8 || !/^[0-9a-f][0-9a-f-]*$/.test(id)) return "";
+    const ext = size === "png" ? "png" : "jpg";
+    return `https://cards.scryfall.io/${size}/front/${id[0]}/${id[1]}/${id}.${ext}`;
+  }
+
+  function hideCard() {
+    const modal = e("card-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function openCard(printingId, cardName) {
+    const modal = e("card-modal");
+    const body = e("card-modal-body");
+    if (!modal || !body) return;
+    e("card-modal-title").textContent = cardName || "Card";
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+
+    const art = cardImageUrl(printingId, "normal");
+    // The art is drawn immediately rather than after the lookup: it does not
+    // depend on the catalogue, and waiting on the text to show the picture
+    // would make a fast thing feel slow.
+    const picture = art
+      ? `<img class="card-art" src="${escape(art)}" alt="${escape(cardName || "")}" loading="lazy">`
+      : `<p class="panel-hint">No art for this printing.</p>`;
+    body.innerHTML = `<div class="card-detail-art">${picture}</div>
+      <div class="card-detail-text"><p class="panel-hint">Loading…</p></div>`;
+
+    let d;
+    try {
+      d = await callApi("get_card_detail", printingId || "", cardName || "");
+    } catch (err) {
+      body.querySelector(".card-detail-text").innerHTML =
+        `<p class="panel-hint">Could not load the card text: ${escape(err.message)}</p>`;
+      return;
+    }
+
+    if (d.unknown_card) {
+      body.querySelector(".card-detail-text").innerHTML =
+        "<p class=\"panel-hint\">This card is not in the local catalogue, so " +
+        "there is no rules text to show. The art is right either way.</p>";
+      return;
+    }
+
+    const faces = (d.faces || []).length > 1 ? d.faces : [];
+    const stat = d.power || d.toughness
+      ? `<p class="card-detail-stat">${escape(d.power || "")}/${escape(d.toughness || "")}</p>`
+      : (d.loyalty ? `<p class="card-detail-stat">Loyalty ${escape(d.loyalty)}</p>` : "");
+    const legal = Object.entries(d.legalities || {})
+      .filter(([, v]) => v === "legal")
+      .map(([fmt]) => escape(fmt))
+      .join(", ");
+
+    body.querySelector(".card-detail-text").innerHTML = `
+      <p class="card-detail-type">${escape(d.type_line || "")}
+        <span class="subtle">${escape((d.mana_cost || "").replace(/[{}]/g, " ").trim())}</span></p>
+      ${d.oracle_text ? `<p class="card-detail-oracle">${escape(d.oracle_text)}</p>` : ""}
+      ${stat}
+      ${faces.map(f => `
+        <div class="card-detail-face">
+          <p class="card-detail-type"><strong>${escape(f.name)}</strong>
+            <span class="subtle">${escape((f.mana_cost || "").replace(/[{}]/g, " ").trim())}</span></p>
+          <p class="subtle">${escape(f.type_line || "")}</p>
+          ${f.oracle_text ? `<p class="card-detail-oracle">${escape(f.oracle_text)}</p>` : ""}
+        </div>`).join("")}
+      <p class="subtle">${escape((d.set_code || "").toUpperCase())} ${escape(d.rarity || "")}</p>
+      ${legal ? `<p class="subtle">Legal: ${legal}</p>` : ""}
+      ${d.scryfall_url ? `<p><a href="${escape(d.scryfall_url)}" target="_blank" rel="noreferrer">Rulings and printings on Scryfall</a></p>` : ""}
+      <p class="subtle card-detail-credit">Card images and data from Scryfall.
+        Not affiliated with Wizards of the Coast.</p>`;
+  }
 
   async function openPrintings(cardName) {
     if (!cardName) return;
@@ -400,6 +490,14 @@
     state.wired = true;
 
     const sync = e("collection-sync-btn");
+    const cardClose = e("card-close-btn");
+    if (cardClose) cardClose.addEventListener("click", hideCard);
+    const cardModal = e("card-modal");
+    if (cardModal) cardModal.addEventListener("click", (ev) => {
+      // Clicking the backdrop closes it; clicking the card does not.
+      if (ev.target === cardModal) hideCard();
+    });
+
     if (sync) sync.addEventListener("click", () => startSync(false));
 
     const skip = e("collection-skip-btn");

@@ -1,6 +1,6 @@
 {
   "name": "densa-deck-companion",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Densa Deck companion for Android: browse collections, build decks, run the analyst on the PC.",
   "main": "index.js",
