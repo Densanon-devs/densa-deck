@@ -20,6 +20,7 @@ import {
 
 import type { AppState } from '../lib/app-state.ts';
 import { uuid } from '../lib/uuid.ts';
+import { CardBrowser } from './CardBrowser.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
@@ -130,9 +131,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [analysis, setAnalysis] = useState<string>('');
   const [thinking, setThinking] = useState(false);
   const [problem, setProblem] = useState('');
-  const [search, setSearch] = useState('');
-  const [found, setFound] = useState<CatalogueCard[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -177,35 +176,6 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     await recheck(cards);
   }, [text, deck, deckId, decks, recheck]);
 
-  /**
-   * Search every card, not only the ones you own.
-   *
-   * This needs the PC — the catalogue is 34k cards — and says so when it
-   * cannot reach one. Quietly searching the local collection instead would
-   * answer "what do I own" while appearing to answer "what exists", so a
-   * card you do not have would look like it does not exist.
-   */
-  const runSearch = useCallback(async () => {
-    const term = search.trim();
-    if (!term) return;
-    setSearching(true);
-    setProblem('');
-    try {
-      const reply = await state.searchCards({ name: term, limit: 25 });
-      setFound(reply.cards);
-      if (!reply.cards.length) setProblem(`No card matches “${term}”.`);
-    } catch (err) {
-      setFound([]);
-      setProblem(
-        `${(err as Error).message}. Searching every card needs your PC — ` +
-        'the card database lives there. You can still type a name in by hand.',
-      );
-    } finally {
-      setSearching(false);
-    }
-  }, [search, state]);
-
-  /** Put a card in the deck whether or not you own it. */
   const add = useCallback(async (name: string) => {
     if (!deck) return;
     const next: Deck = {
@@ -279,38 +249,34 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
-      <Text style={styles.section}>Add a card</Text>
       <View style={styles.row}>
-        <TextInput
-          style={[styles.list, styles.searchBox]}
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search every card…"
-          placeholderTextColor="#8a8f9c"
-          autoCorrect={false}
-          onSubmitEditing={runSearch}
-          returnKeyType="search"
-        />
-        <Pressable style={styles.secondary} onPress={runSearch}>
-          <Text style={styles.secondaryText}>{searching ? '…' : 'Find'}</Text>
+        <Text style={[styles.section, styles.grow]}>Add a card</Text>
+        <Pressable
+          style={styles.secondary}
+          onPress={() => setBrowsing((open) => !open)}
+        >
+          <Text style={styles.secondaryText}>
+            {browsing ? 'Close browser' : 'Browse cards'}
+          </Text>
         </Pressable>
       </View>
-      {found.map((card) => (
-        <Pressable
-          key={card.scryfall_id}
-          style={styles.result}
-          onPress={() => add(card.name)}
-        >
-          <View style={styles.grow}>
-            <Text style={styles.name}>{card.name}</Text>
-            <Text style={styles.muted}>
-              {card.type_line}
-              {card.price_usd != null ? `  ·  $${card.price_usd.toFixed(2)}` : ''}
-            </Text>
-          </View>
-          <Text style={styles.plus}>+</Text>
-        </Pressable>
-      ))}
+
+      {/*
+        A grid with filters, not a text box. Deckbuilding is a browsing job:
+        you know you want a two-mana red removal spell and not which one, and
+        a search that needs the answer first is the wrong shape for the
+        question.
+      */}
+      {browsing ? (
+        <View style={styles.browser}>
+          <CardBrowser
+            state={state}
+            onPick={(card) => add(card.name)}
+            onClose={() => setBrowsing(false)}
+            countFor={(card) => deck?.decklist?.[card.name] ?? 0}
+          />
+        </View>
+      ) : null}
 
       <Text style={styles.section}>Still needed — on your wishlist</Text>
       {missing.length === 0 ? (
@@ -401,6 +367,7 @@ const styles = StyleSheet.create({
   plus: { color: '#48bb78', fontSize: 22, fontWeight: '700', paddingLeft: 8 },
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
+  browser: { height: 560 },
   analysis: {
     color: '#8a8f9c',
     fontFamily: 'monospace',
