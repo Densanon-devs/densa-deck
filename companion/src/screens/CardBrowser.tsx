@@ -343,6 +343,7 @@ const styles = StyleSheet.create({
   close: { color: '#e53e3e', fontSize: 15, fontWeight: '600' },
   filters: { flexDirection: 'row', gap: 6, alignItems: 'center' },
   pip: {
+    flexShrink: 0,
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -360,10 +361,21 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
+    // Both of these, and neither is optional. Inside a horizontal ScrollView
+    // a row of chips is laid out against the visible width, so every one of
+    // them shrinks until its label is squeezed to nothing — the pills render
+    // as empty outlines with a smear where the word should be. flexShrink
+    // stops the box collapsing; flexBasis: 'auto' makes it take its content's
+    // width rather than an equal share.
+    flexShrink: 0,
+    flexBasis: 'auto',
   },
-  chipOn: { borderColor: '#38a169' },
-  chipText: { color: '#8a8f9c', fontSize: 12 },
-  chipTextOn: { color: '#38a169', fontWeight: '700' },
+  // Filled when selected, not merely outlined. Green text on the dark
+  // background was legible in isolation and not at 12px in a row of eight —
+  // the selected chip became the hardest one to read, which is backwards.
+  chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  chipText: { color: '#c9ced9', fontSize: 12, flexShrink: 0 },
+  chipTextOn: { color: '#ffffff', fontWeight: '700' },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

@@ -205,10 +205,13 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
+    flexShrink: 0,
   },
-  chipActive: { borderColor: '#38a169' },
-  chipText: { color: '#8a8f9c', fontSize: 13 },
-  chipTextActive: { color: '#38a169', fontWeight: '700' },
+  // Same reason as the browser's filter chips: an outline plus green text
+  // made the SELECTED one the hardest to read.
+  chipActive: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  chipText: { color: '#c9ced9', fontSize: 13 },
+  chipTextActive: { color: '#ffffff', fontWeight: '700' },
   chipNew: { borderColor: '#e53e3e', borderStyle: 'dashed' },
   chipNewText: { color: '#e53e3e', fontSize: 13, fontWeight: '600' },
   adder: { flexDirection: 'row', gap: 8, alignItems: 'center' },
