@@ -2,7 +2,7 @@
   "expo": {
     "name": "Densa Deck",
     "slug": "densa-deck-companion",
-    "version": "0.7.6",
+    "version": "0.7.7",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
@@ -10,7 +10,7 @@
       "permissions": [
         "CAMERA"
       ],
-      "versionCode": 40
+      "versionCode": 41
     },
     "plugins": [
       "expo-sqlite",

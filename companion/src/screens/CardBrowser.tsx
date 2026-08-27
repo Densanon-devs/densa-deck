@@ -21,6 +21,7 @@ import {
   ActivityIndicator,
   Image,
   Modal,
+  useWindowDimensions,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -136,6 +137,25 @@ export function CardBrowser({
   // wrong place and "Add this printing" named a card other than the one on
   // screen. Silently wrong, and about the worst thing this feature could do.
   const [pagerWidth, setPagerWidth] = useState(0);
+
+  /**
+   * How big the card can be and still leave room for the buttons.
+   *
+   * Sized off the WINDOW rather than fixed at 300, because a card is tall —
+   * 745x1040 — and 300 wide is 419 tall before any of the text under it. On
+   * a normal handset that plus a name, a type line, two counts and four
+   * buttons does not fit, and what fell off the bottom was the buttons.
+   *
+   * Capped three ways: never wider than 300 (a bigger picture is not a more
+   * readable one), never wider than the screen, and never more than about
+   * two-fifths of the height.
+   */
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const CARD_RATIO = 745 / 1040;
+  const artWidth = Math.max(
+    140,
+    Math.min(300, windowWidth - 96, windowHeight * 0.40 * CARD_RATIO),
+  );
 
   useEffect(() => {
     if (!preview) {
@@ -547,12 +567,32 @@ export function CardBrowser({
         statusBarTranslucent
       >
         {preview ? (
-        <Pressable style={styles.backdrop} onPress={() => setPreview(null)}>
-          {/* Swallows taps so the card itself is not a way to dismiss it —
-              a mis-tap while reaching for Add would close the card and look
-              like the button had failed. */}
-          <Pressable style={styles.previewWrap} onPress={() => {}}>
-          <ScrollView contentContainerStyle={styles.previewInner}>
+        <View style={styles.backdrop}>
+          {/*
+            Tap-to-dismiss sits BEHIND the card, not wrapped around it.
+
+            Wrapped, it broke the swipe: a Pressable is a touch responder, and
+            two of them around a horizontal ScrollView claim the pan before
+            the pager ever sees it — so the printings could be looked at and
+            not swiped through, which is the half that does not help. Behind,
+            the dark area is still a way out and the card carries no responder
+            of its own, so the gesture reaches the pager.
+          */}
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setPreview(null)}
+          />
+          <View style={styles.previewWrap}>
+          {/*
+            The picture, with NO vertical scroller above it.
+
+            The pager used to sit inside one, and a horizontal ScrollView
+            nested in a vertical one is a coin toss for which gets the pan on
+            Android — which is why the printings would not swipe. The art is
+            sized to fit the window now, so it never needed to scroll anyway;
+            only the words under it might, and they are what scrolls.
+          */}
+          <View style={styles.previewTop}>
             {variants.length > 1 ? (
               <ScrollView
                 horizontal
@@ -582,7 +622,7 @@ export function CardBrowser({
                   >
                     <Image
                       source={artSource(printing.printing_id, 'large')}
-                      style={styles.previewArt}
+                      style={[styles.previewArt, { width: artWidth }]}
                       resizeMode="contain"
                     />
                     <Text style={styles.muted}>
@@ -598,7 +638,7 @@ export function CardBrowser({
             ) : (
               <Image
                 source={artSource(preview.scryfall_id, 'large')}
-                style={styles.previewArt}
+                style={[styles.previewArt, { width: artWidth }]}
                 resizeMode="contain"
               />
             )}
@@ -607,6 +647,15 @@ export function CardBrowser({
                 {variants.length} printings — swipe to see them
               </Text>
             ) : null}
+          </View>
+
+          {/* Only the words scroll, and only when there are too many of them.
+              flexShrink lets the footer claim its height first, so the
+              buttons are laid out before this gets what is left. */}
+          <ScrollView
+            style={styles.previewScroll}
+            contentContainerStyle={styles.previewWords}
+          >
             <Text style={styles.previewName}>{preview.name}</Text>
             <Text style={styles.muted}>{preview.type_line}</Text>
             {countFor ? (
@@ -621,6 +670,17 @@ export function CardBrowser({
               </Text>
             ) : null}
 
+          </ScrollView>
+
+          {/*
+            The buttons sit OUTSIDE the scroller, always on screen.
+
+            They were inside it, and on a normal handset the card pushed them
+            past the bottom edge — so the one thing the screen exists for was
+            the one thing you had to go looking for. An action you have to
+            scroll to find is an action that looks missing.
+          */}
+          <View style={styles.previewFooter}>
             {/*
               Two ways to add, and the difference between them is the whole
               point of the swipe.
@@ -674,9 +734,9 @@ export function CardBrowser({
             </View>
             {/* Stays open on purpose: adding a second copy is one more tap
                 rather than finding the card again. Tap outside to leave. */}
-          </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+          </View>
+        </View>
         ) : null}
       </Modal>
     </View>
@@ -813,17 +873,23 @@ const styles = StyleSheet.create({
     // that runs off is the last one — which is the exact-printing one.
     maxHeight: '92%',
   },
-  previewInner: { padding: 16, gap: 8, alignItems: 'center' },
+  // flexShrink, not flex: the footer is laid out at its natural height and
+  // the card takes what is left. flex: 1 would push the buttons off again.
+  previewScroll: { flexShrink: 1 },
+  previewTop: { paddingTop: 16, paddingHorizontal: 16, gap: 6, alignItems: 'center' },
+  previewWords: { padding: 16, paddingTop: 8, gap: 6, alignItems: 'center' },
+  previewFooter: {
+    padding: 12,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#2d3142',
+  },
   pager: { width: '100%' },
   // The width is overridden with the pager's measured width at render time;
   // this is only the fallback for the first frame, before onLayout fires.
   page: { width: 300, alignItems: 'center', gap: 6, paddingHorizontal: 6 },
-  previewArt: {
-    width: '100%',
-    maxWidth: 300,
-    aspectRatio: 745 / 1040,
-    borderRadius: 12,
-  },
+  // The width comes from the window at render time; see `artWidth`.
+  previewArt: { aspectRatio: 745 / 1040, borderRadius: 12 },
   previewName: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
   // Wraps, because there are four buttons once a card has more than one
   // printing and a fixed row would push the last one off the edge — which on
@@ -832,8 +898,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 10,
-    marginTop: 10,
+    gap: 8,
   },
   previewButton: {
     borderColor: '#2d3142',
