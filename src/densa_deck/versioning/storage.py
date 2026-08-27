@@ -59,6 +59,18 @@ class DeckSnapshot:
     notes: str = ""
     decklist: dict[str, int] = field(default_factory=dict)  # card_name -> quantity
     zones: dict[str, list[str]] = field(default_factory=dict)  # zone -> [card_names]
+    # Which exact printing a slot meant, for the slots that said.
+    #
+    # A SIDECAR, deliberately, rather than a change to `decklist`. Every
+    # consumer of a snapshot — diff, trends, impact, the eleven combo-aware
+    # layers, the analyst — reads `decklist` as {name: quantity} and is
+    # correct to: legality, combos and goldfishing are facts about cards, not
+    # about printings. Widening the name-keyed map would have rippled through
+    # all of them to answer a question none of them asks.
+    #
+    # Empty for every deck that never named a printing, which is most of
+    # them, and empty for every version saved before this existed.
+    printings: list[dict] = field(default_factory=list)
     scores: dict[str, float] = field(default_factory=dict)
     metrics: dict[str, float] = field(default_factory=dict)
 
@@ -122,8 +134,15 @@ class VersionStore:
         scores: dict[str, float] | None = None,
         metrics: dict[str, float] | None = None,
         notes: str = "",
+        printings: list[dict] | None = None,
     ) -> DeckSnapshot:
-        """Save a new version of a deck."""
+        """Save a new version of a deck.
+
+        `printings` is optional and additive: it records which exact card a
+        slot meant for the slots that said, and changes nothing for the ones
+        that did not. A version saved without it reads back with an empty
+        list, so nothing that pre-dates it needs converting.
+        """
         conn = self.connect()
         now = datetime.now().isoformat()
 
@@ -159,7 +178,14 @@ class VersionStore:
                 version_number,
                 now,
                 notes,
-                json.dumps({"cards": decklist, "zones": zones}),
+                # A third key beside the two that were always there. Readers
+                # take what they know and ignore the rest, so an older build
+                # opening a newer version still gets the whole decklist.
+                json.dumps({
+                    "cards": decklist,
+                    "zones": zones,
+                    "printings": printings or [],
+                }),
                 json.dumps(scores or {}),
                 json.dumps(metrics or {}),
             ),
@@ -176,6 +202,7 @@ class VersionStore:
             notes=notes,
             decklist=decklist,
             zones=zones,
+            printings=printings or [],
             scores=scores or {},
             metrics=metrics or {},
         )
@@ -314,6 +341,10 @@ def _row_to_snapshot(deck_id: str, row: tuple) -> DeckSnapshot:
         notes=row[3],
         decklist=dl.get("cards", {}),
         zones=dl.get("zones", {}),
+        # Absent in every version saved before printings existed, and absent
+        # in every deck that never named one. Both mean the same thing: every
+        # slot takes any printing.
+        printings=dl.get("printings", []) or [],
         scores=json.loads(row[5]),
         metrics=json.loads(row[6]),
     )

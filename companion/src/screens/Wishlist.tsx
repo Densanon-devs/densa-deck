@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { entryKey, printingLabel } from '../lib/decks.ts';
 import type { DeckStore, WishlistRow } from '../lib/decks.ts';
 import type { CatalogueCard } from '../lib/protocol.ts';
 import { reporting } from './report.ts';
@@ -164,7 +165,11 @@ export function WishlistScreen({ state, decks }: Props) {
 
         </>
         }
-        keyExtractor={(r) => r.card_name}
+        // Keyed by SLOT, not by name. Two decks wanting two printings of one
+        // card are two rows and two purchases, and keying on the name alone
+        // would collide them — which in a FlatList means one row silently
+        // disappears.
+        keyExtractor={(r) => entryKey(r)}
         refreshControl={
           <RefreshControl refreshing={busy} onRefresh={refresh} tintColor="#e4e6eb" />
         }
@@ -179,6 +184,12 @@ export function WishlistScreen({ state, decks }: Props) {
             <Text style={styles.need}>{item.quantity}</Text>
             <View style={styles.grow}>
               <Text style={styles.name}>{item.card_name}</Text>
+              {/* Which printing to buy, when the deck asked for one. Without
+                  it the list says "Sol Ring" and you come home with the wrong
+                  one — the whole reason a slot can name a printing. */}
+              {printingLabel(item) ? (
+                <Text style={styles.printing}>{printingLabel(item)}</Text>
+              ) : null}
               <Text style={styles.muted}>
                 {item.wantedBy.map((w) => w.deck_name).join(', ')}
                 {item.wantedBy.length > 1 &&
@@ -199,6 +210,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0f1117', padding: 14 },
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
+  printing: { color: '#68d391', fontSize: 12 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

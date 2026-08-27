@@ -40,12 +40,27 @@ import { reporting } from './report.ts';
 
 interface Props {
   state: AppState;
-  onPick: (card: CatalogueCard) => void | Promise<void>;
+  /**
+   * Take this card.
+   *
+   * The second argument is the printing the user was LOOKING AT when they
+   * chose, and it is only ever passed when they said so explicitly — the
+   * plain Add stays name-level, because "any printing will do" is what most
+   * deck slots mean and is what an import is. Turning every add into an exact
+   * one because a picture happened to be on screen would quietly make every
+   * deck printing-level.
+   */
+  onPick: (
+    card: CatalogueCard,
+    printing?: CataloguePrinting,
+  ) => void | Promise<void>;
   /** Offered alongside Add when the caller can take one back out. */
   onUnpick?: (card: CatalogueCard) => void | Promise<void>;
   onClose?: () => void;
   /** Shown on each tile, e.g. how many are already in the deck. */
   countFor?: (card: CatalogueCard) => number;
+  /** How many of ONE printing are already in, for the swipe-through preview. */
+  countForPrinting?: (printingId: string) => number;
   /**
    * Whether a tap opens the card or adds it outright.
    *
@@ -100,6 +115,7 @@ export function CardBrowser({
   onUnpick,
   onClose,
   countFor,
+  countForPrinting,
   previewOnTap = false,
   nearEnd = 0,
 }: Props) {
@@ -109,12 +125,18 @@ export function CardBrowser({
   // you own or want is a real question — this is the only place in the app
   // that could answer it and did not.
   const [variants, setVariants] = useState<CataloguePrinting[]>([]);
+  // Which one is under the thumb. The pager alone could not say, so "Add this
+  // printing" had nothing to name — and a picker you can look through but not
+  // pick from is the half that does not help.
+  const [showing, setShowing] = useState(0);
 
   useEffect(() => {
     if (!preview) {
       setVariants([]);
+      setShowing(0);
       return;
     }
+    setShowing(0);
     void state
       .printingsFor(preview.name)
       .then((r) => setVariants(r.printings ?? []))
@@ -505,6 +527,15 @@ export function CardBrowser({
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
                 style={styles.pager}
+                onMomentumScrollEnd={(event) => {
+                  // Which page settled, from the offset over the page width.
+                  // React Native has no "current page" for a paging
+                  // ScrollView, and the alternative — remembering which tile
+                  // was tapped — cannot follow a swipe.
+                  const width = event.nativeEvent.layoutMeasurement.width || 1;
+                  const at = Math.round(event.nativeEvent.contentOffset.x / width);
+                  setShowing(Math.max(0, Math.min(variants.length - 1, at)));
+                }}
               >
                 {variants.map((printing) => (
                   <View key={printing.printing_id} style={styles.page}>
@@ -542,7 +573,28 @@ export function CardBrowser({
                 {countFor(preview)} in here already
               </Text>
             ) : null}
+            {countForPrinting && variants[showing] ? (
+              <Text style={styles.muted}>
+                {countForPrinting(variants[showing].printing_id)} of them this
+                printing
+              </Text>
+            ) : null}
 
+            {/*
+              Two ways to add, and the difference between them is the whole
+              point of the swipe.
+
+              Plain Add records a NAME, which is what a deck slot has always
+              meant and what an import is: any copy of Sol Ring fills it. Add
+              this printing records the exact card on screen, which is how you
+              say the full-art one and not the cheap one — and it is what makes
+              the deck's value the deck's value rather than an estimate.
+
+              Explicit rather than inferred from the swipe. Making the picture
+              on screen silently decide would turn every add into an exact one
+              the moment a card had more than one printing, and nobody asked
+              for that.
+            */}
             <View style={styles.previewButtons}>
               <Pressable
                 style={styles.previewButton}
@@ -562,8 +614,22 @@ export function CardBrowser({
                 style={[styles.previewButton, styles.previewAdd]}
                 onPress={() => void onPick(preview)}
               >
-                <Text style={styles.previewAddText}>Add</Text>
+                <Text style={styles.previewAddText}>
+                  {variants.length > 1 ? 'Add any' : 'Add'}
+                </Text>
               </Pressable>
+              {variants.length > 1 && variants[showing] ? (
+                <Pressable
+                  style={[styles.previewButton, styles.previewExact]}
+                  onPress={() => void onPick(preview, variants[showing])}
+                >
+                  <Text style={styles.previewAddText}>
+                    Add this printing (
+                    {variants[showing].set_code.toUpperCase()}{' '}
+                    {variants[showing].collector_number})
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
             {/* Stays open on purpose: adding a second copy is one more tap
                 rather than finding the card again. */}
@@ -704,7 +770,16 @@ const styles = StyleSheet.create({
   page: { width: 300, alignItems: 'center', gap: 6, paddingHorizontal: 6 },
   previewArt: { width: 280, aspectRatio: 745 / 1040, borderRadius: 12 },
   previewName: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
-  previewButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  // Wraps, because there are four buttons once a card has more than one
+  // printing and a fixed row would push the last one off the edge — which on
+  // this screen would be the exact-printing one, the only one that is new.
+  previewButtons: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
   previewButton: {
     borderColor: '#2d3142',
     borderWidth: 1,
@@ -714,6 +789,10 @@ const styles = StyleSheet.create({
   },
   previewButtonText: { color: '#e4e6eb', fontSize: 15 },
   previewAdd: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  // Outlined rather than filled: it sits beside Add and the two are different
+  // choices, not a primary and a secondary. A second green block would read
+  // as the same button twice.
+  previewExact: { borderColor: '#38a169', paddingHorizontal: 14 },
   previewAddText: { color: '#fff', fontSize: 15, fontWeight: '700' },
   setPanel: {
     borderColor: '#2d3142',

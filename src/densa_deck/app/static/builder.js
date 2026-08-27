@@ -489,18 +489,60 @@
 
   // ---------------- deck mutations ----------------
 
-  function addToDeck(card) {
+  /**
+   * How a slot is addressed inside a zone.
+   *
+   * A bare name for a slot that takes any printing — which is what a deck
+   * slot has always meant, and keeps every existing lookup working unchanged
+   * — and name-plus-printing for a slot that named one. That is what lets the
+   * same card sit in a deck twice as two different objects: the full-art you
+   * paid $50 for and the beat-up common, which are not interchangeable to the
+   * person who owns both.
+   */
+  function slotKey(name, printing) {
+    if (!printing || !printing.set_code) return name;
+    const num = printing.collector_number ? ` ${printing.collector_number}` : "";
+    return `${name} (${String(printing.set_code).toUpperCase()})${num}`;
+  }
+
+  /** What a slot's printing reads as: "CMM 410", or nothing for any printing. */
+  function printingLabel(entry) {
+    if (!entry || !entry.set_code) return "";
+    const num = entry.collector_number ? ` ${entry.collector_number}` : "";
+    return `${String(entry.set_code).toUpperCase()}${num}`;
+  }
+
+  /** The card this slot is, whichever way the slot is keyed. */
+  function entryName(key, entry) {
+    return (entry && entry.name) || key;
+  }
+
+  function addToDeck(card, printing) {
     const zone = builderState.activeZone;
     const entries = builderState.deck[zone];
-    const prev = entries[card.name];
+    // A printing carried on the card itself, for the re-add path: the +
+    // button hands back the stored entry, and a slot that named a printing
+    // must not lose it just because someone asked for one more copy.
+    const chosen = printing || (card.set_code ? {
+      set_code: card.set_code,
+      collector_number: card.collector_number,
+      printing_id: card.printing_id,
+    } : null);
+    const key = slotKey(card.name, chosen);
+    const prev = entries[key];
     // Pull just the fields the deck rendering + stats need. Keeps the
     // in-memory deck object small (there's no reason to hold all 35k
     // of the full card shape per row).
     if (prev) {
       prev.qty += 1;
     } else {
-      entries[card.name] = {
+      entries[key] = {
         qty: 1,
+        // Held explicitly now that the key is a slot rather than a name.
+        name: card.name,
+        set_code: (chosen && chosen.set_code) || "",
+        collector_number: (chosen && chosen.collector_number) || "",
+        printing_id: (chosen && chosen.printing_id) || "",
         cmc: card.cmc || 0,
         mana_cost: card.mana_cost || "",
         type_line: card.type_line || "",
@@ -632,9 +674,13 @@
     const commander = /commander|brawl|oathbreaker/.test(fmt);
     const maxCopies = commander ? 1 : 4;
 
+    // Counted by CARD, not by slot. Four Lightning Bolts from four sets is
+    // still four Lightning Bolts, and counting slots would call an illegal
+    // deck legal the moment someone picked their favourite art for one.
     const totals = {};
     for (const zone of ["mainboard", "sideboard", "commander"]) {
-      for (const [name, entry] of Object.entries(builderState.deck[zone] || {})) {
+      for (const [key, entry] of Object.entries(builderState.deck[zone] || {})) {
+        const name = entryName(key, entry);
         totals[name] = (totals[name] || 0) + (entry.qty || 0);
       }
     }
@@ -685,7 +731,7 @@
       groupNames.sort((a, b) => {
         const da = entries[a], db = entries[b];
         if (da.cmc !== db.cmc) return da.cmc - db.cmc;
-        return a.localeCompare(b);
+        return entryName(a, da).localeCompare(entryName(b, db));
       });
       groups.push({ label: groupLabel, names: groupNames });
     }
@@ -695,6 +741,7 @@
         <div class="deck-type-group-header">${escape(g.label)} (${g.names.reduce((a, n) => a + entries[n].qty, 0)})</div>
         ${g.names.map(n => {
           const ent = entries[n];
+          const label = printingLabel(ent);
           return `
             <div class="deck-row">
               <div class="qty-controls">
@@ -702,7 +749,14 @@
                 <span class="qty-value">${ent.qty}</span>
                 <button class="qty-btn" data-act="inc" data-name="${escape(n)}" title="Add one">+</button>
               </div>
-              <span class="card-name">${escape(n)}</span>
+              <span class="card-name">${escape(entryName(n, ent))}</span>
+              <!-- Which exact card this slot means, and the way to change it.
+                   "any" is not a gap: it is the normal answer, and the one an
+                   imported list gives. Saying so beats leaving the question
+                   invisible until the deck is valued wrongly. -->
+              <button class="qty-btn deck-printing${label ? " deck-printing-set" : ""}"
+                      data-act="printing" data-name="${escape(n)}"
+                      title="Which printing this slot means">${escape(label || "any")}</button>
               <span class="card-cmc" title="${escape(ent.mana_cost || "")}">${ent.cmc || 0}</span>
             </div>
           `;
@@ -715,16 +769,108 @@
     host.onclick = (ev) => {
       const btn = ev.target.closest(".qty-btn");
       if (!btn) return;
-      const name = btn.dataset.name;
+      const key = btn.dataset.name;
       if (btn.dataset.act === "inc") {
         // Re-use the same shape — we don't have the full card object
         // at this point, only the stored entry fields, so build a
-        // minimal Card-shaped payload and route through addToDeck.
-        const ent = entries[name];
-        addToDeck(Object.assign({ name }, ent));
+        // minimal Card-shaped payload and route through addToDeck. The
+        // entry already carries its printing, so the copy lands in the
+        // same slot rather than opening a second, loose one.
+        const ent = entries[key];
+        addToDeck(Object.assign({}, ent, { name: entryName(key, ent) }));
       } else if (btn.dataset.act === "dec") {
-        decrementCard(name);
+        decrementCard(key);
+      } else if (btn.dataset.act === "printing") {
+        openPrintingPicker(key);
       }
+    };
+  }
+
+  /**
+   * Choose which printing a slot means.
+   *
+   * Rendered into the deck panel rather than a modal: the modals in this app
+   * belong to the collection module, and reaching across to drive one from
+   * here would leave two owners for the same element. The panel is already
+   * re-rendered on every change, so it takes the picker away by itself.
+   *
+   * Binding a printing MOVES the slot — the same card at a chosen printing is
+   * a different slot from the same card at any printing — and the copies move
+   * with it. Merging into an existing slot for that printing rather than
+   * making a second one, because two rows of the identical printing is not a
+   * thing a deck can mean.
+   */
+  async function openPrintingPicker(key) {
+    const zone = builderState.activeZone;
+    const entry = builderState.deck[zone][key];
+    if (!entry) return;
+    const name = entryName(key, entry);
+
+    const host = e("build-deck-body");
+    if (!host) return;
+    const existing = host.querySelector(".printing-picker");
+    if (existing) existing.remove();
+
+    const panel = document.createElement("div");
+    panel.className = "printing-picker";
+    panel.innerHTML = `<p class="panel-hint">Printings of ${escape(name)}…</p>`;
+    host.appendChild(panel);
+
+    let rows = [];
+    try {
+      const r = await window.pywebview.api.get_card_printings(name);
+      const data = (r && r.data) ? r.data : r;
+      rows = (data && data.printings) || [];
+    } catch (_e) {
+      rows = [];
+    }
+
+    if (!rows.length) {
+      // The printing catalogue is an opt-in ~107k-row ingest. Saying which
+      // thing is missing beats an empty list that reads as "no printings".
+      panel.innerHTML = `<p class="panel-hint">No printings on file for
+        ${escape(name)}. The printing catalogue is a separate download —
+        Collection → Find printings.</p>`;
+      return;
+    }
+
+    const bind = (printing) => {
+      const next = slotKey(name, printing);
+      const bucket = builderState.deck[zone];
+      const moved = Object.assign({}, entry, {
+        name,
+        set_code: (printing && printing.set_code) || "",
+        collector_number: (printing && printing.collector_number) || "",
+        printing_id: (printing && printing.printing_id) || "",
+      });
+      delete bucket[key];
+      if (bucket[next]) bucket[next].qty += moved.qty;
+      else bucket[next] = moved;
+      markDirty();
+      renderDeck();
+      recomputeStats();
+    };
+
+    panel.innerHTML = `
+      <div class="printing-picker-head">
+        <strong>${escape(name)}</strong>
+        <span class="panel-hint">Which copy is in this deck?</span>
+      </div>
+      <button class="btn btn-outline btn-slim" data-any="1">Any printing</button>
+      ${rows.map((r, i) => `
+        <button class="btn btn-outline btn-slim" data-i="${i}">
+          ${escape(String(r.set_code || "").toUpperCase())}
+          ${escape(r.collector_number || "")}
+          ${r.price_usd != null ? `· $${Number(r.price_usd).toFixed(2)}` : ""}
+          ${r.owned ? `· ${r.owned} owned` : ""}
+        </button>`).join("")}`;
+
+    panel.onclick = (ev) => {
+      const btn = ev.target.closest("button");
+      if (!btn) return;
+      if (btn.dataset.any) { bind(null); return; }
+      const row = rows[Number(btn.dataset.i)];
+      if (row) bind(row);
     };
   }
 
@@ -1061,6 +1207,12 @@
     // Build in the same pasteable format the parser expects so the
     // backend's save path doesn't need a new code path — same parser,
     // resolver, and version-store write as a pasted decklist.
+    //
+    // A slot that named a printing writes it as "(CMM) 410", which is the
+    // form every exporter uses and the one the parser now KEEPS rather than
+    // strips. A slot that did not writes a bare name and means what it always
+    // meant, so a deck nobody has picked printings for is byte-for-byte what
+    // it was before.
     const lines = [];
     const zones = [
       ["Commander", builderState.deck.commander],
@@ -1068,11 +1220,17 @@
       ["Sideboard", builderState.deck.sideboard],
     ];
     for (const [zoneLabel, entries] of zones) {
-      const names = Object.keys(entries);
-      if (!names.length) continue;
+      const keys = Object.keys(entries);
+      if (!keys.length) continue;
       lines.push(`${zoneLabel}:`);
-      names.sort().forEach(n => {
-        lines.push(`${entries[n].qty} ${n}`);
+      keys.sort().forEach(k => {
+        const ent = entries[k];
+        const label = printingLabel(ent);
+        const suffix = label
+          ? ` (${String(ent.set_code).toUpperCase()})${
+              ent.collector_number ? ` ${ent.collector_number}` : ""}`
+          : "";
+        lines.push(`${ent.qty} ${entryName(k, ent)}${suffix}`);
       });
       lines.push("");
     }
@@ -1346,7 +1504,11 @@
       const bucket = builderState.deck[z];
       if (!bucket) continue;
       for (const key of Object.keys(bucket)) {
-        if (key.toLowerCase() === target) return [z, key, bucket[key]];
+        // Compared on the CARD, not the slot key: the analyst proposes cuts
+        // by name, and a slot keyed "Sol Ring (CMM) 410" is still a Sol Ring.
+        if (entryName(key, bucket[key]).toLowerCase() === target) {
+          return [z, key, bucket[key]];
+        }
       }
     }
     return null;

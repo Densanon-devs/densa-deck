@@ -186,13 +186,29 @@ class Zone(str, enum.Enum):
 
 
 class DeckEntry(BaseModel):
-    """A single entry in a decklist (card + quantity + zone)."""
+    """A single entry in a decklist (card + quantity + zone).
+
+    `set_code` / `collector_number` are the two things printed in the
+    bottom-left corner of a card, and they are OPTIONAL on purpose. Empty
+    means "any printing of this card will do", which is what a deck slot has
+    always meant and what an import from Moxfield is. Filled in, the entry
+    means one exact object — the full-art at $50 rather than the common at
+    $16 — which is what the deck's value and "which of my copies is sleeved
+    in it" both depend on.
+
+    Nothing in the analysis engine reads them, and nothing should: legality,
+    combos, goldfishing and archetype detection are all facts about cards,
+    not about printings. This is a decoration ON a decklist, not a
+    replacement for one.
+    """
 
     card_name: str
     quantity: int = 1
     zone: Zone = Zone.MAINBOARD
     card: Optional[Card] = None
     custom_tags: list[str] = Field(default_factory=list)
+    set_code: str = ""
+    collector_number: str = ""
 
 
 class Deck(BaseModel):

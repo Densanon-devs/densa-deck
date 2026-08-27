@@ -357,6 +357,46 @@ class CardDatabase:
         ).fetchone()
         return dict(zip(_PRINTING_COLUMNS, row)) if row else None
 
+    def representative_printings_for_names(self, names: list[str]) -> dict[str, dict]:
+        """Lowercased card name -> one printing that can stand for the card.
+
+        What a name-only deck slot resolves to. A slot that says "Sol Ring"
+        and nothing more still has to show a picture and carry a price, and
+        SOME printing has to supply both — but which one is a judgement, so it
+        is made once, here, rather than differently on each screen.
+
+        The cheapest priced printing wins, matching `cheapest_prices_for_names`
+        and the "build value" convention the rest of the collection layer
+        holds: what it would cost someone to put this card in a deck. An
+        unpriced card falls back to its newest printing, because a picture of
+        the recent one is the one a person recognises — better than no picture
+        while we wait for a price we may never have.
+
+        Batched for the same reason as the prices: a 100-card deck would
+        otherwise be 100 round trips, once per open of the deck screen.
+        """
+        out: dict[str, dict] = {}
+        if not names:
+            return out
+        conn = self.connect()
+        uniq = sorted({(n or "").strip() for n in names if (n or "").strip()})
+        for i in range(0, len(uniq), 400):
+            chunk = uniq[i : i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"""SELECT {', '.join(_PRINTING_COLUMNS)} FROM card_printings
+                    WHERE LOWER(name) IN ({placeholders})
+                    ORDER BY (price_usd IS NULL), price_usd ASC,
+                             released_at DESC, collector_number ASC""",
+                [c.lower() for c in chunk],
+            ).fetchall()
+            for row in rows:
+                printing = dict(zip(_PRINTING_COLUMNS, row))
+                # First row per name wins: the ORDER BY already put the one
+                # we want at the front of each name's group.
+                out.setdefault(printing["name"].lower(), printing)
+        return out
+
     def lookup_by_name(self, name: str) -> Card | None:
         conn = self.connect()
         row = conn.execute(

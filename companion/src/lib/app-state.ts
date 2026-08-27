@@ -19,14 +19,16 @@ import type {
   CardDetail,
   CataloguePrinting,
   CatalogueSet,
+  DeckResolveReply,
   OverlapsReply,
+  ResolvedSlot,
   CardQuery,
   CardSearchReply,
   CollectionPage,
   CollectionsReply,
 } from './protocol.ts';
-import { wishlistFromDecks } from './decks.ts';
-import type { Deck, WishlistRow } from './decks.ts';
+import { resolveSlots, wishlistFromDecks } from './decks.ts';
+import type { Deck, DeckEntry, SlotFacts, WishlistRow } from './decks.ts';
 import type { Via } from './reach.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
 import { SyncEngine } from './sync.ts';
@@ -278,6 +280,41 @@ export class AppState {
       'cards/printings',
       { card_name: cardName },
     );
+  }
+
+  /**
+   * Which picture each slot in a deck shows, and what a copy costs.
+   *
+   * Answers from the phone's own mirror FIRST and always, so opening a deck
+   * with no signal still shows the cards you own rather than a grid of grey
+   * rectangles. The desktop is then asked to fill in everything the mirror
+   * could not — every card you have never owned, and every slot that came
+   * back from the text box carrying a set and number but no id.
+   *
+   * A desktop that is away costs detail, never the screen. That is the whole
+   * shape of this app.
+   */
+  async deckSlots(entries: DeckEntry[]): Promise<Record<string, SlotFacts>> {
+    const owned = await this.store.listStacks();
+    if (!entries.length) return {};
+
+    let answered: ResolvedSlot[] = [];
+    try {
+      const reply = await this.client.call<DeckResolveReply>('decks/resolve', {
+        slots: entries.map((entry) => ({
+          name: entry.name,
+          printing_id: entry.printing_id ?? '',
+          set_code: entry.set_code ?? '',
+          collector_number: entry.collector_number ?? '',
+        })),
+      });
+      answered = reply.slots ?? [];
+    } catch {
+      // Offline, or the desktop is asleep. The mirror still has an answer for
+      // everything you own, which is most of a deck you are holding.
+      answered = [];
+    }
+    return resolveSlots(entries, owned, answered);
   }
 
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {

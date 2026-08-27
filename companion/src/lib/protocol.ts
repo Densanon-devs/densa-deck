@@ -307,3 +307,39 @@ export interface CataloguePrinting {
   rarity?: string;
   price_usd?: number | null;
 }
+
+/**
+ * A deck slot on its way to being resolved.
+ *
+ * Three shapes in one type, because a slot is allowed to be any of them: a
+ * printing id (exact), a set and collector number (exact, but as written on
+ * the card rather than as the catalogue keys it), or a bare name meaning
+ * "any printing".
+ */
+export interface DeckSlotRef {
+  name: string;
+  printing_id?: string;
+  set_code?: string;
+  collector_number?: string;
+}
+
+/**
+ * What the desktop made of a slot.
+ *
+ * `found` false rather than an absent row: a reply shorter than the request
+ * would leave the caller working out which slots went missing, and getting
+ * that wrong is how a deck screen shows the wrong card's picture.
+ */
+export interface ResolvedSlot extends DeckSlotRef {
+  printing_id: string;
+  set_code: string;
+  collector_number: string;
+  price_usd?: number | null;
+  found: boolean;
+}
+
+export interface DeckResolveReply {
+  slots: ResolvedSlot[];
+  /** False before the opt-in printings ingest has been run on the desktop. */
+  catalogue_ready: boolean;
+}

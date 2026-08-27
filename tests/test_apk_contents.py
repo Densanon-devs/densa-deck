@@ -68,6 +68,13 @@ SCREENS = {
     "scan diagnosis": "but matched nothing",
     "offline art": "Download all card art",
     "art diagnostics": "Card art",
+    # The deck screen shows pictures by default and words on request. Both
+    # halves need a string, because a tab nobody navigates to is exactly the
+    # kind of thing that leaves the bundle without anything noticing.
+    "visual deck tab": "Tap a card for one more",
+    "written deck tab": "means that exact printing",
+    "printing on a deck tile": "any printing",
+    "picking a printing to add": "Add this printing",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -87,6 +94,12 @@ BEHAVIOUR = {
     # A label only this app uses; "setGlobalHandler" would pass on
     # React Native's own copy whether or not the trap shipped.
     "global error trap": "opening the collection",
+    # A deck slot can name a printing, and the two halves of that both have
+    # to be in the shipped app: the route that turns slots into pictures and
+    # prices, and the exporter suffix that carries a printing through a text
+    # box. Either one absent is silent — the deck still opens, it is just
+    # wrong about which card is in it.
+    "deck slot resolver route": "decks/resolve",
 }
 
 

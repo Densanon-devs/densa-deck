@@ -5,11 +5,17 @@
  * both happen on the phone, because those are the things you do standing in a
  * shop. Analysis goes to the PC, because it needs the card catalogue and the
  * combo database, and there is no honest offline answer.
+ *
+ * A deck is shown two ways and the pictures come first. A decklist as text is
+ * what you send someone; a wall of card faces is what you actually think
+ * about when you are deciding what to cut, because you recognise a card by
+ * its art long before you have read its name.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,22 +25,29 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { artSource } from '../lib/images.ts';
 import { uuid } from '../lib/uuid.ts';
 import { CardBrowser } from './CardBrowser.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
   addToDeck,
+  carryPrintings,
+  copiesOf,
+  costToFinish,
   deckSize,
+  deckValue,
   deckWarnings,
+  entryKey,
   formatDecklist,
   parseDecklist,
+  printingLabel,
+  pricesFromSlots,
   removeFromDeck,
   mergeCounts,
   shortfall,
 } from '../lib/decks.ts';
-import type { Deck } from '../lib/decks.ts';
-import type { CatalogueCard } from '../lib/protocol.ts';
+import type { Deck, DeckEntry, ShortfallRow, SlotFacts } from '../lib/decks.ts';
 
 interface Props {
   state: AppState;
@@ -66,7 +79,7 @@ export function DeckListScreen({
       deck_id: uuid(),
       name: chosen,
       format: '',
-      decklist: {},
+      decklist: [],
       notes: '',
       updated_at: new Date().toISOString(),
     };
@@ -127,9 +140,7 @@ export function DeckListScreen({
 export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');
-  const [missing, setMissing] = useState<
-    Array<{ name: string; need: number; have: number; short: number }>
-  >([]);
+  const [missing, setMissing] = useState<ShortfallRow[]>([]);
   const [analysis, setAnalysis] = useState<string>('');
   const [thinking, setThinking] = useState(false);
   const [problem, setProblem] = useState('');
@@ -137,10 +148,27 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   // Which half the grid and the +/- act on. The text box always shows
   // both, because that is what a decklist IS.
   const [zone, setZone] = useState<'main' | 'side'>('main');
+  /**
+   * Pictures or words.
+   *
+   * Pictures by default: a decklist as text is the form you SEND, and a wall
+   * of card faces is the form you think in. Text is one tap away and is still
+   * the only way to paste a list in or out, so nothing is lost by not leading
+   * with it.
+   */
+  const [view, setView] = useState<'visual' | 'text'>('visual');
   // Bumped when the page nears its bottom. The browser owns no scroller of
   // its own — two nested ones is why the grid could not scroll at all — so
   // the page watches and nudges it to fetch the next sixty.
   const [nearEnd, setNearEnd] = useState(0);
+  /**
+   * What each slot in this deck looks like and costs.
+   *
+   * Keyed by slot, not by card name, because two slots of the same card at
+   * two printings are two different pictures and two different prices — which
+   * is the entire reason a slot can name a printing.
+   */
+  const [slots, setSlots] = useState<Record<string, SlotFacts>>({});
 
   useEffect(() => {
     void (async () => {
@@ -153,7 +181,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
   /** What you still need, from the phone's own mirror. Works with no signal. */
   const recheck = useCallback(
-    async (decklist: Record<string, number>) => {
+    async (decklist: DeckEntry[]) => {
       const owned = await state.cards();
       setMissing(shortfall(decklist, owned));
     },
@@ -161,8 +189,60 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   );
 
   useEffect(() => {
-    if (deck) void recheck(deck.decklist).catch(reporting('checking what you own', setProblem));
+    if (deck) {
+      void recheck(mergeCounts(deck.decklist, deck.sideboard)).catch(
+        reporting('checking what you own', setProblem),
+      );
+    }
   }, [deck, recheck]);
+
+  /**
+   * Every slot in the deck, both halves, in one list.
+   *
+   * Memoised because the effect below keys off it and a fresh array every
+   * render would ask the desktop about the whole deck on every render.
+   */
+  const allSlots = useMemo(
+    () => (deck ? mergeCounts(deck.decklist, deck.sideboard) : []),
+    [deck],
+  );
+
+  /**
+   * Which cards these slots ARE, ignoring how many of each.
+   *
+   * The effect below depends on this rather than on the deck, because a
+   * picture and a price are facts about a slot and not about its quantity.
+   * Keyed on the deck itself, tapping a tile to add a fourth copy would send
+   * the entire hundred-card list to the desktop again — once per tap, over a
+   * tailnet, for an answer that cannot have changed.
+   */
+  const slotSignature = useMemo(
+    () => allSlots.map((entry) => entryKey(entry)).join('\n'),
+    [allSlots],
+  );
+
+  /**
+   * The art and the prices.
+   *
+   * Never allowed to fail loudly: this is decoration and money, and neither
+   * is worth taking the deck away over. What the phone knows on its own —
+   * every card you own — arrives with no network at all.
+   */
+  useEffect(() => {
+    if (!allSlots.length) {
+      setSlots({});
+      return;
+    }
+    void state
+      .deckSlots(allSlots)
+      .then(setSlots)
+      // Keeps whatever was already resolved rather than blanking the grid: a
+      // desktop that went to sleep should not take the pictures with it.
+      .catch(() => {});
+    // allSlots is deliberately absent: it changes identity on every edit,
+    // and what this depends on is WHICH cards, not how many.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotSignature, state]);
 
   const save = useCallback(async () => {
     const { cards, sideboard, skipped } = parseDecklist(text);
@@ -176,8 +256,12 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       deck_id: deckId,
       name: deck?.name ?? 'Untitled deck',
       format: deck?.format ?? '',
-      decklist: cards,
-      sideboard,
+      // The text box carries a set and a number; it cannot carry a Scryfall
+      // id. Without putting them back, one hand-edit would quietly demote
+      // every exact slot in the deck to set-and-number only, the shortfall
+      // would change, and nothing on screen would say why.
+      decklist: carryPrintings(cards, deck?.decklist),
+      sideboard: carryPrintings(sideboard, deck?.sideboard),
       notes: deck?.notes ?? '',
       updated_at: new Date().toISOString(),
     };
@@ -185,30 +269,33 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     setDeck(next);
     // The board counts toward what you still need — those cards get
     // bought and carried like any other.
-    await recheck(mergeCounts(cards, sideboard));
+    await recheck(mergeCounts(next.decklist, next.sideboard));
   }, [text, deck, deckId, decks, recheck]);
 
   /**
    * Add or remove, in whichever half is selected.
    *
    * One function rather than two pairs, because the only difference between
-   * putting a card in the deck and putting it in the board is which map it
+   * putting a card in the deck and putting it in the board is which list it
    * lands in — and writing that twice is how the two drift apart.
+   *
+   * Takes a card rather than a name so a printing can come with it. A bare
+   * name still means "any printing", which is what it always meant.
    */
   const change = useCallback(
-    async (name: string, delta: 1 | -1) => {
+    async (card: string | DeckEntry, delta: 1 | -1) => {
       if (!deck) return;
       const edit = delta > 0 ? addToDeck : removeFromDeck;
       const next: Deck =
         zone === 'side'
           ? {
               ...deck,
-              sideboard: edit(deck.sideboard ?? {}, name),
+              sideboard: edit(deck.sideboard ?? [], card),
               updated_at: new Date().toISOString(),
             }
           : {
               ...deck,
-              decklist: edit(deck.decklist, name),
+              decklist: edit(deck.decklist, card),
               updated_at: new Date().toISOString(),
             };
       await decks.save(next);
@@ -219,15 +306,24 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     [deck, decks, recheck, zone],
   );
 
-  const add = useCallback((name: string) => change(name, 1), [change]);
-  const drop = useCallback((name: string) => change(name, -1), [change]);
+  const add = useCallback(
+    (card: string | DeckEntry) => change(card, 1),
+    [change],
+  );
+  const drop = useCallback(
+    (card: string | DeckEntry) => change(card, -1),
+    [change],
+  );
 
   const analyse = useCallback(async () => {
     if (!deck) return;
     setThinking(true);
     setAnalysis('');
     try {
-      const result = await state.analyze(formatDecklist(deck.decklist), deck.name);
+      const result = await state.analyze(
+        formatDecklist(deck.decklist, deck.sideboard),
+        deck.name,
+      );
       setAnalysis(JSON.stringify(result, null, 2));
     } catch (err) {
       // Said plainly rather than dressed up: the analysis genuinely cannot be
@@ -241,6 +337,26 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       setThinking(false);
     }
   }, [deck, state]);
+
+  /** The half you are looking at, which is the half the tabs and +/- act on. */
+  const showing: DeckEntry[] = (zone === 'side' ? deck?.sideboard : deck?.decklist) ?? [];
+
+  /**
+   * What the deck is worth, and what finishing it would cost.
+   *
+   * Worth having only now that slots can name printings. Before, every copy
+   * of a card was priced at one representative printing, so the deck holding
+   * the $50 full-art and the deck holding the $16 common were the same
+   * number — an estimate wearing a dollar sign.
+   */
+  const money = useMemo(() => {
+    if (!deck) return null;
+    const prices = pricesFromSlots(allSlots, slots);
+    return {
+      worth: deckValue(allSlots, prices),
+      toFinish: costToFinish(missing, prices),
+    };
+  }, [deck, allSlots, slots, missing]);
 
   return (
     <ScrollView
@@ -267,27 +383,20 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       <Text style={styles.muted}>
         {deck ? `${deckSize(deck.decklist)} cards` : ''}
       </Text>
+      {money && (money.worth.usd > 0 || money.worth.unpriced > 0) ? (
+        <Text style={styles.muted}>
+          Worth about ${money.worth.usd.toFixed(2)}
+          {money.worth.unpriced
+            ? ` — ${money.worth.unpriced} card${
+                money.worth.unpriced === 1 ? '' : 's'
+              } couldn’t be priced`
+            : ''}
+          {money.toFinish.usd > 0
+            ? `  ·  $${money.toFinish.usd.toFixed(2)} still to buy`
+            : ''}
+        </Text>
+      ) : null}
 
-      <TextInput
-        style={styles.list}
-        value={text}
-        onChangeText={setText}
-        multiline
-        autoCorrect={false}
-        autoCapitalize="none"
-        placeholder={'4 Lightning Bolt\n1 Sol Ring'}
-        placeholderTextColor="#8a8f9c"
-      />
-      <Pressable style={styles.primary} onPress={save}>
-        <Text style={styles.primaryText}>Save deck</Text>
-      </Pressable>
-
-      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
-
-      {/*
-        Which half you are editing. Not a mode buried in a menu: adding to
-        the wrong one is silent, and you would find out at the table.
-      */}
       {/* Over the line, not blocked at it. Half of deckbuilding is holding
           a pile that is not legal yet. */}
       {deck
@@ -298,13 +407,17 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           ))
         : null}
 
+      {/*
+        Which half you are editing. Not a mode buried in a menu: adding to
+        the wrong one is silent, and you would find out at the table.
+      */}
       <View style={styles.zoneRow}>
         <Pressable
           style={[styles.zone, zone === 'main' && styles.zoneOn]}
           onPress={() => setZone('main')}
         >
           <Text style={[styles.zoneText, zone === 'main' && styles.zoneTextOn]}>
-            Deck ({deckSize(deck?.decklist ?? {})})
+            Deck ({deckSize(deck?.decklist ?? [])})
           </Text>
         </Pressable>
         <Pressable
@@ -312,10 +425,124 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           onPress={() => setZone('side')}
         >
           <Text style={[styles.zoneText, zone === 'side' && styles.zoneTextOn]}>
-            Sideboard ({deckSize(deck?.sideboard ?? {})})
+            Sideboard ({deckSize(deck?.sideboard ?? [])})
           </Text>
         </Pressable>
       </View>
+
+      {/* Pictures or words. Same control as the one directly above, because
+          it does the same kind of thing — switches what you are looking at
+          rather than changing anything. */}
+      <View style={styles.zoneRow}>
+        <Pressable
+          style={[styles.zone, view === 'visual' && styles.zoneOn]}
+          onPress={() => setView('visual')}
+        >
+          <Text style={[styles.zoneText, view === 'visual' && styles.zoneTextOn]}>
+            Visual
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.zone, view === 'text' && styles.zoneOn]}
+          onPress={() => setView('text')}
+        >
+          <Text style={[styles.zoneText, view === 'text' && styles.zoneTextOn]}>
+            Written
+          </Text>
+        </Pressable>
+      </View>
+
+      {view === 'visual' ? (
+        <>
+          {showing.length === 0 ? (
+            <Text style={styles.muted}>
+              {zone === 'side'
+                ? 'Nothing in the sideboard yet.'
+                : 'No cards yet. Browse below, or switch to Written and paste a list.'}
+            </Text>
+          ) : (
+            <Text style={styles.muted}>
+              Tap a card for one more, hold it for one fewer.
+            </Text>
+          )}
+          {/*
+            Laid out, NOT scrolled. There is one scroller on this screen and
+            it belongs to the page — a nested vertical ScrollView never gets
+            the gesture, and every attempt at one on this screen produced a
+            grid that showed two rows and refused to move.
+          */}
+          <View style={styles.grid}>
+            {showing.map((entry) => {
+              const facts = slots[entryKey(entry)];
+              const label = printingLabel(entry) || printingLabel(facts ?? {});
+              return (
+                <Pressable
+                  key={entryKey(entry)}
+                  style={styles.tile}
+                  onPress={() => void add(entry)}
+                  onLongPress={() => void drop(entry)}
+                >
+                  <Image
+                    source={artSource(facts?.printing_id ?? '', 'small')}
+                    style={styles.tileArt}
+                    resizeMode="contain"
+                  />
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{entry.qty}</Text>
+                  </View>
+                  <Text style={styles.tileName} numberOfLines={2}>
+                    {entry.name}
+                  </Text>
+                  {/*
+                    Which card this actually is.
+
+                    A slot that named a printing shows it, and the picture
+                    above is that exact card. A slot that did not says so
+                    rather than letting the picture imply a choice nobody
+                    made — it is the right card, shown in one of its
+                    printings, and pretending otherwise is what the whole
+                    printing change exists to stop.
+                  */}
+                  <Text
+                    style={
+                      entry.printing_id || entry.set_code
+                        ? styles.exactPrinting
+                        : styles.anyPrinting
+                    }
+                    numberOfLines={1}
+                  >
+                    {entry.printing_id || entry.set_code
+                      ? label || 'this printing'
+                      : `any printing${label ? ` · showing ${label}` : ''}`}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </>
+      ) : (
+        <>
+          <TextInput
+            style={styles.list}
+            value={text}
+            onChangeText={setText}
+            multiline
+            autoCorrect={false}
+            autoCapitalize="none"
+            placeholder={'4 Lightning Bolt\n1 Sol Ring (CMM) 410'}
+            placeholderTextColor="#8a8f9c"
+          />
+          <Text style={styles.muted}>
+            A line with a set and number — 1 Sol Ring (CMM) 410 — means that
+            exact printing. A bare name means any of them.
+          </Text>
+          <Pressable style={styles.primary} onPress={save}>
+            <Text style={styles.primaryText}>Save deck</Text>
+          </Pressable>
+        </>
+      )}
+
+      {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       <View style={styles.row}>
         <Text style={[styles.section, styles.grow]}>
@@ -341,15 +568,28 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         <View style={styles.browser}>
           <CardBrowser
             state={state}
-            onPick={(card) => add(card.name)}
+            onPick={(card, printing) =>
+              add(
+                printing
+                  ? {
+                      name: card.name,
+                      qty: 1,
+                      printing_id: printing.printing_id,
+                      set_code: printing.set_code,
+                      collector_number: printing.collector_number,
+                    }
+                  : card.name,
+              )
+            }
             onUnpick={(card) => drop(card.name)}
             previewOnTap
             nearEnd={nearEnd}
             onClose={() => setBrowsing(false)}
-            countFor={(card) =>
-              (zone === 'side' ? deck?.sideboard : deck?.decklist)?.[
-                card.name
-              ] ?? 0
+            countFor={(card) => copiesOf(showing, card.name)}
+            countForPrinting={(printingId) =>
+              showing
+                .filter((e) => e.printing_id === printingId)
+                .reduce((sum, e) => sum + e.qty, 0)
             }
           />
         </View>
@@ -365,10 +605,15 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             to finish.
           </Text>
           {missing.map((row) => (
-            <Pressable key={row.name} style={styles.row}
-                       onLongPress={() => drop(row.name)}>
+            <Pressable key={entryKey(row)} style={styles.row}
+                       onLongPress={() => void drop(row)}>
               <Text style={styles.short}>{row.short}</Text>
-              <Text style={styles.name}>{row.name}</Text>
+              <View style={styles.grow}>
+                <Text style={styles.name}>{row.name}</Text>
+                {printingLabel(row) ? (
+                  <Text style={styles.exactPrinting}>{printingLabel(row)}</Text>
+                ) : null}
+              </View>
               <Text style={styles.muted}>
                 have {row.have} of {row.need}
               </Text>
@@ -458,6 +703,32 @@ const styles = StyleSheet.create({
   zoneOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
   zoneText: { color: '#c9ced9', fontSize: 14 },
   zoneTextOn: { color: '#ffffff', fontWeight: '700' },
+  // The same grid the browser uses, deliberately: the deck and the search
+  // results are the same kind of thing looked at from two directions, and two
+  // slightly different card grids on one screen reads as a bug.
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tile: { width: '31%' },
+  tileArt: {
+    width: '100%',
+    aspectRatio: 745 / 1040,
+    borderRadius: 6,
+    backgroundColor: '#1a1d27',
+  },
+  tileName: { color: '#c9ced9', fontSize: 11, marginTop: 3 },
+  exactPrinting: { color: '#68d391', fontSize: 10 },
+  anyPrinting: { color: '#6b7280', fontSize: 10 },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    minWidth: 22,
+    borderRadius: 11,
+    backgroundColor: '#38a169',
+    alignItems: 'center',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+  },
+  badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   analysis: {
     color: '#8a8f9c',
     fontFamily: 'monospace',

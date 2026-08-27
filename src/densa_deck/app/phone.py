@@ -564,6 +564,17 @@ class PhoneBridge:
                 payload.get("printing_id", ""),
                 payload.get("card_name", "")))
 
+        # A whole deck's slots turned into printings at once — the picture for
+        # each card in the visual grid, the price for the deck's value, and
+        # the id for a slot that came back from the text box carrying only a
+        # set and a number. Read-only, and bounded: a phone cannot use this to
+        # ask the desktop to walk the entire catalogue.
+        if route == "decks/resolve":
+            slots = payload.get("slots") or []
+            if not isinstance(slots, list):
+                return {"ok": False, "error": "slots must be a list."}
+            return _unwrap(api.resolve_deck_slots(slots[:400]))
+
         # --- wishlist -----------------------------------------------------
         # Cards a deck wants that you do not own. Stored apart from the
         # collection, so nothing here counts toward what you have.

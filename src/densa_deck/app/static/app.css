@@ -1792,6 +1792,47 @@ code {
   text-align: right;
 }
 
+/* Which printing a slot means.
+   Quiet when the answer is "any", which is the normal one and the one an
+   imported list gives — a loud badge on every row of a hundred-card deck
+   would be noise. Green once a printing is chosen, because then it is a
+   decision the deck's value depends on. */
+.deck-row .deck-printing {
+  width: auto;
+  min-width: 34px;
+  padding: 0 6px;
+  font-size: 0.7rem;
+  opacity: 0.45;
+  letter-spacing: 0.02em;
+}
+
+.deck-row .deck-printing:hover { opacity: 1; }
+
+.deck-row .deck-printing-set {
+  opacity: 1;
+  color: var(--color-success, #38a169);
+  border-color: var(--color-success, #38a169);
+}
+
+.printing-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+}
+
+.printing-picker-head {
+  flex-basis: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
 /* Stats column */
 .build-stats-body {
   display: flex;

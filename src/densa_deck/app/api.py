@@ -627,10 +627,23 @@ class AppApi:
 
         decklist: dict[str, int] = {}
         zones: dict[str, list[str]] = {}
+        # Which exact card a slot meant, for the slots that said so. Kept
+        # BESIDE the name-keyed decklist rather than folded into it: every
+        # analysis in the engine is a fact about cards, not printings, and
+        # they all read `decklist` unchanged.
+        printings: list[dict] = []
         for entry in deck.entries:
             decklist[entry.card_name] = decklist.get(entry.card_name, 0) + entry.quantity
             zone_name = entry.zone.value if hasattr(entry.zone, "value") else str(entry.zone)
             zones.setdefault(zone_name, []).append(entry.card_name)
+            if getattr(entry, "set_code", ""):
+                printings.append({
+                    "card_name": entry.card_name,
+                    "set_code": entry.set_code,
+                    "collector_number": getattr(entry, "collector_number", ""),
+                    "quantity": entry.quantity,
+                    "zone": zone_name,
+                })
 
         # Combo-break detection: if a prior version of THIS deck had any
         # complete combo lines that the new save would break, surface them
@@ -670,6 +683,7 @@ class AppApi:
             format=deck.format.value if deck.format else None,
             decklist=decklist, zones=zones,
             scores=dict(result.scores or {}), metrics=metrics, notes=notes,
+            printings=printings,
         )
         out = _snapshot_to_dict(snap)
         # Attach combos_broken so the frontend can show a warning toast
@@ -686,7 +700,7 @@ class AppApi:
         # save that failed is lost work.
         try:
             out["wishlist"] = self._refresh_wishlist_for_deck(
-                deck_id, name, decklist)
+                deck_id, name, decklist, printings=printings)
         except Exception:
             pass
         return out
@@ -2858,6 +2872,95 @@ class AppApi:
         }
 
     @_safe
+    def resolve_deck_slots(self, slots: list[dict] | None = None) -> dict:
+        """Turn a deck's slots into printings, in one call.
+
+        A deck slot is one of three things and each needs different work:
+
+        * it names a **printing id** — that is the answer already, and this
+          only fills in the set, number and price beside it;
+        * it names a **set and collector number** — the pair that survives a
+          trip through a text box, where a UUID cannot. Resolving it back to
+          an id is what stops one hand-edit of a decklist silently demoting
+          every exact slot in it;
+        * it names **only a card**, which still has to show a picture and
+          carry a price. Some printing has to stand for it, and which one is
+          decided once in `representative_printings_for_names` rather than
+          differently on each screen.
+
+        One route for all three because the phone asks all three questions at
+        the same moment — when a deck is opened — and a per-slot round trip
+        over a tailnet is the difference between a grid that appears and one
+        that fills in over several seconds.
+
+        Unresolvable slots come back with `found` false rather than being
+        dropped. A caller that got a shorter list than it sent would have to
+        work out which ones went missing, and would probably get it wrong.
+        """
+        db = self._get_db()
+        slots = list(slots or [])
+        if not slots:
+            return {"slots": [], "catalogue_ready": db.printing_count() > 0}
+
+        def _clean(value) -> str:
+            return str(value or "").strip()
+
+        # Every name we might have to fall back on, gathered before the loop
+        # so the batched query runs once rather than per slot.
+        loose = [
+            _clean(s.get("name")) for s in slots
+            if not _clean(s.get("printing_id")) and not _clean(s.get("set_code"))
+        ]
+        representative = db.representative_printings_for_names(loose)
+
+        out = []
+        for slot in slots:
+            name = _clean(slot.get("name"))
+            printing_id = _clean(slot.get("printing_id"))
+            set_code = _clean(slot.get("set_code"))
+            number = _clean(slot.get("collector_number"))
+
+            found = None
+            if printing_id:
+                found = db.get_printing(printing_id)
+            elif set_code and number:
+                found = db.find_printing_by_set_number(set_code, number)
+            elif set_code:
+                # A set with no number, as `[ELD]`-style exports emit. Pick
+                # this card's printing in that set; there is normally one.
+                found = next(
+                    (p for p in db.printings_for_card(name)
+                     if (p.get("set_code") or "").lower() == set_code.lower()),
+                    None,
+                )
+            else:
+                found = representative.get(name.lower())
+
+            if found is None:
+                out.append({
+                    "name": name,
+                    "printing_id": printing_id,
+                    "set_code": set_code,
+                    "collector_number": number,
+                    "price_usd": None,
+                    "found": False,
+                })
+                continue
+
+            out.append({
+                # The catalogue's spelling of the name, not the one typed —
+                # a slot pasted as "sol ring" should hang under "Sol Ring".
+                "name": found.get("name") or name,
+                "printing_id": found["printing_id"],
+                "set_code": found.get("set_code") or "",
+                "collector_number": found.get("collector_number") or "",
+                "price_usd": found.get("price_usd"),
+                "found": True,
+            })
+
+        return {"slots": out, "catalogue_ready": True}
+
+    @_safe
     def add_to_collection(
         self,
         printing_id: str,
@@ -3554,25 +3657,88 @@ class AppApi:
     # --------------------------------------------------------- wishlist
 
     def _refresh_wishlist_for_deck(self, deck_id: str, deck_name: str,
-                                   decklist: dict) -> dict:
+                                   decklist: dict,
+                                   printings: list[dict] | None = None) -> dict:
         """Rewrite what one deck wants, from what it is short of.
 
         Replaced rather than added to: the shortfall is a fact about the
         CURRENT decklist, so accumulating would leave a card on the list
         forever after it was cut from the deck that wanted it.
 
-        Counted at the card-name level, because a deck slot says "Sol Ring"
-        and any printing satisfies it.
+        Most slots are counted at the card-name level, because a slot that
+        says "Sol Ring" is filled by any Sol Ring. A slot that NAMED a
+        printing is counted against that printing alone: owning a different
+        one does not fill it, and reporting otherwise would tell someone a
+        deck was finished while the card they actually asked for was still on
+        the shelf.
+
+        Exact slots are settled FIRST and the copies they take come out of the
+        name pool as well. Otherwise one physical card would fill an exact
+        slot and a loose slot at the same time, and the deck would read as
+        complete with a sleeve empty.
         """
         store = self._get_collection_store()
-        owned = store.owned_by_name()
-        lowered = {name.lower(): count for name, count in owned.items()}
+        by_name = {name.lower(): int(count)
+                   for name, count in store.owned_by_name().items()}
+        by_printing = store.owned_by_printing()
 
         store.wishlist_clear_deck(deck_id)
         wanted = 0
+
+        # What each named printing needs, and how much of each card that
+        # accounts for — the rest of the card's count is the loose remainder.
+        exact: list[dict] = []
+        claimed: dict[str, int] = {}
+        db = self._get_db()
+        for row in (printings or []):
+            name = str(row.get("card_name") or "").strip()
+            if not name:
+                continue
+            need = int(row.get("quantity") or 0)
+            if need <= 0:
+                continue
+            set_code = str(row.get("set_code") or "").strip()
+            number = str(row.get("collector_number") or "").strip()
+            claimed[name.lower()] = claimed.get(name.lower(), 0) + need
+            # The pair printed on the card resolved back to the id the
+            # collection is keyed by. A pair the catalogue cannot place still
+            # goes on the list — it is a card you want and cannot match, which
+            # is a stronger reason to list it, not a weaker one.
+            printing = (db.find_printing_by_set_number(set_code, number)
+                        if set_code and number else None)
+            exact.append({
+                "card_name": name,
+                "set_code": set_code,
+                "collector_number": number,
+                "quantity": need,
+                "printing_id": (printing or {}).get("printing_id", ""),
+            })
+
+        for row in exact:
+            printing_id = (row["printing_id"] or "").lower()
+            have = by_printing.get(printing_id, 0) if printing_id else 0
+            used = min(row["quantity"], have)
+            if printing_id:
+                by_printing[printing_id] = have - used
+            key = row["card_name"].lower()
+            by_name[key] = max(0, by_name.get(key, 0) - used)
+            short = row["quantity"] - used
+            if short > 0:
+                store.wishlist_set(row["card_name"], short, deck_id=deck_id,
+                                   deck_name=deck_name,
+                                   set_code=row["set_code"],
+                                   collector_number=row["collector_number"])
+                wanted += 1
+
         for name, need in (decklist or {}).items():
-            have = lowered.get(str(name).lower(), 0)
-            short = int(need) - int(have)
+            key = str(name).lower()
+            loose = int(need) - claimed.get(key, 0)
+            if loose <= 0:
+                continue
+            have = by_name.get(key, 0)
+            used = min(loose, have)
+            by_name[key] = have - used
+            short = loose - used
             if short > 0:
                 store.wishlist_set(str(name), short, deck_id=deck_id,
                                    deck_name=deck_name)
@@ -3598,7 +3764,32 @@ class AppApi:
         if db.card_count() or db.printing_count():
             prices = db.cheapest_prices_for_names([w["card_name"] for w in wanted])
             for row in wanted:
-                price = prices.get(row["card_name"].lower())
+                # A row that named a printing is quoted at THAT printing's
+                # price. Quoting the cheapest one would tell you the full-art
+                # your deck asked for costs $16, which is the number that made
+                # recording the printing worth doing in the first place.
+                price = None
+                set_code = row.get("set_code") or ""
+                if set_code:
+                    number = row.get("collector_number") or ""
+                    if number:
+                        printing = db.find_printing_by_set_number(set_code, number)
+                    else:
+                        # A set with no number, as `[ELD]`-style exports emit.
+                        printing = next(
+                            (p for p in db.printings_for_card(row["card_name"])
+                             if (p.get("set_code") or "").lower()
+                             == set_code.lower()),
+                            None,
+                        )
+                    if printing:
+                        price = printing.get("price_usd")
+                    # No fallback to the cheapest printing on purpose: a row
+                    # that named one and could not be found is UNKNOWN, and
+                    # quoting a different printing's price would answer a
+                    # question nobody asked.
+                else:
+                    price = prices.get(row["card_name"].lower())
                 row["price_usd"] = price
                 if price is None:
                     unpriced += row["quantity"]
@@ -3626,8 +3817,16 @@ class AppApi:
 
     @_safe
     def wishlist_remove(self, card_name: str, deck_id: str = "") -> dict:
-        return self._get_collection_store().wishlist_set(
-            card_name, 0, deck_id=deck_id)
+        """Take a card off the list — every printing of it that was on there.
+
+        Not `wishlist_set(..., 0)`, which is exact by printing: that would
+        remove the name-only row and leave a printing-level one sitting there,
+        which reads as the button having done nothing.
+        """
+        removed = self._get_collection_store().wishlist_forget(
+            card_name, deck_id=deck_id)
+        return {"card_name": card_name, "deck_id": deck_id,
+                "rows_removed": removed}
 
     @_safe
     def wishlist_acquire(self, printing_id: str, card_name: str = "",
@@ -3666,22 +3865,46 @@ class AppApi:
                 "wishlist_rows_updated": cleared}
 
     def _reconcile_wishlist_for_card(self, card_name: str) -> int:
-        """Re-check every deck that wanted a card against what is now owned."""
+        """Re-check every deck that wanted a card against what is now owned.
+
+        A row that named a printing is re-checked against THAT printing alone.
+        Buying the cheap one does not take the full-art off a list that asked
+        for the full-art, and clearing it would leave someone believing they
+        owned a card that is still in a shop.
+
+        Each row is rewritten in place — same card, same deck, same printing.
+        Dropping the printing from the write would leave the row that was
+        checked untouched and create a second, name-only one beside it.
+        """
         store = self._get_collection_store()
-        owned = store.owned_by_name().get(card_name, 0)
-        if not owned:
-            owned = next((count for name, count in store.owned_by_name().items()
-                          if name.lower() == card_name.lower()), 0)
+        by_name = {name.lower(): count
+                   for name, count in store.owned_by_name().items()}
+        by_printing = store.owned_by_printing()
+        db = self._get_db()
+
         touched = 0
         for row in store.wishlist():
             if row["card_name"].lower() != card_name.lower():
                 continue
+
+            set_code = row.get("set_code") or ""
+            number = row.get("collector_number") or ""
+            if set_code:
+                printing = (db.find_printing_by_set_number(set_code, number)
+                            if number else None)
+                pid = (printing or {}).get("printing_id", "")
+                owned = by_printing.get(pid.lower(), 0) if pid else 0
+            else:
+                owned = by_name.get(card_name.lower(), 0)
+
             for source in row["wanted_by"]:
                 # The deck's need has not changed; what it is short of has.
                 still_short = source["quantity"] - owned
                 store.wishlist_set(row["card_name"], max(0, still_short),
                                    deck_id=source["deck_id"],
-                                   deck_name=source["deck_name"])
+                                   deck_name=source["deck_name"],
+                                   set_code=set_code,
+                                   collector_number=number)
                 touched += 1
         return touched
 

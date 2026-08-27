@@ -155,12 +155,20 @@ _SCHEMA = [
         -- on my list".
         deck_id TEXT NOT NULL DEFAULT '',
         deck_name TEXT NOT NULL DEFAULT '',
+        -- WHICH printing is wanted, when the deck slot said. Empty means any
+        -- copy of the card will do, which is what most slots mean. Two decks
+        -- wanting two different printings of one card are two purchases, and
+        -- a list that could only hold one of them would send you home with a
+        -- card that finishes one deck and leaves the other still short.
+        set_code TEXT NOT NULL DEFAULT '',
+        collector_number TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )""",
-    """CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_card_deck
-       ON wishlist_items(card_name COLLATE NOCASE, deck_id)""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_wish_card_deck_printing
+       ON wishlist_items(card_name COLLATE NOCASE, deck_id,
+                         set_code COLLATE NOCASE, collector_number)""",
     "CREATE INDEX IF NOT EXISTS idx_wish_deck ON wishlist_items(deck_id)",
     # ---- reseller layer -------------------------------------------------
     # An acquisition is a lot: "Mike's collection, $600, 14 Aug". Cards
@@ -270,6 +278,7 @@ class CollectionStore:
             # against a real one.
             self._migrate_collections(conn)
             self._migrate_collection_uids(conn)
+            self._migrate_wishlist_printings(conn)
             for stmt in _SCHEMA:
                 conn.execute(stmt)
             self._ensure_default_collection(conn)
@@ -303,6 +312,37 @@ class CollectionStore:
                  FROM collection_items
                 WHERE collection_id IS NOT NULL""",
             (_now(),))
+
+    def _migrate_wishlist_printings(self, conn) -> None:
+        """Let a wishlist row say which printing is wanted.
+
+        Runs BEFORE the schema statements for the same reason the others do:
+        the schema now creates a unique index over `set_code` and
+        `collector_number`, and on a database that predates those columns
+        that statement fails outright and the app will not open. A fresh
+        database never shows it, because its CREATE TABLE already has them —
+        which is exactly how this class of bug survives a test suite and
+        appears only against a real one.
+
+        The old two-column unique index has to go with it. Left in place it
+        would still reject the second printing of a card one deck wants,
+        which is the whole thing being fixed.
+        """
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "wishlist_items" not in tables:
+            return          # fresh database; the schema below creates it right
+
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(wishlist_items)").fetchall()}
+        if "set_code" in columns:
+            return          # already migrated
+
+        conn.execute("ALTER TABLE wishlist_items "
+                     "ADD COLUMN set_code TEXT NOT NULL DEFAULT ''")
+        conn.execute("ALTER TABLE wishlist_items "
+                     "ADD COLUMN collector_number TEXT NOT NULL DEFAULT ''")
+        conn.execute("DROP INDEX IF EXISTS idx_wish_card_deck")
 
     def _migrate_collections(self, conn) -> None:
         """Bring an existing collection.db up to the named-collections model.
@@ -1041,51 +1081,67 @@ class CollectionStore:
 
     def wishlist_set(self, card_name: str, quantity: int, *,
                      deck_id: str = "", deck_name: str = "",
-                     oracle_id: str = "", notes: str = "") -> dict:
+                     oracle_id: str = "", notes: str = "",
+                     set_code: str = "", collector_number: str = "") -> dict:
         """Record that something is wanted. Quantity 0 removes the entry.
 
         An exact set rather than an increment: this is driven by "the deck is
         short three", which is a fact about the current decklist, not an event
         to accumulate. Adding would double the entry every time a deck was
         saved.
+
+        `set_code` / `collector_number` say WHICH printing, for a deck slot
+        that named one. Empty means any copy will do — the default, and what
+        every wishlist row written before this meant.
         """
         card_name = (card_name or "").strip()
         if not card_name:
             raise ValueError("A wishlist entry needs a card name")
+        set_code = (set_code or "").strip()
+        collector_number = (collector_number or "").strip()
         now = _now()
         with self._connect() as conn:
             if quantity <= 0:
                 conn.execute(
                     """DELETE FROM wishlist_items
-                       WHERE card_name = ? COLLATE NOCASE AND deck_id = ?""",
-                    (card_name, deck_id))
+                       WHERE card_name = ? COLLATE NOCASE AND deck_id = ?
+                         AND set_code = ? COLLATE NOCASE
+                         AND collector_number = ?""",
+                    (card_name, deck_id, set_code, collector_number))
                 conn.commit()
-                return {"card_name": card_name, "quantity": 0, "deck_id": deck_id}
+                return {"card_name": card_name, "quantity": 0,
+                        "deck_id": deck_id, "set_code": set_code,
+                        "collector_number": collector_number}
             conn.execute(
                 """INSERT INTO wishlist_items
                      (card_name, oracle_id, quantity, deck_id, deck_name,
-                      notes, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                   ON CONFLICT(card_name COLLATE NOCASE, deck_id) DO UPDATE SET
+                      set_code, collector_number, notes, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(card_name COLLATE NOCASE, deck_id,
+                               set_code COLLATE NOCASE, collector_number)
+                   DO UPDATE SET
                      quantity = excluded.quantity,
                      deck_name = excluded.deck_name,
                      notes = CASE WHEN excluded.notes != '' THEN excluded.notes
                                   ELSE wishlist_items.notes END,
                      updated_at = excluded.updated_at""",
                 (card_name, oracle_id, int(quantity), deck_id, deck_name,
-                 notes, now, now))
+                 set_code, collector_number, notes, now, now))
             conn.commit()
         return {"card_name": card_name, "quantity": int(quantity),
-                "deck_id": deck_id}
+                "deck_id": deck_id, "set_code": set_code,
+                "collector_number": collector_number}
 
     def wishlist_for_deck(self, deck_id: str) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                """SELECT card_name, quantity, deck_name, notes
+                """SELECT card_name, quantity, deck_name, notes,
+                          set_code, collector_number
                    FROM wishlist_items WHERE deck_id = ?
                    ORDER BY card_name COLLATE NOCASE""", (deck_id,)).fetchall()
         return [{"card_name": r[0], "quantity": r[1], "deck_name": r[2],
-                 "notes": r[3]} for r in rows]
+                 "notes": r[3], "set_code": r[4], "collector_number": r[5]}
+                for r in rows]
 
     def wishlist(self) -> list[dict]:
         """Everything wanted, one row per card, with who wants it.
@@ -1096,20 +1152,32 @@ class CollectionStore:
         card they do not need.
         """
         with self._connect() as conn:
+            # Grouped by card AND printing. A slot that named a printing is a
+            # different purchase from one that did not — you can be holding a
+            # Sol Ring and still be short the Sol Ring one of your decks asked
+            # for — so folding the two together would hide a real gap.
             rows = conn.execute(
-                """SELECT card_name, MAX(quantity) AS most, SUM(quantity) AS across,
+                """SELECT card_name, set_code, collector_number,
+                          MAX(quantity) AS most, SUM(quantity) AS across,
                           COUNT(*) AS decks, MAX(oracle_id) AS oracle_id
                    FROM wishlist_items
-                   GROUP BY card_name COLLATE NOCASE
-                   ORDER BY card_name COLLATE NOCASE""").fetchall()
+                   GROUP BY card_name COLLATE NOCASE,
+                            set_code COLLATE NOCASE, collector_number
+                   ORDER BY card_name COLLATE NOCASE,
+                            set_code COLLATE NOCASE""").fetchall()
             wanted = []
-            for name, most, across, decks, oracle_id in rows:
+            for name, set_code, number, most, across, decks, oracle_id in rows:
                 sources = conn.execute(
                     """SELECT deck_id, deck_name, quantity FROM wishlist_items
-                       WHERE card_name = ? COLLATE NOCASE""", (name,)).fetchall()
+                       WHERE card_name = ? COLLATE NOCASE
+                         AND set_code = ? COLLATE NOCASE
+                         AND collector_number = ?""",
+                    (name, set_code, number)).fetchall()
                 wanted.append({
                     "card_name": name,
                     "oracle_id": oracle_id or "",
+                    "set_code": set_code or "",
+                    "collector_number": number or "",
                     # What one deck needs at once.
                     "quantity": most,
                     # What every deck would need if all were built together.
@@ -1119,6 +1187,28 @@ class CollectionStore:
                                   for d, n, q in sources],
                 })
         return wanted
+
+    def wishlist_forget(self, card_name: str, deck_id: str = "") -> int:
+        """Stop wanting a card, whichever printings were listed.
+
+        Every printing of it, not one — this backs a "take it off my list"
+        button, and the intent behind that press is about the card. Removing
+        one row and leaving the other would look like the button had failed.
+
+        Distinct from `wishlist_set(..., 0)`, which is exact and is what the
+        deck-shortfall rewrite uses: that one MUST leave the other printings
+        of a card alone, because a deck can legitimately want two.
+        """
+        card_name = (card_name or "").strip()
+        if not card_name:
+            return 0
+        with self._connect() as conn:
+            cur = conn.execute(
+                """DELETE FROM wishlist_items
+                   WHERE card_name = ? COLLATE NOCASE AND deck_id = ?""",
+                (card_name, deck_id))
+            conn.commit()
+            return cur.rowcount
 
     def wishlist_clear_deck(self, deck_id: str) -> int:
         """Forget what one deck wanted — used before writing its new shortfall."""
@@ -1266,12 +1356,34 @@ class CollectionStore:
             ).fetchall()
         return {oid: int(qty) for oid, qty in rows}
 
+    def owned_by_printing(self) -> dict[str, int]:
+        """Printing id -> total copies owned, across every collection.
+
+        The other half of `owned_by_name`, and needed for the same reason
+        that a deck slot may now name a printing: a slot that asked for the
+        full-art is NOT filled by the common sitting in your box, and a
+        shortfall computed on the name alone would report that deck finished.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT printing_id, SUM(quantity) FROM collection_items
+                   WHERE quantity > 0 GROUP BY printing_id"""
+            ).fetchall()
+        out: dict[str, int] = {}
+        for printing_id, qty in rows:
+            key = (printing_id or "").lower()
+            if not key:
+                continue
+            out[key] = out.get(key, 0) + int(qty)
+        return out
+
     def owned_by_name(self) -> dict[str, int]:
         """Lowercased card name -> total copies owned.
 
-        Name-keyed because that is what decks are made of — `DeckEntry` holds
-        `card_name`, and the deck parser strips set codes outright. Ownership
-        questions asked from a decklist have nothing but the name to join on.
+        Name-keyed because that is what MOST of a decklist is made of: a slot
+        that says "Sol Ring" and nothing more is filled by any Sol Ring, which
+        is the default and what every import is. A slot that names a printing
+        is a different question and `owned_by_printing` answers it.
         """
         with self._connect() as conn:
             rows = conn.execute(
