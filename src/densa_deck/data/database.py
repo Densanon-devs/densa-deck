@@ -439,6 +439,7 @@ class CardDatabase:
         set_codes: list[str] | None = None,
         text: str | None = None,
         anywhere: str | None = None,
+        exclude_digital: bool = False,
         sort: str = "name",
         limit: int = 60,
         offset: int = 0,
@@ -536,6 +537,19 @@ class CardDatabase:
         # is its own filter rather than folded into `name`, and it searches
         # the oracle text and the keyword list together. A keyword is often
         # only in `keywords` and never spelled out in the rules box.
+        # Cards that exist only in Arena. You cannot own one, put one in a
+        # binder or take one to a table, so in a collection app they are
+        # noise — and there are 700-odd of them scattered through every
+        # search.
+        #
+        # Two signals, because there is no `games` column here: the Arena
+        # rebalances are named `A-Something`, and the Alchemy-only sets are
+        # coded `y22`, `ymid` and so on, plus Alchemy Horizons (hbg).
+        if exclude_digital:
+            conditions.append(
+                "(name NOT LIKE 'A-%' AND set_code NOT LIKE 'y%'"
+                " AND LOWER(set_code) != 'hbg')")
+
         # ---- one box, searching the whole card -------------------------
         #
         # Two fields — one for the name, one for the rules text — meant

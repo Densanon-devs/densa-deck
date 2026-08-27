@@ -1180,6 +1180,7 @@ class AppApi:
             set_codes=query.get("set_codes"),
             text=query.get("text"),
             anywhere=query.get("anywhere"),
+            exclude_digital=bool(query.get("exclude_digital")),
             sort=query.get("sort") or "name",
             ownership=ownership,
             limit=limit,

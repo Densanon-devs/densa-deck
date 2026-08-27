@@ -221,3 +221,48 @@ class TestOneBoxForTheWholeCard:
 
     def test_it_combines_with_the_other_filters(self, db):
         assert _names(db, anywhere="deathtouch", cmc_max=2) == ["Deathtouch Snake"]
+
+
+class TestCardsYouCannotActuallyOwn:
+    """Arena-only cards in a collection app are noise.
+
+    You cannot own one, put one in a binder or take one to a table, and there
+    are several hundred scattered through every search — the rebalanced
+    `A-Something` versions and the Alchemy-only sets.
+    """
+
+    @staticmethod
+    def _digital(db):
+        db.upsert_cards([
+            _card("A-Deathtouch Snake", set_code="one", text="Deathtouch"),
+            _card("Alchemy Exclusive", set_code="y22", text="Deathtouch"),
+            _card("Baldurs Digital", set_code="hbg", text="Deathtouch"),
+        ])
+
+    def test_they_are_dropped_when_asked(self, db):
+        self._digital(db)
+        got = _names(db, text="deathtouch", exclude_digital=True)
+        assert set(got) == {"Deathtouch Snake", "Venom Adept"}
+
+    def test_the_rebalanced_versions_go(self, db):
+        self._digital(db)
+        assert "A-Deathtouch Snake" not in _names(db, anywhere="deathtouch",
+                                                  exclude_digital=True)
+
+    def test_the_alchemy_only_sets_go(self, db):
+        self._digital(db)
+        got = _names(db, anywhere="deathtouch", exclude_digital=True)
+        assert "Alchemy Exclusive" not in got
+        assert "Baldurs Digital" not in got
+
+    def test_off_by_default_so_nothing_else_changes(self, db):
+        """The desktop's own Build tab has never excluded them and should not
+        start because the phone wanted it."""
+        self._digital(db)
+        assert len(_names(db, anywhere="deathtouch")) == 5
+
+    def test_a_real_card_whose_name_merely_starts_with_a(self, db):
+        # "Abrade" must not be mistaken for a rebalance: the marker is
+        # `A-` with the hyphen, not the letter.
+        db.upsert_cards([_card("Abrade", text="Deathtouch")])
+        assert "Abrade" in _names(db, anywhere="deathtouch", exclude_digital=True)

@@ -141,7 +141,9 @@ export function CardBrowser({
   const PAGE = 60;
 
   const run = useCallback(async () => {
-    const query: CardQuery = { limit: 60, sort };
+    // Arena-only cards are dropped: you cannot own one, binder one or
+    // take one to a table, so in a collection app they are noise.
+    const query: CardQuery = { limit: 60, sort, exclude_digital: true };
     const term = name.trim();
     if (term) query.anywhere = term;
     if (colours.length) {
@@ -193,7 +195,12 @@ export function CardBrowser({
     if (loadingMore || !cards.length || cards.length >= total) return;
     setLoadingMore(true);
     try {
-      const query: CardQuery = { limit: PAGE, offset: cards.length, sort };
+      const query: CardQuery = {
+        limit: PAGE,
+        offset: cards.length,
+        sort,
+        exclude_digital: true,
+      };
       const term = name.trim();
       if (term) query.anywhere = term;
       if (colours.length) {
@@ -491,7 +498,7 @@ export function CardBrowser({
           to do with it. */}
       {preview ? (
         <View style={styles.previewWrap}>
-          <ScrollView contentContainerStyle={styles.previewInner}>
+          <View style={styles.previewInner}>
             {variants.length > 1 ? (
               <ScrollView
                 horizontal
@@ -560,7 +567,7 @@ export function CardBrowser({
             </View>
             {/* Stays open on purpose: adding a second copy is one more tap
                 rather than finding the card again. */}
-          </ScrollView>
+          </View>
         </View>
       ) : null}
     </View>
@@ -678,11 +685,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   moreText: { color: '#e4e6eb', fontSize: 15 },
+  // An inline panel, not an absolute overlay.
+  //
+  // Absolute inside a container with no height of its own collapses to
+  // nothing, which is what cut the buttons off — with a short list there was
+  // nothing below to scroll to and no way out of the zoom at all. Inline,
+  // the panel simply makes the page taller and the page scrolls to it, so
+  // Close sits with Add and Remove where it belongs rather than being
+  // duplicated somewhere safer.
   previewWrap: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: '#0f1117f2',
-    zIndex: 20,
+    backgroundColor: '#151922',
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 12,
   },
   previewInner: { padding: 16, gap: 8, alignItems: 'center' },
   pager: { width: '100%' },

@@ -224,6 +224,8 @@ export interface CardQuery extends Record<string, unknown> {
    * `a && b || c` reads as `(a && b) || c`.
    */
   anywhere?: string;
+  /** Drop Arena-only cards: you cannot own one or take one to a table. */
+  exclude_digital?: boolean;
   sort?: 'name' | 'cmc' | 'cmc_desc' | 'rarity' | 'price';
   /** Omit for the whole catalogue. */
   ownership?: 'owned' | 'unowned';
