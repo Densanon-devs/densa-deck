@@ -129,7 +129,6 @@ export function CardBrowser({
   const [rarities, setRarities] = useState<string[]>([]);
   const [sets, setSets] = useState<string[]>([]);
   const [sort, setSort] = useState<NonNullable<CardQuery['sort']>>('name');
-  const [text, setText] = useState('');
   const [allSets, setAllSets] = useState<CatalogueSet[]>([]);
   const [pickingSet, setPickingSet] = useState(false);
   const [setFilter, setSetFilter] = useState('');
@@ -144,9 +143,7 @@ export function CardBrowser({
   const run = useCallback(async () => {
     const query: CardQuery = { limit: 60, sort };
     const term = name.trim();
-    const words = text.trim();
-    if (term) query.name = term;
-    if (words) query.text = words;
+    if (term) query.anywhere = term;
     if (colours.length) {
       query.colors = colours;
       query.color_match = 'any';
@@ -157,7 +154,7 @@ export function CardBrowser({
     if (ownedOnly) query.ownership = 'owned';
 
     // Every field empty would ask the desktop for the entire catalogue.
-    if (!term && !words && !colours.length && !types.length &&
+    if (!term && !colours.length && !types.length &&
         !rarities.length && !sets.length && !ownedOnly) {
       setProblem('Pick a filter, or type part of a name or a rules word.');
       return;
@@ -173,13 +170,13 @@ export function CardBrowser({
     } finally {
       setBusy(false);
     }
-  }, [name, text, colours, types, rarities, sets, ownedOnly, sort, state]);
+  }, [name, colours, types, rarities, sets, ownedOnly, sort, state]);
 
   // Re-run when a filter changes, but not on every keystroke: the search
   // goes to the PC and typing "Lightning Bolt" would send eleven requests.
   useEffect(() => {
     if (!colours.length && !types.length && !rarities.length && !sets.length &&
-        !ownedOnly && !name.trim() && !text.trim()) return;
+        !ownedOnly && !name.trim()) return;
     void run().catch(reporting('searching', setProblem));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colours, types, rarities, sets, ownedOnly, sort]);
@@ -198,9 +195,7 @@ export function CardBrowser({
     try {
       const query: CardQuery = { limit: PAGE, offset: cards.length, sort };
       const term = name.trim();
-      const words = text.trim();
-      if (term) query.name = term;
-      if (words) query.text = words;
+      if (term) query.anywhere = term;
       if (colours.length) {
         query.colors = colours;
         query.color_match = 'any';
@@ -220,7 +215,7 @@ export function CardBrowser({
     } finally {
       setLoadingMore(false);
     }
-  }, [cards.length, total, loadingMore, name, text, colours, types, rarities,
+  }, [cards.length, total, loadingMore, name, colours, types, rarities,
       sets, ownedOnly, sort, state]);
 
   useEffect(() => {
@@ -243,16 +238,19 @@ export function CardBrowser({
   return (
     <View style={styles.screen}>
       {/*
-        Two boxes that both said "search" and neither said what OF. Worse,
-        a placeholder is gone the moment you type in it, so once both had
-        something in them there was nothing on screen to tell them apart.
-        Labelled above, which survives having a value.
+        One box, searching the whole card.
+        
+        There were two — one for the name, one for the rules text — which
+        meant knowing WHICH of them a word lived in before you could look for
+        it, and you often do not: "Bolt" is a name, "deathtouch" is rules
+        text, and "Goblin" is both. Combining is the user's job now, with
+        `&&` and `||`, rather than a decision the layout made for them.
       */}
-      <Text style={styles.fieldLabel}>Card name</Text>
+      <Text style={styles.fieldLabel}>Search — use && and || to combine</Text>
       <View style={styles.header}>
         <TextInput
           style={styles.search}
-          placeholder="Lightning Bolt, Sol Ring…"
+          placeholder="deathtouch && flying"
           placeholderTextColor="#8a8f9c"
           value={name}
           onChangeText={setName}
@@ -283,18 +281,6 @@ export function CardBrowser({
           );
         })}
       </View>
-
-      <Text style={styles.fieldLabel}>Rules text</Text>
-      <TextInput
-        style={[styles.search, styles.filterRow]}
-        placeholder="deathtouch, +1/+1 counter, draw a card…"
-        placeholderTextColor="#8a8f9c"
-        value={text}
-        onChangeText={setText}
-        onSubmitEditing={() => void run().catch(reporting('searching', setProblem))}
-        returnKeyType="search"
-        autoCorrect={false}
-      />
 
       <ScrollView
         horizontal

@@ -1179,6 +1179,7 @@ class AppApi:
             set_code=query.get("set_code"),
             set_codes=query.get("set_codes"),
             text=query.get("text"),
+            anywhere=query.get("anywhere"),
             sort=query.get("sort") or "name",
             ownership=ownership,
             limit=limit,

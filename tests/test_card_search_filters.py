@@ -170,3 +170,54 @@ class TestSearchingForCharactersThatMeanSomethingToSQL:
 
     def test_names_are_escaped_too(self, db):
         assert _names(db, name="Plain_Bear") == []
+
+
+class TestOneBoxForTheWholeCard:
+    """Two fields meant knowing which one a word lived in before you could
+    look for it, and you often do not: "Bolt" is a name, "deathtouch" is
+    rules text, "Goblin" is both.
+
+    So one box searches everything and the user says how terms combine.
+    """
+
+    def test_it_finds_a_name(self, db):
+        assert "Plain Bear" in _names(db, anywhere="Plain")
+
+    def test_it_finds_rules_text(self, db):
+        assert set(_names(db, anywhere="deathtouch")) == {
+            "Deathtouch Snake", "Venom Adept"}
+
+    def test_it_finds_a_type(self, db):
+        assert "Plain Bear" in _names(db, anywhere="Human")
+
+    def test_and_needs_both(self, db):
+        # Venom Adept's text mentions a Swamp; the Snake's does not.
+        assert _names(db, anywhere="deathtouch && Swamp") == ["Venom Adept"]
+
+    def test_or_takes_either(self, db):
+        assert set(_names(db, anywhere="Swamp || Titan")) == {
+            "Venom Adept", "Costly Titan"}
+
+    def test_or_binds_looser_than_and(self, db):
+        """`a && b || c` is `(a && b) || c`, as in every language with both.
+
+        Read the other way it would be `a && (b || c)` and quietly return a
+        different set — the kind of wrong that looks like a bad search.
+        """
+        got = set(_names(db, anywhere="deathtouch && Swamp || Titan"))
+        assert got == {"Venom Adept", "Costly Titan"}
+
+    def test_spaces_around_the_operators_do_not_matter(self, db):
+        assert _names(db, anywhere="deathtouch&&Swamp") == ["Venom Adept"]
+
+    def test_a_term_with_a_wildcard_character_is_still_literal(self, db):
+        assert _names(db, anywhere="draw_a") == []
+
+    def test_an_empty_side_is_ignored_rather_than_matching_everything(self, db):
+        # "deathtouch &&" is a half-typed query; the trailing empty term must
+        # not become "match anything" and silently widen the result.
+        assert set(_names(db, anywhere="deathtouch &&")) == {
+            "Deathtouch Snake", "Venom Adept"}
+
+    def test_it_combines_with_the_other_filters(self, db):
+        assert _names(db, anywhere="deathtouch", cmc_max=2) == ["Deathtouch Snake"]

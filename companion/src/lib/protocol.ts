@@ -215,8 +215,15 @@ export interface CardQuery extends Record<string, unknown> {
   /** Any of these sets. A card cannot be in two, so picking two means "either". */
   set_codes?: string[];
   rarities?: string[];
-  /** Rules text, keywords and type line — "deathtouch" finds every card with it. */
+  /** Rules text, keywords and type line. Superseded by `anywhere`. */
   text?: string;
+  /**
+   * One box, searching the whole card — name, rules text, keywords, type.
+   *
+   * `&&` and `||` combine terms, with `||` the looser of the two, so
+   * `a && b || c` reads as `(a && b) || c`.
+   */
+  anywhere?: string;
   sort?: 'name' | 'cmc' | 'cmc_desc' | 'rarity' | 'price';
   /** Omit for the whole catalogue. */
   ownership?: 'owned' | 'unowned';

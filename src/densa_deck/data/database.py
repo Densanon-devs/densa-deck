@@ -438,6 +438,7 @@ class CardDatabase:
         set_code: str | None = None,
         set_codes: list[str] | None = None,
         text: str | None = None,
+        anywhere: str | None = None,
         sort: str = "name",
         limit: int = 60,
         offset: int = 0,
@@ -535,6 +536,37 @@ class CardDatabase:
         # is its own filter rather than folded into `name`, and it searches
         # the oracle text and the keyword list together. A keyword is often
         # only in `keywords` and never spelled out in the rules box.
+        # ---- one box, searching the whole card -------------------------
+        #
+        # Two fields — one for the name, one for the rules text — meant
+        # knowing WHICH field a word would be in before you could look for
+        # it, and you often do not. "Bolt" is a name, "deathtouch" is rules
+        # text, and "Goblin" is both. This searches everywhere and lets the
+        # user say how the terms combine.
+        #
+        # `||` is lower precedence than `&&`, as it is in every language that
+        # has both, so `a && b || c` reads as `(a && b) || c`. Splitting on
+        # `||` first is what produces that.
+        if anywhere and anywhere.strip():
+            groups = [g for g in anywhere.split("||")]
+            or_clauses: list[str] = []
+            for group in groups:
+                terms = [t.strip() for t in group.split("&&") if t.strip()]
+                if not terms:
+                    continue
+                and_clauses: list[str] = []
+                for term in terms:
+                    needle = contains(term)
+                    and_clauses.append(
+                        "(name LIKE ? ESCAPE '!' COLLATE NOCASE"
+                        " OR oracle_text LIKE ? ESCAPE '!' COLLATE NOCASE"
+                        " OR keywords LIKE ? ESCAPE '!' COLLATE NOCASE"
+                        " OR type_line LIKE ? ESCAPE '!' COLLATE NOCASE)")
+                    params.extend([needle, needle, needle, needle])
+                or_clauses.append("(" + " AND ".join(and_clauses) + ")")
+            if or_clauses:
+                conditions.append("(" + " OR ".join(or_clauses) + ")")
+
         if text and text.strip():
             needle = contains(text)
             conditions.append(
