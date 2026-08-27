@@ -242,10 +242,17 @@ export function CardBrowser({
 
   return (
     <View style={styles.screen}>
+      {/*
+        Two boxes that both said "search" and neither said what OF. Worse,
+        a placeholder is gone the moment you type in it, so once both had
+        something in them there was nothing on screen to tell them apart.
+        Labelled above, which survives having a value.
+      */}
+      <Text style={styles.fieldLabel}>Card name</Text>
       <View style={styles.header}>
         <TextInput
           style={styles.search}
-          placeholder="Search every card in Magic…"
+          placeholder="Lightning Bolt, Sol Ring…"
           placeholderTextColor="#8a8f9c"
           value={name}
           onChangeText={setName}
@@ -277,9 +284,10 @@ export function CardBrowser({
         })}
       </View>
 
+      <Text style={styles.fieldLabel}>Rules text</Text>
       <TextInput
         style={[styles.search, styles.filterRow]}
-        placeholder="Rules text — deathtouch, draw a card…"
+        placeholder="deathtouch, +1/+1 counter, draw a card…"
         placeholderTextColor="#8a8f9c"
         value={text}
         onChangeText={setText}
@@ -669,6 +677,13 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13 },
+  fieldLabel: {
+    color: '#8a8f9c',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    flexShrink: 0,
+  },
   more: {
     borderColor: '#2d3142',
     borderWidth: 1,

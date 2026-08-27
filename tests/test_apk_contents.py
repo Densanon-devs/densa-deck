@@ -44,6 +44,7 @@ SCREENS = {
     "card browser": "Browse cards",
     "browser filters": "Only mine",
     "rules text search": "Rules text",
+    "labelled name box": "Card name",
     "analyst": "Analyse on my PC",
     "wishlist": "part of your collection",
     "scanner": "Point at a card",
