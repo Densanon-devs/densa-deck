@@ -105,6 +105,16 @@ _SCHEMA = [
         item_id INTEGER NOT NULL,
         collection_id INTEGER NOT NULL,
         added_at TEXT NOT NULL,
+        -- HOW MANY of the stack this list is claiming. 0 means all of it,
+        -- which is what every membership meant before this column existed
+        -- and is still the right default for "this card is in my Modern
+        -- binder".
+        --
+        -- It matters when a list is going to be acted on: giving away a deck
+        -- that wants one Lightning Bolt must not hand over all four you own,
+        -- and a bundle you are selling may be two copies out of a stack of
+        -- four. Nothing that merely FILTERS needs to read this.
+        quantity INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (item_id, collection_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_cm_collection ON collection_membership(collection_id)",
@@ -279,6 +289,7 @@ class CollectionStore:
             self._migrate_collections(conn)
             self._migrate_collection_uids(conn)
             self._migrate_wishlist_printings(conn)
+            self._migrate_membership_quantity(conn)
             for stmt in _SCHEMA:
                 conn.execute(stmt)
             self._ensure_default_collection(conn)
@@ -312,6 +323,32 @@ class CollectionStore:
                  FROM collection_items
                 WHERE collection_id IS NOT NULL""",
             (_now(),))
+
+    def _migrate_membership_quantity(self, conn) -> None:
+        """Let a list claim part of a stack rather than all of it.
+
+        Added rather than migrated: 0 means "all of it", which is exactly what
+        every membership row written before this meant, so nothing needs
+        converting and every existing reader stays correct by ignoring the
+        column.
+
+        Runs before the schema statements like its neighbours — not because
+        an index depends on it today, but because that ordering is the
+        convention here and a migration that runs after the CREATE it relates
+        to is a trap for the next person.
+        """
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "collection_membership" not in tables:
+            return          # fresh database; the schema below creates it right
+
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(collection_membership)").fetchall()}
+        if "quantity" in columns:
+            return          # already migrated
+
+        conn.execute("ALTER TABLE collection_membership "
+                     "ADD COLUMN quantity INTEGER NOT NULL DEFAULT 0")
 
     def _migrate_wishlist_printings(self, conn) -> None:
         """Let a wishlist row say which printing is wanted.
@@ -504,13 +541,19 @@ class CollectionStore:
 
     # ------------------------------------------------- membership (filters)
 
-    def add_to_collection(self, item_id: int, collection_id: int) -> bool:
+    def add_to_collection(self, item_id: int, collection_id: int,
+                          quantity: int = 0) -> bool:
         """Put a stack in a collection WITHOUT taking it out of any other.
 
         This is the whole point of the filter model: a card can be part of a
         set you are completing, a deck you have built, and the seventy-five
         you took to a tournament, all at once. It never moved; three lists
         just mention it.
+
+        `quantity` is how many of the stack this list claims; 0 means all of
+        it, and is right for everything that merely filters. It matters when
+        the list is going to be ACTED on — giving away a deck that wants one
+        Lightning Bolt must not hand over all four you own.
 
         Returns whether anything changed, so a caller can tell "added" from
         "was already there" instead of reporting both as success.
@@ -519,8 +562,45 @@ class CollectionStore:
             before = conn.total_changes
             conn.execute(
                 "INSERT OR IGNORE INTO collection_membership "
-                "(item_id, collection_id, added_at) VALUES (?, ?, ?)",
-                (int(item_id), int(collection_id), _now()))
+                "(item_id, collection_id, added_at, quantity) VALUES (?, ?, ?, ?)",
+                (int(item_id), int(collection_id), _now(), int(quantity)))
+            changed = conn.total_changes > before
+            # A second tag that asks for MORE copies raises the claim. It
+            # cannot lower it: the row already existing means something put it
+            # there deliberately, and quietly shrinking a claim is how a deck
+            # ends up handing over fewer cards than it lists.
+            if not changed and quantity:
+                conn.execute(
+                    """UPDATE collection_membership SET quantity = ?
+                        WHERE item_id = ? AND collection_id = ?
+                          AND quantity != 0 AND quantity < ?""",
+                    (int(quantity), int(item_id), int(collection_id),
+                     int(quantity)))
+            conn.commit()
+            return changed
+
+    def membership_quantities(self, collection_id: int) -> dict[int, int]:
+        """item_id -> how many copies this list claims. 0 means the whole stack.
+
+        Read by the things that ACT on a list — giving it away, selling it —
+        and by nothing that merely filters, which is why every existing reader
+        stays correct having never heard of it.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT item_id, quantity FROM collection_membership "
+                "WHERE collection_id = ?", (int(collection_id),)).fetchall()
+        return {int(i): int(q or 0) for i, q in rows}
+
+    def set_membership_quantity(self, item_id: int, collection_id: int,
+                                quantity: int) -> bool:
+        """Change how many copies a list claims. 0 means all of them."""
+        with self._connect() as conn:
+            before = conn.total_changes
+            conn.execute(
+                """UPDATE collection_membership SET quantity = ?
+                    WHERE item_id = ? AND collection_id = ?""",
+                (max(0, int(quantity)), int(item_id), int(collection_id)))
             conn.commit()
             return conn.total_changes > before
 

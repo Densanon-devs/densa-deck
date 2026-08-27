@@ -75,6 +75,11 @@ SCREENS = {
     "written deck tab": "means that exact printing",
     "printing on a deck tile": "any printing",
     "picking a printing to add": "Add this printing",
+    # The scanner's second mode: walking a pile you already own, picking out a
+    # bundle, without each scan filing a second copy.
+    "tag mode on the scanner": "Tag what I own",
+    "tag mode explains itself": "Nothing is added to your",
+    "choosing which copy to tag": "Which copy?",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -100,6 +105,9 @@ BEHAVIOUR = {
     # box. Either one absent is silent — the deck still opens, it is just
     # wrong about which card is in it.
     "deck slot resolver route": "decks/resolve",
+    # Tagging goes over the wire; a phone that shipped the toggle without the
+    # route would offer a mode that silently does nothing.
+    "tag-into-group route": "group/tag-scanned",
     # The zoomed card is a real overlay, not a panel at the bottom of the
     # page. Inline it sat below a grid that keeps growing — tap a card,
     # scroll on, sixty more results load, and the thing you opened is further

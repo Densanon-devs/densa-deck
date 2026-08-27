@@ -450,6 +450,49 @@ def main():
                           help="Print only the missing cards, ready to paste")
     col_deck.add_argument("--db", type=str, default=None, help="Card database path")
 
+    # --- groups you can hand over ----------------------------------------
+    # Isolating part of a collection so it can leave it: a bundle to sell, a
+    # deck to give away. On the CLI because this is the one part of the
+    # collection that people will want to script over five thousand cards.
+    col_group = collection_subs.add_parser(
+        "group", help="Isolate part of your collection to sell or give away")
+    group_subs = col_group.add_subparsers(dest="group_action")
+
+    g_new = group_subs.add_parser("new", help="Start a group")
+    g_new.add_argument("name", type=str, help="What to call it")
+    g_new.add_argument("--db", type=str, default=None, help="Card database path")
+
+    g_from_deck = group_subs.add_parser(
+        "from-deck", help="Put a deck's physical cards into a group")
+    g_from_deck.add_argument("group", type=str, help="Group name")
+    g_from_deck.add_argument("deck", type=str, help="Deck file")
+    g_from_deck.add_argument("--db", type=str, default=None, help="Card database path")
+
+    g_show = group_subs.add_parser(
+        "show", help="What is in a group, what it is worth, what you would regret")
+    g_show.add_argument("group", type=str, help="Group name")
+    g_show.add_argument("--db", type=str, default=None, help="Card database path")
+
+    g_export = group_subs.add_parser(
+        "export", help="A manifest someone else can read or import")
+    g_export.add_argument("group", nargs="?", default=None,
+                          help="Group name; omit for everything you own")
+    g_export.add_argument("--format", dest="fmt", default="csv",
+                          choices=["csv", "decklist", "json"])
+    g_export.add_argument("--out", type=str, default=None,
+                          help="Write to a file instead of stdout")
+    g_export.add_argument("--db", type=str, default=None, help="Card database path")
+
+    g_retire = group_subs.add_parser(
+        "retire", help="These cards have gone — take them off the collection")
+    g_retire.add_argument("group", type=str, help="Group name")
+    g_retire.add_argument("--sold-for", type=float, default=None,
+                          help="Record it as a sale for this total")
+    g_retire.add_argument("--sold-to", type=str, default="", help="Who bought it")
+    g_retire.add_argument("--yes", action="store_true",
+                          help="Skip the confirmation. This is irreversible.")
+    g_retire.add_argument("--db", type=str, default=None, help="Card database path")
+
     # phone command — scan from a phone over Tailscale
     phone_parser = subparsers.add_parser(
         "phone", help="Scan cards from your phone over Tailscale")
@@ -4460,6 +4503,161 @@ def cmd_phone(args):
         api.close()
 
 
+def _find_group(store, name: str) -> dict:
+    """A group by the name a person typed, not by uid.
+
+    Names are what someone has on a sticky note on the box; uids are what the
+    sync protocol needs. The CLI takes the first and the engine takes the
+    second, and this is the one place that has to know both.
+    """
+    for row in store.list_collections():
+        if (row.get("name") or "").strip().lower() == (name or "").strip().lower():
+            return row
+    raise SystemExit(f"No group called {name!r}. "
+                     "List them with: densa-deck collection status")
+
+
+def _cmd_collection_group(args, db, store, console):
+    """Isolate part of a collection so it can leave it.
+
+    The one destructive verb is `retire`, and it is the only one that asks
+    before acting. Everything else here is a filter: tagging a thousand cards
+    moves nothing and changes nothing owned, which is what makes building a
+    bundle over several sittings safe.
+    """
+    from pathlib import Path
+
+    from densa_deck.collection.grouping import (
+        group_contents,
+        group_from_deck,
+        retire_group,
+    )
+    from densa_deck.collection.manifest import export_manifest, suggested_filename
+
+    action = getattr(args, "group_action", None)
+
+    if action == "new":
+        made = store.create_collection(args.name)
+        console.print(f"[green]Made group[/green] [bold]{made['name']}[/bold]. "
+                      "Fill it by scanning, from a deck, or from the app.")
+        return
+
+    if action == "from-deck":
+        from densa_deck.deck.parser import parse_auto
+        from densa_deck.deck.resolver import resolve_deck
+
+        group = _find_group(store, args.group)
+        path = Path(args.deck)
+        if not path.exists():
+            raise SystemExit(f"No deck file at {path}")
+        entries = parse_auto(path.read_text(encoding="utf-8"))
+        if not entries:
+            raise SystemExit("No cards parsed from that file.")
+        deck = resolve_deck(entries, db, name=path.stem)
+        out = group_from_deck(store, db, deck, group["collection_uid"])
+
+        console.print(
+            f"[green]{out['stacks_tagged']}[/green] stacks tagged into "
+            f"[bold]{group['name']}[/bold] "
+            f"({out['cards_found']} of {out['cards_wanted']} cards).")
+        if out["missing"]:
+            console.print(f"[yellow]{len(out['missing'])} you do not own:[/yellow]")
+            for row in out["missing"][:20]:
+                console.print(f"  {row['short']}x {row['card_name']}")
+            if len(out["missing"]) > 20:
+                console.print(f"  [dim]+{len(out['missing']) - 20} more[/dim]")
+        return
+
+    if action == "show":
+        group = _find_group(store, args.group)
+        review = group_contents(store, db, group["collection_uid"])
+        console.print()
+        console.print(f"[bold]{review['name']}[/bold] — {review['copies']} cards "
+                      f"in {review['stacks']} stacks, "
+                      f"[green]${review['value_usd']:,.2f}[/green]")
+        if review["unpriced_stacks"]:
+            console.print(f"[dim]{review['unpriced_stacks']} stacks have no price "
+                          f"and are excluded from that total.[/dim]")
+
+        if review["wanted_elsewhere"]:
+            # The honest version of "are you sure". The alternative is finding
+            # out at the table.
+            console.print()
+            console.print("[yellow]Your decks still want these:[/yellow]")
+            for row in review["wanted_elsewhere"][:20]:
+                console.print(f"  {row['card_name']} — in "
+                              f"{', '.join(row['collections'])}")
+
+        table = Table(title="In this group")
+        table.add_column("Card")
+        table.add_column("Set")
+        table.add_column("Qty", justify="right")
+        table.add_column("Each", justify="right")
+        for row in review["cards"][:40]:
+            unit = row["unit_price_usd"]
+            table.add_row(
+                row["card_name"],
+                f"{(row['set_code'] or '').upper()} {row['collector_number']}".strip(),
+                str(row["quantity"]),
+                f"${unit:,.2f}" if unit is not None else "[dim]—[/dim]",
+            )
+        console.print(table)
+        if len(review["cards"]) > 40:
+            console.print(f"[dim]+{len(review['cards']) - 40} more — "
+                          f"use `group export` for the full list.[/dim]")
+        console.print()
+        return
+
+    if action == "export":
+        uid = _find_group(store, args.group)["collection_uid"] if args.group else None
+        text, meta = export_manifest(store, db, collection_uid=uid, fmt=args.fmt)
+        if args.out:
+            out = Path(args.out)
+            out.write_text(text, encoding="utf-8")
+            console.print(f"[green]Wrote[/green] {out} — {meta['copies']} cards, "
+                          f"${meta['value_usd']:,.2f}")
+        else:
+            # Straight to stdout with no Rich markup, so it can be piped into
+            # a file or another tool without box-drawing characters in it.
+            print(text)
+        return
+
+    if action == "retire":
+        group = _find_group(store, args.group)
+        review = group_contents(store, db, group["collection_uid"])
+        if not review["copies"]:
+            console.print(f"[yellow]{group['name']} is empty.[/yellow]")
+            return
+
+        console.print()
+        console.print(f"[bold]{review['name']}[/bold] — {review['copies']} cards, "
+                      f"[green]${review['value_usd']:,.2f}[/green]")
+        if review["wanted_elsewhere"]:
+            console.print(f"[yellow]{len(review['wanted_elsewhere'])} of them are "
+                          f"in decks of yours.[/yellow] "
+                          "Run `group show` to see which.")
+        console.print("[red]This removes those copies from your collection "
+                      "and cannot be undone.[/red]")
+
+        if not args.yes:
+            answer = input(f"Type the group name to confirm: ").strip()
+            if answer.lower() != (group["name"] or "").strip().lower():
+                console.print("[dim]Left alone.[/dim]")
+                return
+
+        out = retire_group(store, db, group["collection_uid"],
+                           sale_price_usd=args.sold_for, sold_to=args.sold_to)
+        console.print(f"[green]{out['copies_removed']} cards[/green] left the "
+                      f"collection (${out['value_usd']:,.2f}).")
+        if out["sale_recorded"]:
+            console.print(f"Recorded as a sale of ${args.sold_for:,.2f}"
+                          + (f" to {args.sold_to}" if args.sold_to else "")
+                          + f" across {out['sale_rows']} rows.")
+        return
+
+    console.print("Try: new / from-deck / show / export / retire")
+
+
 def cmd_collection(args):
     """Track the physical cards you own."""
     from densa_deck.collection import CollectionStore, ownership_for_deck
@@ -4891,6 +5089,10 @@ def cmd_collection(args):
                 console.print(f"[dim]+{len(v['shopping_list']) - 30} more — "
                               f"use --shopping-list for the full paste-ready list.[/dim]")
         console.print()
+        return
+
+    if action == "group":
+        _cmd_collection_group(args, db, store, console)
         return
 
     if action == "check":

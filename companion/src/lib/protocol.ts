@@ -343,3 +343,35 @@ export interface DeckResolveReply {
   /** False before the opt-in printings ingest has been run on the desktop. */
   catalogue_ready: boolean;
 }
+
+/**
+ * What happened when a scanned card was tagged into a group.
+ *
+ * Three outcomes, and a caller that cannot tell them apart is a scanner that
+ * lies. `tagged` is the good one. `owned: 0` means the card is not in your
+ * collection at all — real information when you are picking a bundle out of a
+ * pile, and NOT a reason to add it. `candidates` means you own the printing
+ * more than one way, and which physical object goes in the bundle is a
+ * question only you can answer.
+ */
+export interface TagCandidate {
+  item_id: number;
+  card_name: string;
+  finish: string;
+  condition: string;
+  location: string;
+  quantity: number;
+}
+
+export interface TagResult {
+  printing_id: string;
+  item_id?: number;
+  card_name?: string;
+  /** 1 when this call put it in the group, 0 when it was already there. */
+  tagged: number;
+  already_in?: boolean;
+  /** Copies you own. 0 means you do not own this card. */
+  owned: number;
+  candidates: TagCandidate[];
+  collection_uid: string;
+}

@@ -21,6 +21,7 @@ import type {
   CatalogueSet,
   DeckResolveReply,
   OverlapsReply,
+  TagResult,
   ResolvedSlot,
   CardQuery,
   CardSearchReply,
@@ -315,6 +316,47 @@ export class AppState {
       answered = [];
     }
     return resolveSlots(entries, owned, answered);
+  }
+
+  /**
+   * Put a card you ALREADY OWN into a group.
+   *
+   * The scanner's second mode, and the difference matters: `addCard` files a
+   * new copy, which is right when entering cards you have just acquired and
+   * wrong when walking a pile you own picking out a bundle. There, a second
+   * copy is not a tag — it is a counting error you will not notice for
+   * months.
+   *
+   * Needs the desktop, unlike almost everything else here, because the answer
+   * depends on which stacks exist and the phone mirrors quantities rather
+   * than owning that decision. It fails honestly instead of guessing.
+   */
+  async tagIntoGroup(
+    printingId: string,
+    collectionUid: string,
+    finish = '',
+  ): Promise<TagResult> {
+    return this.client.call<TagResult>('group/tag-scanned', {
+      printing_id: printingId,
+      collection_uid: collectionUid,
+      finish,
+    });
+  }
+
+  /** Answer the "you own this two ways" question by naming the stack. */
+  async tagStack(itemId: number, collectionUid: string): Promise<TagResult> {
+    return this.client.call<TagResult>('group/tag-item', {
+      item_id: itemId,
+      collection_uid: collectionUid,
+    });
+  }
+
+  /** Take a stack back out of a group. The card itself is untouched. */
+  async untagStack(itemId: number, collectionUid: string): Promise<void> {
+    await this.client.call('group/untag-item', {
+      item_id: itemId,
+      collection_uid: collectionUid,
+    });
   }
 
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {

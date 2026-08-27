@@ -52,6 +52,7 @@ import {
   identifyPhoto,
 } from '../lib/scanner.ts';
 import type { ScanCandidate, ScanResult } from '../lib/scanner.ts';
+import type { TagCandidate } from '../lib/protocol.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
@@ -68,7 +69,11 @@ const TICK_MS = 250;
 export function ScanScreen({ state }: Props) {
   const [status, setStatus] = useState('Point at a card');
   const [result, setResult] = useState<ScanResult | null>(null);
-  const [flash, setFlash] = useState<{ name: string; copy: number } | null>(null);
+  // The verb matters: filing a card and tagging one you already own look
+  // identical on a green flash, and they are opposite operations.
+  const [flash, setFlash] = useState<
+    { name: string; copy: number; verb: string } | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -85,6 +90,9 @@ export function ScanScreen({ state }: Props) {
   // The green flash is gone in under a second. What was filed has to stay on
   // screen afterwards, because a wrong card is not always obvious in the
   // moment and the alternative is finding it weeks later in the collection.
+  const [tagged, setTagged] = useState<{ itemId: number; name: string } | null>(
+    null,
+  );
   const [lastAdded, setLastAdded] = useState<{
     candidate: ScanCandidate;
     finish: string;
@@ -99,6 +107,24 @@ export function ScanScreen({ state }: Props) {
   // Measured rather than assumed: a tap only means a zoom level if the width
   // it landed on is the real one.
   const [trackWidth, setTrackWidth] = useState(0);
+  /**
+   * Whether a scan FILES a new card or TAGS one you already own.
+   *
+   * The difference is the whole reason this mode exists. Adding is right when
+   * you have just bought a box and are entering it. It is wrong when you are
+   * walking a pile you already own picking out a bundle to sell — there, a
+   * second copy is not a tag, it is a counting error you will not notice for
+   * months, and it inflates both what you own and what it is worth.
+   *
+   * Deliberately not remembered between visits, unlike the target collection.
+   * Adding is what the scanner is for nine times out of ten, and coming back
+   * to find it silently in the other mode is how a stocktake goes wrong.
+   */
+  const [mode, setMode] = useState<'add' | 'tag'>('add');
+  // You own this printing more than one way — foil and nonfoil, two
+  // conditions — and which physical object goes in the bundle is a question
+  // only the person holding it can answer.
+  const [choosing, setChoosing] = useState<TagCandidate[] | null>(null);
 
   const loadCollections = useCallback(async () => {
     setCollections(await state.collections());
@@ -140,19 +166,83 @@ export function ScanScreen({ state }: Props) {
 
   const file = useCallback(
     async (candidate: ScanCandidate, finish: string, copy = 1) => {
+      if (mode === 'tag') {
+        const out = await state.tagIntoGroup(
+          candidate.printing_id, target, finish,
+        );
+        // Three outcomes, and a scanner that showed the same thing for all
+        // three would be lying about two of them.
+        if (out.candidates?.length) {
+          setChoosing(out.candidates);
+          setResult(null);
+          setStatus('You own this one more than one way — which copy?');
+          return;
+        }
+        if (!out.owned) {
+          // NOT an error, and NOT a reason to add it. "This card is not in
+          // your collection" is real information when you are picking a
+          // bundle out of a pile.
+          setResult(null);
+          setStatus(`${candidate.name} isn't in your collection — nothing tagged.`);
+          return;
+        }
+        setFlash({
+          name: candidate.name,
+          copy,
+          verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
+        });
+        setTagged(out.item_id ? { itemId: out.item_id, name: candidate.name } : null);
+        setResult(null);
+        setTimeout(() => setFlash(null), 950);
+        return;
+      }
       await state.addCard({
         printing_id: candidate.printing_id,
         card_name: candidate.name,
         finish,
         collection_uid: target,
       });
-      setFlash({ name: candidate.name, copy });
+      setFlash({ name: candidate.name, copy, verb: 'ADDED' });
       setLastAdded({ candidate, finish });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
+    [state, target, mode],
+  );
+
+  /** Answer "you own this two ways" by naming the stack. */
+  const chooseStack = useCallback(
+    async (candidate: TagCandidate) => {
+      setChoosing(null);
+      try {
+        const out = await state.tagStack(candidate.item_id, target);
+        setFlash({
+          name: candidate.card_name,
+          copy: 1,
+          verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
+        });
+        setTagged({ itemId: candidate.item_id, name: candidate.card_name });
+        setTimeout(() => setFlash(null), 950);
+      } catch (err) {
+        setProblem(recordCrash(err, 'tagging it', false).message);
+      }
+    },
     [state, target],
   );
+
+  /** Take the last tag back off. The card itself is untouched. */
+  const undoTag = useCallback(async () => {
+    if (!tagged) return;
+    setProblem('');
+    try {
+      await state.untagStack(tagged.itemId, target);
+      guard.current.reset();
+      setStatus(`Took ${tagged.name} back out of the group`);
+      setTagged(null);
+    } catch (err) {
+      setProblem(recordCrash(err, 'undoing', false).message);
+    }
+  }, [tagged, state, target]);
 
   /** Put back a card that should not have gone in. */
   const undoLast = useCallback(async () => {
@@ -293,7 +383,7 @@ export function ScanScreen({ state }: Props) {
     <View style={styles.screen}>
       {flash ? (
         <View style={[styles.flash, flash.copy > 1 && styles.flashDupe]}>
-          <Text style={styles.flashTick}>ADDED</Text>
+          <Text style={styles.flashTick}>{flash.verb}</Text>
           <Text style={styles.flashName}>{flash.name}</Text>
           {flash.copy > 1 ? (
             <Text style={styles.flashMeta}>copy #{flash.copy} of this card</Text>
@@ -306,8 +396,45 @@ export function ScanScreen({ state }: Props) {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
+      {/*
+        What a scan DOES. Two words rather than a settings toggle, because
+        getting it wrong is silent in both directions: filing when you meant
+        to tag inflates what you own, and tagging when you meant to file loses
+        cards you have just bought.
+      */}
+      <View style={styles.modeRow}>
+        <Pressable
+          style={[styles.mode, mode === 'add' && styles.modeOn]}
+          onPress={() => setMode('add')}
+        >
+          <Text style={[styles.modeText, mode === 'add' && styles.modeTextOn]}>
+            Add cards
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.mode, mode === 'tag' && styles.modeOn]}
+          onPress={() => {
+            setMode('tag');
+            setStatus('Tagging what you already own — nothing is added.');
+          }}
+        >
+          <Text style={[styles.modeText, mode === 'tag' && styles.modeTextOn]}>
+            Tag what I own
+          </Text>
+        </Pressable>
+      </View>
+      <Text style={styles.modeHint}>
+        {mode === 'tag'
+          ? 'Scan cards you already own to put them in a group — a bundle to ' +
+            'sell, or a pile to give away. Nothing is added to your ' +
+            'collection and nothing is removed.'
+          : 'Scan cards to file them into your collection.'}
+      </Text>
+
       <View style={styles.header}>
-        <Text style={styles.target}>Scanning into {targetName}</Text>
+        <Text style={styles.target}>
+          {mode === 'tag' ? 'Tagging into' : 'Scanning into'} {targetName}
+        </Text>
         <Pressable
           style={[styles.chip, auto && styles.chipOn]}
           onPress={() => {
@@ -339,6 +466,45 @@ export function ScanScreen({ state }: Props) {
         showCounts={false}
       />
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
+
+      {/*
+        You own this printing more than one way. Which physical object goes in
+        the bundle is a question only the person holding it can answer, and
+        guessing tags the wrong card — a foil and a nonfoil are different
+        objects worth different money.
+      */}
+      {choosing ? (
+        <View style={styles.tagPicker}>
+          <Text style={styles.tagPickerTitle}>Which copy?</Text>
+          {choosing.map((option) => (
+            <Pressable
+              key={option.item_id}
+              style={styles.tagPickerRow}
+              onPress={() => void chooseStack(option)}
+            >
+              <Text style={styles.tagPickerText}>
+                {option.finish} · {option.condition}
+                {option.location ? ` · ${option.location}` : ''}
+              </Text>
+              <Text style={styles.modeHint}>{option.quantity} owned</Text>
+            </Pressable>
+          ))}
+          <Pressable style={styles.tagPickerRow} onPress={() => setChoosing(null)}>
+            <Text style={styles.modeHint}>Skip this one</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {tagged && mode === 'tag' ? (
+        <View style={styles.undoRow}>
+          <Text style={styles.undoText} numberOfLines={1}>
+            Tagged {tagged.name}
+          </Text>
+          <Pressable style={styles.undoButton} onPress={() => void undoTag()}>
+            <Text style={styles.undoButtonText}>Wrong? Undo</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.cameraBox}>
         <CameraGate purpose="Scanning a card means taking a picture of it. Pictures are read and discarded — none are kept.">
@@ -619,6 +785,39 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   undoText: { color: '#8a8f9c', fontSize: 12, flex: 1 },
+  modeRow: { flexDirection: 'row', gap: 8 },
+  mode: {
+    flex: 1,
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  // Amber rather than the usual green, because this mode does something
+  // genuinely different from what the screen normally does, and a scanner
+  // that looks the same in both is one you will use in the wrong one.
+  modeOn: { backgroundColor: '#b7791f', borderColor: '#b7791f' },
+  modeText: { color: '#c9ced9', fontSize: 14 },
+  modeTextOn: { color: '#ffffff', fontWeight: '700' },
+  modeHint: { color: '#8a8f9c', fontSize: 12, lineHeight: 17 },
+  tagPicker: {
+    borderColor: '#b7791f',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+  },
+  tagPickerTitle: { color: '#e4e6eb', fontSize: 15, fontWeight: '700' },
+  tagPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#2d3142',
+  },
+  tagPickerText: { color: '#e4e6eb', fontSize: 14 },
   undoButton: {
     borderColor: '#e53e3e',
     borderWidth: 1,

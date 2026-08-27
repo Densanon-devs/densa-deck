@@ -2578,3 +2578,33 @@ code {
   line-height: 1.5;
   margin: 0;
 }
+
+
+/* ---- groups: isolating part of the collection so it can leave it -------- */
+
+.group-tools { display: flex; flex-direction: column; gap: 6px; }
+
+.group-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* Outlined red, not filled. It opens a dialog rather than doing anything, and
+   a solid destructive button on a panel you scan past is one you eventually
+   press by accident. */
+.btn.group-danger {
+  border-color: var(--color-danger, #e53e3e);
+  color: var(--color-danger, #e53e3e);
+}
+
+#group-warning {
+  color: var(--color-warning, #ecc94b);
+  line-height: 1.45;
+}
+
+#retire-warning .build-over-limit-line { color: var(--color-warning, #ecc94b); }
+
+.btn.btn-danger {
+  background: var(--color-danger, #e53e3e);
+  border-color: var(--color-danger, #e53e3e);
+  color: #fff;
+}
+
+.btn.btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }

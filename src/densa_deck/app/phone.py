@@ -535,6 +535,45 @@ class PhoneBridge:
             return _unwrap(api.rename_collection(
                 found["collection_id"], payload.get("name", "")))
 
+        # --- groups you can hand over ------------------------------------
+        # Tagging is reachable from the phone because it is where the job
+        # actually happens: you are standing over a box with the cards in your
+        # hands. It is also completely reversible — a group is a filter, so
+        # tagging a thousand cards moves nothing and changes nothing owned.
+        #
+        # `retire_group` is deliberately NOT here, for the same reason
+        # `discard_cards` is not: it is the one irreversible step, and a
+        # mis-tap on a handset must not be able to empty a collection.
+        if route == "group/tag-scanned":
+            return _unwrap(api.tag_owned_into_group(
+                payload.get("printing_id", ""),
+                payload.get("collection_uid", ""),
+                payload.get("finish", ""),
+                payload.get("condition", ""),
+                int(payload.get("quantity", 0) or 0)))
+        if route == "group/tag-item":
+            return _unwrap(api.tag_item_into_group(
+                int(payload.get("item_id", 0) or 0),
+                payload.get("collection_uid", ""),
+                int(payload.get("quantity", 0) or 0)))
+        if route == "group/untag-item":
+            return _unwrap(api.untag_item_from_group(
+                int(payload.get("item_id", 0) or 0),
+                payload.get("collection_uid", "")))
+        if route == "group/review":
+            return _unwrap(api.review_group(
+                payload.get("collection_uid", ""),
+                int(payload.get("limit", 2000) or 2000)))
+        if route == "group/from-deck":
+            return _unwrap(api.group_from_deck(
+                payload.get("deck_id", ""),
+                payload.get("collection_uid", ""),
+                payload.get("decklist_text", "")))
+        if route == "group/export":
+            return _unwrap(api.export_group_manifest(
+                payload.get("collection_uid", ""),
+                payload.get("format", "csv")))
+
         if route == "collection/add-to":
             return _unwrap(api.collection_add_to(
                 int(payload.get("item_id", 0) or 0),

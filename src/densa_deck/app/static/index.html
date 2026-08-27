@@ -415,6 +415,29 @@ Mainboard:
             <div class="filter-group">
               <button id="collection-clear-filters" class="btn btn-outline btn-slim">Clear filters</button>
             </div>
+
+            <!-- Groups: isolating part of the collection so it can leave it.
+                 A bundle to sell, a deck to hand over, forty cards for a
+                 friend. Picking one scopes the list on the right, which IS
+                 the review step — you look at exactly what is going before
+                 anything irreversible is offered. -->
+            <div class="filter-group group-tools">
+              <label class="filter-label" for="collection-filter-group">Group</label>
+              <select id="collection-filter-group">
+                <option value="">(everything I own)</option>
+              </select>
+              <p id="group-summary" class="panel-hint subtle"></p>
+              <p id="group-warning" class="panel-hint hidden"></p>
+              <div class="group-actions hidden" id="group-actions">
+                <select id="group-export-format">
+                  <option value="csv">CSV</option>
+                  <option value="decklist">Decklist</option>
+                  <option value="json">JSON</option>
+                </select>
+                <button id="group-export-btn" class="btn btn-outline btn-slim">Export</button>
+                <button id="group-retire-btn" class="btn btn-outline btn-slim group-danger">Retire…</button>
+              </div>
+            </div>
             <div class="filter-group">
               <label class="filter-label">Add a card</label>
               <input type="text" id="collection-add-name" class="build-search-input"
@@ -1026,6 +1049,40 @@ Mainboard:
        records the object they actually have rather than a card name. -->
   <!-- Which lists a card belongs to. Collections are filters: ticking one
        never unticks another, and unticking one never removes the card. -->
+  <div id="retire-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="retire-modal-title">Retire a group</h2>
+        <button id="retire-close-btn" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="panel-hint">These cards have gone. This removes those copies
+          from your collection and <strong>cannot be undone</strong>. Everything
+          up to this point was a filter; this is not.</p>
+        <div id="retire-summary"></div>
+        <div id="retire-warning" class="hidden"></div>
+        <div class="filter-group">
+          <label class="filter-label" for="retire-price">Sold for (USD)</label>
+          <input type="number" id="retire-price" min="0" step="0.01"
+                 placeholder="Leave empty if you gave them away">
+          <label class="filter-label" for="retire-buyer">Sold to</label>
+          <input type="text" id="retire-buyer" placeholder="Optional">
+          <p class="panel-hint subtle">A price records it as a sale, split
+            across the cards by what each is worth, so it lands in your P&amp;L
+            in the same action.</p>
+        </div>
+        <div class="filter-group">
+          <label class="filter-label" for="retire-confirm">Type the group name to confirm</label>
+          <input type="text" id="retire-confirm" placeholder="Group name">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="retire-cancel-btn" class="btn btn-outline">Cancel</button>
+        <button id="retire-go-btn" class="btn btn-danger" disabled>Retire these cards</button>
+      </div>
+    </div>
+  </div>
+
   <div id="lists-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
     <div class="modal-panel">
       <div class="modal-header">

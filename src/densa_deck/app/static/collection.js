@@ -16,6 +16,9 @@
   const EMPTY_QUERY = {
     name_like: "", finish: "", condition: "", location: "",
     min_price: null, max_price: null, unpriced_only: false,
+    // Which group the list is scoped to. null is the master collection —
+    // every card owned, whatever group it sits in.
+    collection_id: null,
     sort: "name", limit: 60, offset: 0,
   };
 
@@ -27,6 +30,8 @@
     ready: false,          // printing catalogue present
     dismissedSetup: false,
     pendingCard: null,     // card whose printings the modal is showing
+    collections: [],       // for turning a picker's id into the uid the API wants
+    retiring: null,        // the group the retire dialog is about
   };
 
   function e(id) { return document.getElementById(id); }
@@ -314,6 +319,176 @@
     };
   }
 
+  // ------------------------------------------------------------- groups
+
+  /** Fill the group picker, keeping whatever was chosen if it still exists. */
+  async function loadGroups() {
+    const picker = e("collection-filter-group");
+    if (!picker) return;
+    let rows = [];
+    try {
+      // An ENVELOPE, not a bare list: `{collections, master,
+      // default_collection_id}`. Treating it as an array gets you an empty
+      // picker with nothing to say why.
+      const reply = await callApi("list_collections");
+      rows = (reply && reply.collections) || [];
+    } catch (_e) {
+      return;                       // the picker just stays as it is
+    }
+    state.collections = rows;
+    const chosen = picker.value;
+    picker.innerHTML = '<option value="">(everything I own)</option>' +
+      (rows || []).map(c =>
+        `<option value="${c.collection_id}">${escape(c.name)}</option>`).join("");
+    // A group deleted underneath us must not leave the list scoped to
+    // something that no longer exists.
+    picker.value = (rows || []).some(c => String(c.collection_id) === chosen)
+      ? chosen : "";
+    if (picker.value !== chosen) state.query.collection_id = null;
+  }
+
+  /**
+   * What is in the chosen group, and what you would regret selling.
+   *
+   * The warning is the honest version of "are you sure": these are cards your
+   * DECKS still want, and the alternative to saying so here is finding out at
+   * the table.
+   */
+  async function refreshGroupSummary() {
+    const picker = e("collection-filter-group");
+    const summary = e("group-summary");
+    const warning = e("group-warning");
+    const actions = e("group-actions");
+    if (!picker || !summary) return;
+
+    const uid = groupUidFor(picker.value);
+    actions?.classList.toggle("hidden", !uid);
+    if (!uid) {
+      summary.textContent = "";
+      warning?.classList.add("hidden");
+      state.retiring = null;
+      return;
+    }
+
+    let review;
+    try {
+      review = await callApi("review_group", uid);
+    } catch (err) {
+      summary.textContent = "";
+      return;
+    }
+    state.retiring = { uid, name: review.name, review };
+    summary.textContent =
+      `${review.copies} card${review.copies === 1 ? "" : "s"} · ${money(review.value_usd)}`;
+
+    const wanted = review.wanted_elsewhere || [];
+    if (warning) {
+      warning.classList.toggle("hidden", !wanted.length);
+      warning.innerHTML = wanted.length
+        ? `<strong>${wanted.length}</strong> of these are in decks of yours: ` +
+          wanted.slice(0, 6).map(w => escape(w.card_name)).join(", ") +
+          (wanted.length > 6 ? "…" : "")
+        : "";
+    }
+  }
+
+  /** collection_id from the picker -> the uid the group API speaks. */
+  function groupUidFor(collectionId) {
+    if (!collectionId) return "";
+    const found = (state.collections || []).find(
+      c => String(c.collection_id) === String(collectionId));
+    return found ? found.collection_uid : "";
+  }
+
+  async function exportGroup() {
+    const uid = groupUidFor(e("collection-filter-group")?.value);
+    if (!uid) return;
+    const fmt = e("group-export-format")?.value || "csv";
+    let out;
+    try {
+      out = await callApi("export_group_manifest", uid, fmt);
+    } catch (err) {
+      toast("Could not export: " + err.message, "error");
+      return;
+    }
+    // Straight to the clipboard AND offered as a download. A manifest is
+    // something you paste into a message as often as you attach it, and
+    // guessing which is a guess that is wrong half the time.
+    try {
+      await navigator.clipboard.writeText(out.text);
+      toast(`${out.copies} cards copied — ${out.filename}`, "success");
+    } catch (_e) {
+      toast(`Exported ${out.copies} cards.`, "success");
+    }
+    const blob = new Blob([out.text], { type: "text/plain;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = out.filename;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  function openRetire() {
+    if (!state.retiring) return;
+    const { name, review } = state.retiring;
+    const modal = e("retire-modal");
+    if (!modal) return;
+    e("retire-modal-title").textContent = `Retire ${name}`;
+    e("retire-summary").innerHTML =
+      `<p><strong>${review.copies}</strong> cards, worth ` +
+      `<strong>${money(review.value_usd)}</strong>, leave your collection.</p>`;
+
+    const wanted = review.wanted_elsewhere || [];
+    const warn = e("retire-warning");
+    warn.classList.toggle("hidden", !wanted.length);
+    warn.innerHTML = wanted.length
+      ? `<p class="build-over-limit-line">${wanted.length} of these are in ` +
+        `decks of yours: ${wanted.map(w => escape(w.card_name)).join(", ")}</p>`
+      : "";
+
+    ["retire-price", "retire-buyer", "retire-confirm"].forEach(id => {
+      const el = e(id); if (el) el.value = "";
+    });
+    e("retire-go-btn").disabled = true;
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function hideRetire() {
+    const modal = e("retire-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function doRetire() {
+    if (!state.retiring) return;
+    const price = e("retire-price")?.value;
+    const buyer = e("retire-buyer")?.value || "";
+    const go = e("retire-go-btn");
+    if (go) go.disabled = true;
+    let out;
+    try {
+      out = await callApi("retire_group", state.retiring.uid,
+                          price === "" ? null : Number(price), buyer, "");
+    } catch (err) {
+      toast("Could not retire: " + err.message, "error");
+      if (go) go.disabled = false;
+      return;
+    }
+    hideRetire();
+    toast(`${out.copies_removed} cards left the collection` +
+          (out.sale_recorded ? " and were recorded as a sale." : "."), "success");
+    const picker = e("collection-filter-group");
+    if (picker) picker.value = "";
+    state.query.collection_id = null;
+    state.retiring = null;
+    await refreshStatus();
+    await loadGroups();
+    await refreshGroupSummary();
+    await loadItems(false);
+  }
+
   // -------------------------------------------------------- printings
 
   /**
@@ -348,7 +523,11 @@
 
     let all, mine;
     try {
-      all = await callApi("list_collections");
+      // `.collections`, not the reply itself. This read the envelope as an
+      // array, so `.map` threw and this modal — the only way to manage list
+      // membership on the desktop — rendered nothing after "Loading…".
+      const reply = await callApi("list_collections");
+      all = (reply && reply.collections) || [];
       mine = await callApi("collections_for_item", itemId);
     } catch (err) {
       body.innerHTML = `<p class="panel-hint">Could not load: ${escape(err.message)}</p>`;
@@ -633,6 +812,43 @@
       loadItems(false);
     });
 
+    // ------------------------------------------------------------ groups
+    //
+    // Isolating part of the collection so it can leave it. Picking a group
+    // scopes the list on the right, which IS the review step: you look at
+    // exactly what is going before anything irreversible is offered.
+    const groupPicker = e("collection-filter-group");
+    if (groupPicker) groupPicker.addEventListener("change", async () => {
+      state.query.collection_id = groupPicker.value || null;
+      state.query.offset = 0;
+      await loadItems(false);
+      await refreshGroupSummary();
+    });
+
+    const exportBtn = e("group-export-btn");
+    if (exportBtn) exportBtn.addEventListener("click", exportGroup);
+
+    const retireBtn = e("group-retire-btn");
+    if (retireBtn) retireBtn.addEventListener("click", openRetire);
+
+    ["retire-close-btn", "retire-cancel-btn"].forEach(id => {
+      const btn = e(id);
+      if (btn) btn.addEventListener("click", hideRetire);
+    });
+
+    // The confirm box gates the button. Typing the name is the whole safety
+    // measure — a plain "are you sure" on an irreversible action is a reflex,
+    // and reflexes are what this is guarding against.
+    const confirmBox = e("retire-confirm");
+    if (confirmBox) confirmBox.addEventListener("input", () => {
+      const go = e("retire-go-btn");
+      if (go) go.disabled = confirmBox.value.trim().toLowerCase()
+        !== (state.retiring?.name || "").trim().toLowerCase();
+    });
+
+    const go = e("retire-go-btn");
+    if (go) go.addEventListener("click", doRetire);
+
     const clear = e("collection-clear-filters");
     if (clear) clear.addEventListener("click", () => {
       state.query = Object.assign({}, EMPTY_QUERY);
@@ -647,6 +863,13 @@
       if (u) u.checked = false;
       const s = e("collection-sort");
       if (s) s.value = "name";
+      // The group too. Leaving the list scoped to a group after "clear
+      // filters" is a filter that survived being cleared, which is exactly
+      // the kind of thing people then blame on missing cards.
+      const g = e("collection-filter-group");
+      if (g) g.value = "";
+      state.query.collection_id = null;
+      refreshGroupSummary();
       loadItems(false);
     });
 
@@ -672,7 +895,11 @@
   async function activate() {
     wireOnce();
     await refreshStatus();
+    // Before the items, so a group chosen last visit is still in the picker
+    // when the list is scoped to it.
+    await loadGroups();
     await loadItems(false);
+    await refreshGroupSummary();
   }
 
   window.__collectionActivate = activate;

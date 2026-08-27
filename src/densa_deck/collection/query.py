@@ -90,9 +90,22 @@ def search_collection(
         params.append(location)
     # None means the MASTER collection — every stack, whatever grouping it is
     # in — which is the difference between "my Modern binder" and "my cards".
+    #
+    # Membership OR filing, and both halves are needed. `ci.collection_id`
+    # says where a card physically LIVES, which is one place because a card is
+    # in one box. `collection_membership` says which LISTS mention it, which
+    # is any number, because collections are filters — that is the whole model
+    # (see `storage.add_to_collection`).
+    #
+    # Filing alone was the condition here, so a card added to a list without
+    # being moved was invisible in that list on the desktop. The phone has
+    # always read both; this is the desktop catching up, and it is why a group
+    # you tagged looked empty.
     if collection_id is not None:
-        conditions.append("ci.collection_id = ?")
-        params.append(int(collection_id))
+        conditions.append(
+            "(ci.collection_id = ? OR ci.item_id IN "
+            "(SELECT item_id FROM collection_membership WHERE collection_id = ?))")
+        params.extend([int(collection_id), int(collection_id)])
     if set_code:
         conditions.append("p.set_code = ? COLLATE NOCASE")
         params.append(set_code.strip().lower())

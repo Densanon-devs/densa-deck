@@ -1321,6 +1321,172 @@ class AppApi:
             "overcommitted": sum(1 for r in rows if r["overcommitted"]),
         }
 
+    # ------------------------------------------------- groups you can hand over
+    #
+    # Isolating part of a collection so it can leave it: a bundle to sell, a
+    # deck to give away, forty cards for a friend. All of it rests on
+    # collections being FILTERS — tagging a thousand cards moves nothing and
+    # changes nothing you own, so a group can be built and revised freely, and
+    # exactly one call (`retire_group`) is destructive.
+
+    @_safe
+    def tag_owned_into_group(self, printing_id: str, collection_uid: str,
+                             finish: str = "", condition: str = "",
+                             quantity: int = 0) -> dict:
+        """Put copies you ALREADY OWN of a printing into a group.
+
+        The scanner's second mode. `scan_commit` adds a copy, which is right
+        when entering cards you have just acquired and wrong when walking a
+        pile you own picking out a bundle — there a second copy is not a tag,
+        it is a counting error you will not notice for months.
+
+        Answers with `candidates` when you own the printing more than one way
+        (foil and nonfoil, two conditions) rather than picking one, and with
+        `owned: 0` when you do not own it at all rather than silently adding
+        it. Both are information the caller needs.
+        """
+        from densa_deck.collection.grouping import tag_owned_printing
+        try:
+            result = tag_owned_printing(
+                self._get_collection_store(), printing_id, collection_uid,
+                finish=finish or None, condition=condition or None,
+                quantity=int(quantity or 0))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        # Only a tag that CHANGED something is worth sending. Logging a
+        # re-scan of a card already in the list would fill the other device's
+        # log with events that apply to nothing.
+        if result.get("tagged") and result.get("item_id"):
+            self._log_membership(int(result["item_id"]), collection_uid, True)
+        return result
+
+    @_safe
+    def tag_item_into_group(self, item_id: int, collection_uid: str,
+                            quantity: int = 0) -> dict:
+        """Tag one exact stack — how the caller answers the several-copies case.
+
+        `quantity` 0 means the whole stack; a number means the group claims
+        that many and leaves the rest, which is "sell two of my four".
+        """
+        from densa_deck.collection.grouping import tag_item
+        try:
+            result = tag_item(self._get_collection_store(), int(item_id),
+                              collection_uid, quantity=int(quantity or 0))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if result.get("tagged"):
+            self._log_membership(int(item_id), collection_uid, True)
+        return result
+
+    @_safe
+    def untag_item_from_group(self, item_id: int, collection_uid: str) -> dict:
+        from densa_deck.collection.grouping import untag_item
+        try:
+            result = untag_item(self._get_collection_store(), int(item_id),
+                                collection_uid)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if result.get("untagged"):
+            self._log_membership(int(item_id), collection_uid, False)
+        return result
+
+    @_safe
+    def group_from_deck(self, deck_id: str, collection_uid: str,
+                        decklist_text: str = "") -> dict:
+        """Put the physical cards of a deck into a group.
+
+        "I'm giving my Atraxa deck away." Reads the saved deck when there is
+        one and falls back to pasted text, because a deck you are about to
+        hand over is often one you never got round to saving.
+        """
+        from densa_deck.collection.grouping import group_from_deck
+        from densa_deck.deck.parser import parse_auto
+        from densa_deck.deck.resolver import resolve_deck
+
+        db = self._get_db()
+        entries = None
+        if decklist_text.strip():
+            entries = parse_auto(decklist_text)
+        else:
+            snap = self._get_vstore().get_latest(deck_id)
+            if snap is None:
+                return {"ok": False, "error": "No such deck.",
+                        "error_type": "NotFound"}
+            entries = parse_auto("\n".join(
+                f"{qty} {name}" for name, qty in snap.decklist.items()))
+        if not entries:
+            return {"ok": False, "error": "That deck has no cards in it."}
+
+        deck = resolve_deck(entries, db, name=deck_id or "Deck")
+        try:
+            return group_from_deck(self._get_collection_store(), db, deck,
+                                   collection_uid, deck_id=deck_id or None)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @_safe
+    def review_group(self, collection_uid: str, limit: int = 2000) -> dict:
+        """What is in a group, what it is worth, and what you would regret.
+
+        The step before retiring, and the reason retiring is separate. It
+        includes which cards in the group your DECKS still want, because
+        finding that out at the table is the failure this is here to prevent.
+        """
+        from densa_deck.collection.grouping import group_contents
+        try:
+            return group_contents(self._get_collection_store(), self._get_db(),
+                                  collection_uid, limit=int(limit))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    @_safe
+    def export_group_manifest(self, collection_uid: str = "",
+                              fmt: str = "csv") -> dict:
+        """A group as a document someone else can read or import.
+
+        `collection_uid` empty means the whole collection, which is the backup
+        case; passed, it is a bundle manifest. Returns the text rather than
+        writing it, so the caller decides where it lands — the desktop offers
+        a save dialog, the phone shows it to copy.
+        """
+        from densa_deck.collection.manifest import export_manifest, suggested_filename
+        try:
+            text, meta = export_manifest(
+                self._get_collection_store(), self._get_db(),
+                collection_uid=collection_uid or None, fmt=fmt)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"text": text, "filename": suggested_filename(meta, fmt),
+                "format": fmt, **meta}
+
+    @_safe
+    def retire_group(self, collection_uid: str,
+                     sale_price_usd: float | None = None,
+                     sold_to: str = "", note: str = "",
+                     delete_group: bool = True) -> dict:
+        """The cards in this group have gone. Take them off the collection.
+
+        DESTRUCTIVE and irreversible — the frontend must confirm, and this is
+        deliberately not reachable from the phone. Everything that builds a
+        group is reversible right up to here, which is what makes assembling a
+        thousand-card bundle safe.
+
+        With `sale_price_usd` the lot is also recorded as a sale, split across
+        the cards by market value so each row carries a believable price and
+        the bundle lands in the P&L in the same action. Without it, it is a
+        giveaway — a real case, and not one that should have to pretend it
+        earned nothing.
+        """
+        from densa_deck.collection.grouping import retire_group
+        try:
+            return retire_group(
+                self._get_collection_store(), self._get_db(), collection_uid,
+                sale_price_usd=(None if sale_price_usd is None
+                                else float(sale_price_usd)),
+                sold_to=sold_to, note=note, delete_group=bool(delete_group))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
     @_safe
     def list_sets(self, limit: int = 400) -> dict:
         """Every set in the catalogue, newest first.
