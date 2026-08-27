@@ -48,6 +48,10 @@ export class SyncEngine {
   private store: LocalStore;
   private client: DesktopClient;
   private device: string;
+  /** Which device this phone is, for anything that has to keep its own events. */
+  get deviceId(): string {
+    return this.device;
+  }
   private uuid: UuidSource;
 
   constructor(
@@ -224,14 +228,37 @@ export class SyncEngine {
     return { applied, more: Boolean(reply.more) };
   }
 
-  /** Apply one event from the desktop. False if it was already known. */
+  /**
+   * Apply one event from the desktop. False if it was already known.
+   *
+   * ORDER MATTERS, and it is not the same order for every kind.
+   *
+   * Everything used to be recorded first and applied second. Anything that
+   * interrupted the app in between — a force-quit, the OS reclaiming it, a
+   * crash — left the event marked KNOWN and never applied, and `knowsEvent`
+   * then skipped it on every future sync. The cards it described could never
+   * arrive again. That is not theoretical: it is what a phone looks like
+   * after someone force-quits a sync, which is what someone does to a sync
+   * that appears stuck.
+   *
+   * So the idempotent kinds are APPLIED first and recorded second. Applying
+   * one twice is a no-op — `stack-set` is an absolute quantity, membership is
+   * an add or a remove — so a crash in the gap costs a repeat, not a loss.
+   *
+   * `stack-delta` is the exception and keeps the old order, because a delta
+   * applied twice DOUBLE-COUNTS. There the safe failure is losing one, not
+   * inventing cards, and a full re-pull is the repair.
+   */
   private async applyRemote(event: SyncEvent): Promise<boolean> {
     if (await this.store.knowsEvent(event.event_uid)) return false;
 
     // Recorded as already pushed: it came FROM the desktop, so sending it
     // back would be pointless traffic.
-    await this.store.recordEvent(event);
-    await this.store.markPushed([event.event_uid]);
+    const remember = async () => {
+      await this.store.recordEvent(event);
+      await this.store.markPushed([event.event_uid]);
+    };
+    if (event.kind === 'stack-delta') await remember();
 
     switch (event.kind) {
       case 'stack-delta':
@@ -245,6 +272,7 @@ export class SyncEngine {
         await this.store.setStackQuantity(
           event.payload as unknown as StackDelta & { quantity: number },
         );
+        await remember();
         return true;
       case 'collection-upsert':
         await this.store.upsertCollection({
@@ -253,6 +281,7 @@ export class SyncEngine {
           kind: String(event.payload.kind ?? 'collection'),
           notes: String(event.payload.notes ?? ''),
         });
+        await remember();
         return true;
       case 'membership': {
         // Which lists a card is in. Addressed by natural key on both sides:
@@ -266,6 +295,7 @@ export class SyncEngine {
         if (!uid) return false;
         if (event.payload.member) await this.store.addMembership(key, uid);
         else await this.store.removeMembership(key, uid);
+        await remember();
         return true;
       }
       case 'collection-delete':
@@ -273,10 +303,12 @@ export class SyncEngine {
           String(event.payload.collection_uid ?? ''),
           Boolean(event.payload.discard_cards),
         );
+        await remember();
         return true;
       default:
         // Stored but not acted on. A kind from a newer desktop must not break
         // this one, and dropping it would lose it permanently.
+        await remember();
         return false;
     }
   }

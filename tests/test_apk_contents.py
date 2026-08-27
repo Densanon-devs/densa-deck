@@ -90,6 +90,13 @@ SCREENS = {
     # says four hundred, every screen is individually right and the app still
     # looks broken; this is the only place that can say which is which.
     "phone and PC totals side by side": "This phone:",
+    # The repair for a mirror that cannot fix itself. A pulled event is
+    # remembered by uid, so one recorded without being applied is skipped
+    # forever and pulling to refresh can never help.
+    "rebuild from the PC": "Copy my PC",
+    # Renaming and deleting a deck, which there was no way to do at all.
+    "deck rename and delete": "hold to rename or delete",
+    "deleting a deck spares the cards": "never touches the cards",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.

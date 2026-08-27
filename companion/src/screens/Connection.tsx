@@ -112,6 +112,35 @@ export function ConnectionScreen({ state, onClose }: Props) {
             </Text>{' '}
             {counts.desktop === null ? '(couldn’t ask)' : 'cards'}
           </Text>
+          {/*
+            The repair, next to the numbers that show it is needed. A pulled
+            event is remembered by uid so it is never applied twice — right,
+            until one was recorded and NOT applied, after which the phone
+            skips it forever and pulling to refresh can never help.
+          */}
+          {counts.desktop !== null && counts.desktop !== counts.phone ? (
+            <Pressable
+              style={styles.rebuild}
+              onPress={() => {
+                setBusy(true);
+                void state
+                  .rebuildFromDesktop()
+                  .then(() => run())
+                  .catch(reporting('rebuilding from your PC', setProblem))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <Text style={styles.rebuildText}>
+                Copy my PC’s cards down again
+              </Text>
+              <Text style={styles.muted}>
+                Throws this phone’s copy away and asks for all of it fresh.
+                Anything you changed here and haven’t sent is kept and goes
+                first.
+              </Text>
+            </Pressable>
+          ) : null}
+
           {counts.desktop !== null && counts.desktop !== counts.phone ? (
             <Text style={styles.tallyWarn}>
               {snapshot?.pendingEdits
@@ -222,6 +251,15 @@ const styles = StyleSheet.create({
   tallyRow: { color: '#c9ced9', fontSize: 14 },
   tallyNum: { color: '#e4e6eb', fontWeight: '700' },
   tallyWarn: { color: '#ecc94b', fontSize: 13, lineHeight: 19, marginTop: 4 },
+  rebuild: {
+    borderColor: '#38a169',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+    marginTop: 8,
+  },
+  rebuildText: { color: '#68d391', fontSize: 15, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 20 },
   summary: { color: '#e4e6eb', fontSize: 15, lineHeight: 22 },
   row: {

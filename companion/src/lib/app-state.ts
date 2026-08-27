@@ -129,6 +129,24 @@ export class AppState {
   }
 
   /**
+   * Throw away the mirror and ask the PC for all of it again.
+   *
+   * For a phone whose copy has drifted and cannot right itself. A pulled
+   * event is remembered by uid so it is never applied twice; if one was ever
+   * recorded without being applied — a force-quit mid-sync is enough — the
+   * phone skips it forever and the cards it described never arrive, however
+   * many times you pull to refresh.
+   *
+   * Safe to press: it discards only what came FROM the desktop. Edits made
+   * here that have not been sent are kept and go first, so the fresh copy
+   * includes them rather than undoing them.
+   */
+  async rebuildFromDesktop(): Promise<AppSnapshot> {
+    await this.store.forgetDesktopState(this.engine.deviceId);
+    return this.sync();
+  }
+
+  /**
    * The camera levers, kept between visits.
    *
    * Screens do not reach into the store; finding a zoom that focuses on your

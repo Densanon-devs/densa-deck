@@ -67,6 +67,20 @@ export function DeckListScreen({
   const [rows, setRows] = useState<Deck[]>([]);
   const [name, setName] = useState('');
   const [problem, setProblem] = useState('');
+  /**
+   * The deck being renamed or deleted, and what it is being renamed to.
+   *
+   * Long-press rather than a row of buttons on every deck: the common action
+   * is opening one, and two more targets beside it on a phone-width row is
+   * how you delete a deck you meant to open.
+   */
+  const [acting, setActing] = useState<Deck | null>(null);
+  const [renameTo, setRenameTo] = useState('');
+  // Deleting a deck is irreversible, so it takes a second press rather than a
+  // first one. The row stays on screen throughout — a confirm that replaces
+  // what it is asking about leaves you agreeing to something you can no
+  // longer see.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const load = useCallback(async () => setRows(await decks.list()), [decks]);
   useEffect(() => {
@@ -88,6 +102,39 @@ export function DeckListScreen({
     await load();
     onOpen(deck.deck_id);
   }, [name, decks, load, onOpen]);
+
+  /** A new name for a deck. Blank is refused rather than silently ignored. */
+  const rename = useCallback(
+    async (deck: Deck) => {
+      const chosen = renameTo.trim();
+      if (!chosen) {
+        setProblem('A deck needs a name.');
+        return;
+      }
+      await decks.save({ ...deck, name: chosen,
+                         updated_at: new Date().toISOString() });
+      setActing(null);
+      await load();
+    },
+    [renameTo, decks, load],
+  );
+
+  /**
+   * Delete a deck. The cards are untouched.
+   *
+   * Worth saying on screen, because "delete" next to a list of cards reads as
+   * if the cards go too — a deck is a list of names, and what you own is a
+   * separate question the collection answers.
+   */
+  const remove = useCallback(
+    async (deck: Deck) => {
+      await decks.remove(deck.deck_id);
+      setActing(null);
+      setConfirmingDelete(false);
+      await load();
+    },
+    [decks, load],
+  );
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -120,17 +167,84 @@ export function DeckListScreen({
         </Text>
       ) : (
         rows.map((deck) => (
-          <Pressable
-            key={deck.deck_id}
-            style={styles.result}
-            onPress={() => onOpen(deck.deck_id)}
-          >
-            <View style={styles.grow}>
-              <Text style={styles.name}>{deck.name}</Text>
-              <Text style={styles.muted}>{deckSize(deck.decklist)} cards</Text>
-            </View>
-            <Text style={styles.plus}>›</Text>
-          </Pressable>
+          <View key={deck.deck_id}>
+            <Pressable
+              style={styles.result}
+              onPress={() => onOpen(deck.deck_id)}
+              onLongPress={() => {
+                setActing(acting?.deck_id === deck.deck_id ? null : deck);
+                setRenameTo(deck.name);
+                setConfirmingDelete(false);
+                setProblem('');
+              }}
+            >
+              <View style={styles.grow}>
+                <Text style={styles.name}>{deck.name}</Text>
+                <Text style={styles.muted}>
+                  {deckSize(deck.decklist)} cards · hold to rename or delete
+                </Text>
+              </View>
+              <Text style={styles.plus}>›</Text>
+            </Pressable>
+
+            {acting?.deck_id === deck.deck_id ? (
+              <View style={styles.deckActions}>
+                <TextInput
+                  style={[styles.list, styles.searchBox]}
+                  value={renameTo}
+                  onChangeText={setRenameTo}
+                  placeholder="Deck name"
+                  placeholderTextColor="#8a8f9c"
+                  autoFocus
+                />
+                <View style={styles.row}>
+                  <Pressable
+                    style={[styles.secondary, styles.grow]}
+                    onPress={() => {
+                      setProblem('');
+                      void rename(deck).catch(
+                        reporting('renaming the deck', setProblem),
+                      );
+                    }}
+                  >
+                    <Text style={styles.secondaryText}>Rename</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.secondary, styles.grow]}
+                    onPress={() => {
+                      setActing(null);
+                      setConfirmingDelete(false);
+                    }}
+                  >
+                    <Text style={styles.secondaryText}>Cancel</Text>
+                  </Pressable>
+                </View>
+                <Pressable
+                  style={[styles.secondary, styles.danger]}
+                  onPress={() => {
+                    setProblem('');
+                    if (!confirmingDelete) {
+                      setConfirmingDelete(true);
+                      return;
+                    }
+                    void remove(deck).catch(
+                      reporting('deleting the deck', setProblem),
+                    );
+                  }}
+                >
+                  <Text style={styles.dangerText}>
+                    {confirmingDelete
+                      ? `Really delete ${deck.name}? This cannot be undone`
+                      : 'Delete this deck'}
+                  </Text>
+                </Pressable>
+                <Text style={styles.muted}>
+                  Deleting a deck never touches the cards. A deck is a list of
+                  names; what you own is a separate thing.
+                </Text>
+              </View>
+            ) : null}
+          </View>
         ))
       )}
     </ScrollView>
@@ -691,6 +805,15 @@ const styles = StyleSheet.create({
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { marginBottom: 8 },
   overLimit: { color: '#ecc94b', fontSize: 12, lineHeight: 18 },
+  deckActions: {
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2d3142',
+  },
+  danger: { borderColor: '#e53e3e' },
+  dangerText: { color: '#e53e3e', fontWeight: '600', textAlign: 'center' },
   zoneRow: { flexDirection: 'row', gap: 8 },
   zone: {
     flex: 1,

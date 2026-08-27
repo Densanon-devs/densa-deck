@@ -400,6 +400,29 @@ export class LocalStore {
     }
   }
 
+  /**
+   * Forget everything the desktop ever told us, and where we had got to.
+   *
+   * The repair for a mirror that has drifted and cannot fix itself. A pulled
+   * event is remembered by uid so it is never applied twice — which is right,
+   * until one of them was recorded and NOT applied. After that the phone
+   * skips it forever and no amount of syncing brings those cards back.
+   *
+   * Keeps this phone's OWN events, including any not yet pushed: they are
+   * edits the user made that the desktop has not seen, and throwing them away
+   * to fix a display problem would turn a confusing screen into lost work.
+   * They push on the next sync, before the fresh baseline is pulled, so the
+   * baseline already reflects them.
+   */
+  async forgetDesktopState(device: string): Promise<void> {
+    await this.db.run('DELETE FROM stacks');
+    await this.db.run('DELETE FROM stack_collections');
+    await this.db.run('DELETE FROM sync_events WHERE device != ?', [device]);
+    // Back to zero, which is what asks the desktop for a whole baseline
+    // rather than a replay from a point in its log.
+    await this.db.run('DELETE FROM meta WHERE key = ?', ['sync.cursor']);
+  }
+
   async listCollections(): Promise<CollectionRow[]> {
     // Counts membership as well as filing, because that is what the list
     // itself shows. Counting only `stacks.collection_uid` meant ticking a

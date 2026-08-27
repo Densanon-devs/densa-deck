@@ -155,11 +155,20 @@ export class MemoryDatabase {
       this.tables.set(name, []);
       return;
     }
-    const cols = wherePart[1].split(/ AND /i).map((s) => s.split('=')[0].trim());
-    const kept = table.filter(
-      (row) => !cols.every((col, i) => row[col] === params[i]),
-    );
-    this.tables.set(name, kept);
+    // `=` and `!=`, because the real code uses both. Splitting on "=" alone
+    // turned `device != ?` into a column called "device !", which matched
+    // nothing, so the DELETE quietly kept every row — a fake that answers
+    // "did nothing" to a statement it does not understand is worse than one
+    // that throws, because the test passes.
+    const clauses = wherePart[1].split(/ AND /i).map((clause, i) => {
+      const negated = clause.includes('!=');
+      const column = clause.split(negated ? '!=' : '=')[0].trim();
+      return { column, negated, value: params[i] };
+    });
+    const matches = (row) =>
+      clauses.every(({ column, negated, value }) =>
+        negated ? row[column] !== value : row[column] === value);
+    this.tables.set(name, table.filter((row) => !matches(row)));
   }
 
   async all(sql, params = []) {

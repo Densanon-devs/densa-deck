@@ -304,3 +304,93 @@ describe('the mirror', () => {
     assert.equal(hits[0].card_name, 'Lightning Bolt');
   });
 });
+
+describe('a mirror that has drifted, and cannot fix itself', () => {
+  /**
+   * A pulled event is remembered by uid so it is never applied twice. That is
+   * right — until one is recorded and NOT applied, after which the phone
+   * skips it on every future sync and the cards it described can never
+   * arrive. Pulling to refresh forever cannot help.
+   *
+   * Which is not hypothetical: recording used to happen BEFORE applying, so
+   * anything that interrupted the app in between — a force-quit, which is
+   * what someone does to a sync that looks stuck — left exactly that state.
+   */
+  test('an event recorded but never applied leaves the card gone for good', async () => {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+
+    // The shape a crash leaves behind: known, never applied.
+    await store.recordEvent({
+      event_uid: 'baseline-1', device: 'pc', seq: 1, kind: 'stack-set',
+      payload: {
+        printing_id: 'p1', card_name: 'Sol Ring', oracle_id: '',
+        finish: 'nonfoil', condition: 'NM', language: 'en', location: '',
+        collection_uid: DEFAULT_COLLECTION_UID, quantity: 2,
+      },
+      created_at: 'now',
+    });
+    assert.equal(await store.knowsEvent('baseline-1'), true);
+    assert.equal(await store.totalCards(), 0, 'recorded, never applied');
+  });
+
+  test('forgetting the desktop lets the whole lot arrive again', async () => {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    await store.recordEvent({
+      event_uid: 'baseline-1', device: 'pc', seq: 1, kind: 'stack-set',
+      payload: { printing_id: 'p1', card_name: 'Sol Ring' },
+      created_at: 'now',
+    });
+    await store.setMeta('sync.cursor', '42');
+
+    await store.forgetDesktopState('phone-a');
+
+    assert.equal(await store.knowsEvent('baseline-1'), false,
+                 'the desktop event is forgettable again');
+    assert.equal(await store.getMeta('sync.cursor'), undefined,
+                 'and the cursor is back to nothing, which asks for a baseline');
+  });
+
+  test('it keeps this phone’s own edits, sent or not', async () => {
+    // Throwing away unsent work to fix a display problem turns a confusing
+    // screen into lost cards.
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    await store.recordEvent({
+      event_uid: 'mine-1', device: 'phone-a', seq: 1, kind: 'stack-delta',
+      payload: { printing_id: 'p1', card_name: 'Sol Ring', delta: -1 },
+      created_at: 'now',
+    });
+    await store.recordEvent({
+      event_uid: 'theirs-1', device: 'pc', seq: 1, kind: 'stack-set',
+      payload: { printing_id: 'p2', card_name: 'Bolt' },
+      created_at: 'now',
+    });
+
+    await store.forgetDesktopState('phone-a');
+
+    assert.equal(await store.knowsEvent('mine-1'), true, 'my edit survives');
+    assert.equal(await store.knowsEvent('theirs-1'), false, 'theirs does not');
+    assert.equal((await store.unpushed(50)).length, 1,
+                 'and it is still queued for the PC');
+  });
+
+  test('the local mirror is emptied so the baseline is not doubled', async () => {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    await store.applyDelta({
+      printing_id: 'p1', card_name: 'Sol Ring', oracle_id: '',
+      finish: 'nonfoil', condition: 'NM', language: 'en', location: '',
+      collection_uid: DEFAULT_COLLECTION_UID, delta: 3, reason: 'test',
+    });
+    assert.equal(await store.totalCards(), 3);
+
+    await store.forgetDesktopState('phone-a');
+    assert.equal(await store.totalCards(), 0);
+  });
+});
