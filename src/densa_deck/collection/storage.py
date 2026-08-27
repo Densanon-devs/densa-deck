@@ -1321,6 +1321,69 @@ class CollectionStore:
                 })
         return wanted
 
+    def clear_all_cards(self) -> dict:
+        """Every card, out of every collection. The groupings stay.
+
+        The desktop had no way to do this at all — not from the UI, and not as
+        one operation. `delete_collection(discard_cards=True)` empties ONE
+        collection, so clearing everything meant walking them, and cards filed
+        in a named collection survived a clear of the default. Someone who
+        wanted to start over had no lever, which is how you end up wiping a
+        phone to try to delete cards that live on a PC.
+
+        The collections themselves survive: they are the shelves, and someone
+        clearing the cards off them has not asked to throw the shelves out.
+
+        Written to the event log one stack at a time rather than deleted
+        wholesale — that log is the ledger behind cost basis and P&L, and a
+        silent mass deletion leaves both describing cards that are gone.
+        """
+        now = _now()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT item_id, printing_id, card_name, quantity
+                   FROM collection_items WHERE quantity > 0""").fetchall()
+            for item_id, printing_id, card_name, quantity in rows:
+                conn.execute(
+                    """INSERT INTO collection_events
+                       (item_id, printing_id, card_name, delta, reason, note,
+                        created_at)
+                       VALUES (?, ?, ?, ?, 'cleared', ?, ?)""",
+                    (item_id, printing_id, card_name, -quantity,
+                     "Collection cleared", now))
+            # Memberships first, while the stacks are still there to name
+            # them. A list mentioning a card that no longer exists is how a
+            # cleared collection keeps being counted.
+            conn.execute("DELETE FROM collection_membership")
+            conn.execute("DELETE FROM collection_items")
+            conn.commit()
+        return {
+            "stacks_removed": len(rows),
+            "cards_removed": sum(r[3] for r in rows),
+        }
+
+    def all_stacks_for_sync(self) -> list[dict]:
+        """Every stack, with the natural key another device addresses it by.
+
+        Local row ids mean nothing on the other machine, so a removal has to
+        be described by the card itself. Read BEFORE a clear, since afterwards
+        there is nothing left to describe.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT i.printing_id, i.card_name, i.oracle_id, i.finish,
+                          i.condition, i.language, i.location, i.quantity,
+                          c.collection_uid
+                     FROM collection_items i
+                     LEFT JOIN collections c
+                            ON c.collection_id = i.collection_id
+                    WHERE i.quantity > 0""").fetchall()
+        return [{
+            "printing_id": r[0], "card_name": r[1], "oracle_id": r[2],
+            "finish": r[3], "condition": r[4], "language": r[5],
+            "location": r[6], "quantity": r[7], "collection_uid": r[8] or "",
+        } for r in rows]
+
     def wishlist_forget(self, card_name: str, deck_id: str = "") -> int:
         """Stop wanting a card, whichever printings were listed.
 

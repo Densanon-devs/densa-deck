@@ -3597,7 +3597,8 @@ class AppApi:
         return self._sync_applier
 
     def _log_stack_delta(self, printing_id: str, card_name: str, delta: int,
-                         *, collection_id=None, finish: str = "nonfoil",
+                         *, collection_id=None, collection_uid: str = "",
+                         finish: str = "nonfoil",
                          condition: str = "NM", language: str = "en",
                          location: str = "", oracle_id: str = "",
                          reason: str = "manual") -> None:
@@ -3610,7 +3611,11 @@ class AppApi:
         """
         try:
             store = self._get_collection_store()
-            uid = store.collection_uid(
+            # A uid straight from the caller wins. The other device keys a
+            # stack partly BY its collection, so a card filed in "Trade box"
+            # described against the default collection names a stack the phone
+            # does not have — and the removal quietly applies to nothing.
+            uid = collection_uid or store.collection_uid(
                 collection_id if collection_id is not None
                 else store.default_collection_id())
             self._get_sync().record_stack_delta(
@@ -4160,6 +4165,50 @@ class AppApi:
         self._log_collection_change("delete", {"collection_uid": uid},
                                     discard_cards=bool(discard_cards))
         return result
+
+    @_safe
+    def clear_all_cards(self, confirm: str = "") -> dict:
+        """Start over: every card out of every collection.
+
+        DESTRUCTIVE and irreversible, and there was no way to do it at all —
+        not from the desktop UI, and not as one operation. Clearing the
+        default collection left anything filed in a named one untouched, so
+        "start over" was not expressible. Someone who wanted it had no lever,
+        which is how you end up wiping a PHONE to delete cards that live on a
+        PC — where the wipe cannot work, because a wipe leaves nothing behind
+        to tell the other machine what happened.
+
+        That is the other half of this: the removals are logged as ordinary
+        stack deltas, one per stack, so the phone learns about them the next
+        time it syncs. A clear that only happened locally would put the two
+        devices right back into disagreement.
+
+        `confirm` must be the word CLEAR. Not a flag — a flag is a thing a
+        caller passes by accident, and this cannot be undone.
+        """
+        if (confirm or "").strip().upper() != "CLEAR":
+            return {"ok": False,
+                    "error": "Pass confirm='CLEAR' — this cannot be undone.",
+                    "error_type": "ConfirmationRequired"}
+        store = self._get_collection_store()
+
+        # Read the stacks BEFORE removing them: afterwards there is nothing
+        # left to describe to the other device.
+        going = store.all_stacks_for_sync()
+        result = store.clear_all_cards()
+
+        # One delta per stack, negative. Deltas commute, so a phone that
+        # applies these out of order — or alongside its own edits — still
+        # lands in the same place.
+        for row in going:
+            self._log_stack_delta(
+                row["printing_id"], row["card_name"], -int(row["quantity"]),
+                collection_uid=row["collection_uid"],
+                finish=row["finish"], condition=row["condition"],
+                language=row["language"], location=row["location"],
+                oracle_id=row["oracle_id"], reason="cleared")
+
+        return {**result, "synced_events": len(going)}
 
     @_safe
     def move_to_collection(self, item_id: int, collection_id: int,

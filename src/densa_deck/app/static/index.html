@@ -428,6 +428,18 @@ Mainboard:
                  friend. Picking one scopes the list on the right, which IS
                  the review step — you look at exactly what is going before
                  anything irreversible is offered. -->
+            <!-- Start over. This did not exist anywhere — not here, not as
+                 one API call — so someone who wanted their cards gone had no
+                 lever on the machine the cards are actually on. -->
+            <div class="filter-group">
+              <label class="filter-label">Start over</label>
+              <button id="collection-clear-all-btn"
+                      class="btn btn-outline btn-slim group-danger">Clear my collection…</button>
+              <p class="panel-hint subtle">Removes every card from every
+                collection here, and tells your phone. The collections
+                themselves stay.</p>
+            </div>
+
             <div class="filter-group group-tools">
               <label class="filter-label" for="collection-filter-group">Group</label>
               <select id="collection-filter-group">
@@ -1066,6 +1078,33 @@ Mainboard:
        records the object they actually have rather than a card name. -->
   <!-- Which lists a card belongs to. Collections are filters: ticking one
        never unticks another, and unticking one never removes the card. -->
+  <div id="clear-all-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Clear my collection</h2>
+        <button id="clear-all-close-btn" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="clear-all-summary"></div>
+        <p class="panel-hint">Every card comes out of every collection on this
+          PC. The collections themselves stay, so your groupings survive. Your
+          decks and wishlist are untouched — they are lists of card names, not
+          of cardboard.</p>
+        <p class="panel-hint"><strong>This cannot be undone</strong>, and it
+          syncs: your phone will drop the same cards the next time it
+          connects.</p>
+        <div class="filter-group">
+          <label class="filter-label" for="clear-all-confirm">Type CLEAR to confirm</label>
+          <input type="text" id="clear-all-confirm" placeholder="CLEAR" autocomplete="off">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="clear-all-cancel-btn" class="btn btn-outline">Cancel</button>
+        <button id="clear-all-go-btn" class="btn btn-danger" disabled>Clear everything</button>
+      </div>
+    </div>
+  </div>
+
   <div id="retire-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
     <div class="modal">
       <div class="modal-header">

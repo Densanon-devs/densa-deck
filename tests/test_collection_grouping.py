@@ -681,3 +681,99 @@ class TestPickingColoursExactly:
         sets = {tuple(self._names(catalogue, m))
                 for m in ("any", "exact", "identity")}
         assert len(sets) == 3
+
+
+class TestStartingOver:
+    """Clearing a collection, which the desktop could not do at all.
+
+    Not from the UI, and not as one operation: emptying the default
+    collection left anything filed in a named one untouched, so "start over"
+    was not expressible. Someone who wanted it had no lever on the machine the
+    cards are actually on — which is how you end up wiping a PHONE to delete
+    cards that live on a PC, where the wipe cannot work because it leaves
+    nothing behind to tell the other machine what happened.
+    """
+
+    def test_it_takes_every_card_from_every_collection(self, kit):
+        store, db, bundle = kit
+        trade = store.create_collection("Trade box")["collection_id"]
+        store.add_copies(SOL, "Sol Ring", quantity=2)
+        store.add_copies(BOLT, "Lightning Bolt", quantity=4,
+                         collection_id=trade)
+        out = store.clear_all_cards()
+        assert out["cards_removed"] == 6
+        assert store.list_items()[1] == 0
+
+    def test_a_card_in_a_named_collection_is_not_spared(self, kit):
+        # The gap that made "start over" impossible: clearing the default left
+        # everything filed elsewhere sitting there.
+        store, db, bundle = kit
+        trade = store.create_collection("Trade box")["collection_id"]
+        store.add_copies(SOL, "Sol Ring", quantity=1, collection_id=trade)
+        store.clear_all_cards()
+        assert store.list_items()[1] == 0
+
+    def test_the_collections_themselves_survive(self, kit):
+        # They are the shelves. Someone clearing the cards off them has not
+        # asked to throw the shelves out.
+        store, db, bundle = kit
+        store.add_copies(SOL, "Sol Ring", quantity=1)
+        store.clear_all_cards()
+        names = {c["name"] for c in store.list_collections()}
+        assert "Bundle for Dave" in names
+        assert "Main Collection" in names
+
+    def test_no_list_outlives_the_cards(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=1)
+        tag_item(store, item.item_id, bundle)
+        store.clear_all_cards()
+        with store._connect() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM collection_membership").fetchone()[0] == 0
+
+    def test_every_collection_counts_zero_afterwards(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=3)
+        tag_item(store, item.item_id, bundle)
+        store.clear_all_cards()
+        assert {c["cards"] for c in store.list_collections()} == {0}
+
+    def test_it_is_written_to_the_ledger(self, kit):
+        # The event log is what cost basis and P&L are built on; a silent mass
+        # deletion leaves both describing cards that are gone.
+        store, db, bundle = kit
+        store.add_copies(SOL, "Sol Ring", quantity=2)
+        store.clear_all_cards()
+        with store._connect() as conn:
+            rows = conn.execute(
+                "SELECT delta, reason FROM collection_events "
+                "WHERE reason = 'cleared'").fetchall()
+        assert rows == [(-2, "cleared")]
+
+    def test_clearing_nothing_is_not_an_error(self, kit):
+        store, db, bundle = kit
+        assert store.clear_all_cards()["cards_removed"] == 0
+
+    def test_the_stacks_are_readable_for_sync_before_they_go(self, kit):
+        """Local row ids mean nothing on the other machine, so a removal has
+        to be described by the card itself — and read BEFORE the clear, since
+        afterwards there is nothing left to describe."""
+        store, db, bundle = kit
+        store.add_copies(SOL, "Sol Ring", quantity=2, finish="foil")
+        rows = store.all_stacks_for_sync()
+        assert len(rows) == 1
+        assert rows[0]["printing_id"] == SOL
+        assert rows[0]["finish"] == "foil"
+        assert rows[0]["quantity"] == 2
+        assert rows[0]["collection_uid"], "the phone keys a stack by collection too"
+
+    def test_a_named_collection_reports_its_own_uid(self, kit):
+        # Described against the default instead, the removal names a stack the
+        # phone does not have and quietly applies to nothing.
+        store, db, bundle = kit
+        trade = store.create_collection("Trade box")
+        store.add_copies(SOL, "Sol Ring", quantity=1,
+                         collection_id=trade["collection_id"])
+        rows = store.all_stacks_for_sync()
+        assert rows[0]["collection_uid"] == trade["collection_uid"]

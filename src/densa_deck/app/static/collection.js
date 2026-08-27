@@ -319,6 +319,59 @@
     };
   }
 
+  // --------------------------------------------------------- start over
+
+  async function openClearAll() {
+    const modal = e("clear-all-modal");
+    if (!modal) return;
+    // Say how much is about to go. "Clear everything" with no number is a
+    // button people press without knowing what it costs.
+    let summary = "";
+    try {
+      const status = await callApi("get_collection_status");
+      const c = status.collection || {};
+      summary = `<p><strong>${(c.total_cards || 0).toLocaleString()}</strong> cards`
+        + ` in <strong>${(c.unique_printings || 0).toLocaleString()}</strong>`
+        + ` printings will be removed.</p>`;
+    } catch (_e) {
+      summary = "<p>Every card in your collection will be removed.</p>";
+    }
+    e("clear-all-summary").innerHTML = summary;
+    const box = e("clear-all-confirm");
+    if (box) box.value = "";
+    e("clear-all-go-btn").disabled = true;
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function hideClearAll() {
+    const modal = e("clear-all-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function doClearAll() {
+    const go = e("clear-all-go-btn");
+    if (go) go.disabled = true;
+    let out;
+    try {
+      out = await callApi("clear_all_cards", "CLEAR");
+    } catch (err) {
+      toast("Could not clear: " + err.message, "error");
+      if (go) go.disabled = false;
+      return;
+    }
+    hideClearAll();
+    toast(`${out.cards_removed} cards removed. Your phone will catch up on `
+          + `its next sync.`, "success");
+    invalidateBuilderBadges();
+    await refreshStatus();
+    await loadGroups();
+    await refreshGroupSummary();
+    await loadItems(false);
+  }
+
   // ------------------------------------------------------------- groups
 
   /** Fill the group picker, keeping whatever was chosen if it still exists. */
@@ -848,6 +901,23 @@
 
     const go = e("retire-go-btn");
     if (go) go.addEventListener("click", doRetire);
+
+    // Start over. Its own dialog, its own typed confirmation, and nowhere
+    // near the "clear filters" button it sits below — those two words mean
+    // very different things and one of them cannot be undone.
+    const clearAll = e("collection-clear-all-btn");
+    if (clearAll) clearAll.addEventListener("click", openClearAll);
+    ["clear-all-close-btn", "clear-all-cancel-btn"].forEach(id => {
+      const btn = e(id);
+      if (btn) btn.addEventListener("click", hideClearAll);
+    });
+    const clearConfirm = e("clear-all-confirm");
+    if (clearConfirm) clearConfirm.addEventListener("input", () => {
+      const go = e("clear-all-go-btn");
+      if (go) go.disabled = clearConfirm.value.trim().toUpperCase() !== "CLEAR";
+    });
+    const clearGo = e("clear-all-go-btn");
+    if (clearGo) clearGo.addEventListener("click", doClearAll);
 
     const clear = e("collection-clear-filters");
     if (clear) clear.addEventListener("click", () => {

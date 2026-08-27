@@ -431,3 +431,65 @@ class TestOwnershipByPrinting:
         store.add_copies(PIMP, "Sol Ring", quantity=1, finish="foil")
         store.add_copies(PIMP, "Sol Ring", quantity=1, finish="nonfoil")
         assert store.owned_by_printing()[PIMP] == 2
+
+
+class TestClearingFromTheDesktop:
+    """The half a phone wipe cannot do.
+
+    Wiping a phone removes its mirror and leaves NOTHING behind to tell the
+    other machine what happened — no deltas, no events. The cards live on the
+    PC, so that is where a clear has to happen, and it has to be logged or the
+    two devices land straight back in disagreement.
+    """
+
+    def test_it_refuses_without_the_word(self, api):
+        api._get_collection_store().add_copies(CHEAP, "Sol Ring", quantity=2)
+        out = api.clear_all_cards()
+        assert out["ok"] is False
+        assert out["error_type"] == "ConfirmationRequired"
+        assert api._get_collection_store().list_items()[1] == 1, "nothing went"
+
+    def test_a_wrong_word_is_not_close_enough(self, api):
+        api._get_collection_store().add_copies(CHEAP, "Sol Ring", quantity=2)
+        assert api.clear_all_cards("yes")["ok"] is False
+        assert api._get_collection_store().list_items()[1] == 1
+
+    def test_the_word_clears_it(self, api):
+        store = api._get_collection_store()
+        store.add_copies(CHEAP, "Sol Ring", quantity=2)
+        store.add_copies(BOLT, "Lightning Bolt", quantity=4)
+        out = api.clear_all_cards("CLEAR")
+        data = out.get("data", out)
+        assert data["cards_removed"] == 6
+        assert store.list_items()[1] == 0
+
+    def test_lower_case_is_accepted_because_the_intent_is_the_same(self, api):
+        api._get_collection_store().add_copies(CHEAP, "Sol Ring", quantity=1)
+        out = api.clear_all_cards("clear")
+        assert out.get("data", out)["cards_removed"] == 1
+
+    def test_the_phone_is_told(self, api):
+        """The whole point. A clear that only happened locally puts the two
+        devices right back where they started."""
+        store = api._get_collection_store()
+        store.add_copies(CHEAP, "Sol Ring", quantity=2)
+        store.add_copies(BOLT, "Lightning Bolt", quantity=1)
+        out = api.clear_all_cards("CLEAR")
+        assert out.get("data", out)["synced_events"] == 2
+
+        events, _cursor = api._get_sync().log.since(0)
+        kinds = [e.kind for e in events]
+        assert kinds.count("stack-delta") >= 2
+
+    def test_the_removals_are_negative_and_name_the_card(self, api):
+        store = api._get_collection_store()
+        store.add_copies(CHEAP, "Sol Ring", quantity=3)
+        api.clear_all_cards("CLEAR")
+        events, _cursor = api._get_sync().log.since(0)
+        deltas = [e.payload for e in events if e.kind == "stack-delta"]
+        assert any(d["delta"] == -3 and d["printing_id"] == CHEAP
+                   for d in deltas)
+
+    def test_clearing_an_empty_collection_sends_nothing(self, api):
+        out = api.clear_all_cards("CLEAR")
+        assert out.get("data", out)["synced_events"] == 0

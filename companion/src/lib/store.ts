@@ -390,7 +390,14 @@ export class LocalStore {
     // Either way, nothing is a member of a collection that no longer exists.
     await this.db.run('DELETE FROM stack_collections WHERE collection_uid = ?',
                       [uid]);
-    await this.db.run('DELETE FROM collections WHERE collection_uid = ?', [uid]);
+    // The default collection is EMPTIED, never deleted — cards need somewhere
+    // to land, and a device without it mints a second one on the next scan.
+    // The desktop makes exactly this distinction; the phone applied the same
+    // event and deleted the row, so clearing everything left the two with
+    // different ideas of where unfiled cards live.
+    if (uid !== DEFAULT_COLLECTION_UID) {
+      await this.db.run('DELETE FROM collections WHERE collection_uid = ?', [uid]);
+    }
   }
 
   async listCollections(): Promise<CollectionRow[]> {
