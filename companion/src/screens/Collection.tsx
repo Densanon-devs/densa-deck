@@ -148,60 +148,67 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   return (
     <View style={styles.screen}>
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
-      <TextInput
-        style={styles.search}
-        placeholder="Search your collection"
-        placeholderTextColor="#8a8f9c"
-        value={search}
-        onChangeText={setSearch}
-        autoCorrect={false}
-      />
-
-      <ArtWarmer
-        queue={warming}
-        onProgress={(done, total) => setCaching(`Saving art ${done}/${total}`)}
-        onDone={(failed) => {
-          setWarming([]);
-          setCaching(
-            failed
-              ? `${failed} could not be fetched. Try again with a better connection.`
-              : 'All card art is on this phone.',
-          );
-        }}
-      />
-
-      <View style={styles.artRow}>
-        <Pressable
-          style={styles.artButton}
-          onPress={() => {
-            void cacheArt().catch(reporting('saving the art', setProblem));
-          }}
-        >
-          <Text style={styles.artButtonText}>
-            {caching ? 'Download art' : 'Download all card art'}
-          </Text>
-        </Pressable>
-        {caching ? <Text style={styles.artStatus}>{caching}</Text> : null}
-      </View>
-
-      <CollectionBar
-        collections={collections}
-        selected={chosen ?? ''}
-        onSelect={(uid) => setChosen(uid || undefined)}
-        onCreate={async (name) => {
-          const uid = await state.newCollection(name);
-          await load();
-          return uid;
-        }}
-        includeEverything
-        onDelete={async (uid) => {
-          await state.deleteCollection(uid);
-          await load();
-        }}
-      />
-
+      {/* The search, the art button and the collection chips are the list's
+          header rather than a block above it — stacked they cannot scroll
+          and they squeeze the list itself. */}
       <FlatList
         data={rows}
+        ListHeaderComponent={
+          <>
+      <TextInput
+            style={styles.search}
+            placeholder="Search your collection"
+            placeholderTextColor="#8a8f9c"
+            value={search}
+            onChangeText={setSearch}
+            autoCorrect={false}
+          />
+
+          <ArtWarmer
+            queue={warming}
+            onProgress={(done, total) => setCaching(`Saving art ${done}/${total}`)}
+            onDone={(failed) => {
+              setWarming([]);
+              setCaching(
+                failed
+                  ? `${failed} could not be fetched. Try again with a better connection.`
+                  : 'All card art is on this phone.',
+              );
+            }}
+          />
+
+          <View style={styles.artRow}>
+            <Pressable
+              style={styles.artButton}
+              onPress={() => {
+                void cacheArt().catch(reporting('saving the art', setProblem));
+              }}
+            >
+              <Text style={styles.artButtonText}>
+                {caching ? 'Download art' : 'Download all card art'}
+              </Text>
+            </Pressable>
+            {caching ? <Text style={styles.artStatus}>{caching}</Text> : null}
+          </View>
+
+          <CollectionBar
+            collections={collections}
+            selected={chosen ?? ''}
+            onSelect={(uid) => setChosen(uid || undefined)}
+            onCreate={async (name) => {
+              const uid = await state.newCollection(name);
+              await load();
+              return uid;
+            }}
+            includeEverything
+            onDelete={async (uid) => {
+              await state.deleteCollection(uid);
+              await load();
+            }}
+          />
+
+        </>
+        }
         keyExtractor={(r) => r.stack_key}
         refreshControl={
           <RefreshControl refreshing={busy} onRefresh={syncNow} tintColor="#e4e6eb" />

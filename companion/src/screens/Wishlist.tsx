@@ -107,51 +107,63 @@ export function WishlistScreen({ state, decks }: Props) {
           : ''}
       </Text>
 
-      <View style={styles.finder}>
-        <TextInput
-          style={styles.search}
-          placeholder="Search every card in Magic…"
-          placeholderTextColor="#8a8f9c"
-          value={search}
-          onChangeText={setSearch}
-          onSubmitEditing={() => {
-            void lookUp().catch(reporting('searching', setProblem));
-          }}
-          returnKeyType="search"
-          autoCorrect={false}
-        />
-        <Pressable
-          style={styles.find}
-          onPress={() => {
-            void lookUp().catch(reporting('searching', setProblem));
-          }}
-        >
-          <Text style={styles.findText}>{searching ? '…' : 'Find'}</Text>
-        </Pressable>
-      </View>
-
-      {found.length ? (
-        <View style={styles.results}>
-          {found.slice(0, 12).map((card) => (
-            <Pressable
-              key={card.scryfall_id ?? card.name}
-              style={styles.result}
-              onPress={() => {
-                void want(card.name).catch(reporting('adding it', setProblem));
-              }}
-            >
-              <View style={styles.grow}>
-                <Text style={styles.name}>{card.name}</Text>
-                <Text style={styles.muted}>{card.type_line}</Text>
-              </View>
-              <Text style={styles.add}>Want it</Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
-
+      {/*
+        Everything above the list is the list's HEADER, not a block stacked
+        on top of it.
+        
+        Stacked, it cannot scroll and it squeezes the list: twelve search
+        results would leave the wishlist itself a couple of rows tall. One
+        scroller, and the header scrolls with it.
+      */}
       <FlatList
         data={rows}
+        ListHeaderComponent={
+          <>
+      <View style={styles.finder}>
+            <TextInput
+              style={styles.search}
+              placeholder="Search every card in Magic…"
+              placeholderTextColor="#8a8f9c"
+              value={search}
+              onChangeText={setSearch}
+              onSubmitEditing={() => {
+                void lookUp().catch(reporting('searching', setProblem));
+              }}
+              returnKeyType="search"
+              autoCorrect={false}
+            />
+            <Pressable
+              style={styles.find}
+              onPress={() => {
+                void lookUp().catch(reporting('searching', setProblem));
+              }}
+            >
+              <Text style={styles.findText}>{searching ? '…' : 'Find'}</Text>
+            </Pressable>
+          </View>
+
+          {found.length ? (
+            <View style={styles.results}>
+              {found.slice(0, 12).map((card) => (
+                <Pressable
+                  key={card.scryfall_id ?? card.name}
+                  style={styles.result}
+                  onPress={() => {
+                    void want(card.name).catch(reporting('adding it', setProblem));
+                  }}
+                >
+                  <View style={styles.grow}>
+                    <Text style={styles.name}>{card.name}</Text>
+                    <Text style={styles.muted}>{card.type_line}</Text>
+                  </View>
+                  <Text style={styles.add}>Want it</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+        </>
+        }
         keyExtractor={(r) => r.card_name}
         refreshControl={
           <RefreshControl refreshing={busy} onRefresh={refresh} tintColor="#e4e6eb" />
