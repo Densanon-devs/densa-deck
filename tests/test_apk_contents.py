@@ -100,6 +100,12 @@ BEHAVIOUR = {
     # box. Either one absent is silent — the deck still opens, it is just
     # wrong about which card is in it.
     "deck slot resolver route": "decks/resolve",
+    # The zoomed card is a real overlay, not a panel at the bottom of the
+    # page. Inline it sat below a grid that keeps growing — tap a card,
+    # scroll on, sixty more results load, and the thing you opened is further
+    # away than when you started. This prop only exists on a Modal, so its
+    # presence is the assertion that the card floats.
+    "the zoom floats over the grid": "statusBarTranslucent",
 }
 
 

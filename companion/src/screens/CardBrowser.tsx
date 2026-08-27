@@ -20,6 +20,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -129,6 +130,12 @@ export function CardBrowser({
   // printing" had nothing to name — and a picker you can look through but not
   // pick from is the half that does not help.
   const [showing, setShowing] = useState(0);
+  // How wide one page of the printing pager is, measured rather than assumed.
+  // It was a hardcoded 300 while the index was computed from the VIEWPORT
+  // width — so the moment the two differed, `pagingEnabled` snapped to the
+  // wrong place and "Add this printing" named a card other than the one on
+  // screen. Silently wrong, and about the worst thing this feature could do.
+  const [pagerWidth, setPagerWidth] = useState(0);
 
   useEffect(() => {
     if (!preview) {
@@ -516,29 +523,63 @@ export function CardBrowser({
         </Pressable>
       ) : null}
 
-      {/* The card, big enough to read, and the three things you might want
-          to do with it. */}
-      {preview ? (
-        <View style={styles.previewWrap}>
-          <View style={styles.previewInner}>
+      {/*
+        The card, big enough to read, floating over the grid.
+
+        A `Modal`, not a panel in the page, and not an absolutely-positioned
+        box either — both of those have been tried and each fails a different
+        way. Inline, it sat at the very bottom of a page that KEEPS GROWING:
+        tap a card, scroll on, another sixty results load, and the thing you
+        opened is now further away than when you started. Absolute inside the
+        browser was worse — the browser has no height of its own, so the box
+        collapsed and cut its own buttons off.
+
+        A Modal has neither problem, because it does not live in this page's
+        layout at all. It also owns its own scroller, so a tall card is
+        reachable without breaking the one-scroller-per-screen rule, and the
+        Android back button closes it instead of leaving the deck.
+      */}
+      <Modal
+        visible={!!preview}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreview(null)}
+        statusBarTranslucent
+      >
+        {preview ? (
+        <Pressable style={styles.backdrop} onPress={() => setPreview(null)}>
+          {/* Swallows taps so the card itself is not a way to dismiss it —
+              a mis-tap while reaching for Add would close the card and look
+              like the button had failed. */}
+          <Pressable style={styles.previewWrap} onPress={() => {}}>
+          <ScrollView contentContainerStyle={styles.previewInner}>
             {variants.length > 1 ? (
               <ScrollView
                 horizontal
                 pagingEnabled
                 showsHorizontalScrollIndicator={false}
                 style={styles.pager}
+                onLayout={(event) =>
+                  setPagerWidth(event.nativeEvent.layout.width)
+                }
                 onMomentumScrollEnd={(event) => {
                   // Which page settled, from the offset over the page width.
                   // React Native has no "current page" for a paging
                   // ScrollView, and the alternative — remembering which tile
                   // was tapped — cannot follow a swipe.
-                  const width = event.nativeEvent.layoutMeasurement.width || 1;
+                  const width =
+                    pagerWidth || event.nativeEvent.layoutMeasurement.width || 1;
                   const at = Math.round(event.nativeEvent.contentOffset.x / width);
                   setShowing(Math.max(0, Math.min(variants.length - 1, at)));
                 }}
               >
                 {variants.map((printing) => (
-                  <View key={printing.printing_id} style={styles.page}>
+                  <View
+                    key={printing.printing_id}
+                    // One page IS one viewport, so a swipe moves exactly one
+                    // printing and the index above is the one on screen.
+                    style={[styles.page, pagerWidth ? { width: pagerWidth } : null]}
+                  >
                     <Image
                       source={artSource(printing.printing_id, 'large')}
                       style={styles.previewArt}
@@ -632,10 +673,12 @@ export function CardBrowser({
               ) : null}
             </View>
             {/* Stays open on purpose: adding a second copy is one more tap
-                rather than finding the card again. */}
-          </View>
-        </View>
-      ) : null}
+                rather than finding the card again. Tap outside to leave. */}
+          </ScrollView>
+          </Pressable>
+        </Pressable>
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -751,24 +794,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   moreText: { color: '#e4e6eb', fontSize: 15 },
-  // An inline panel, not an absolute overlay.
-  //
-  // Absolute inside a container with no height of its own collapses to
-  // nothing, which is what cut the buttons off — with a short list there was
-  // nothing below to scroll to and no way out of the zoom at all. Inline,
-  // the panel simply makes the page taller and the page scrolls to it, so
-  // Close sits with Add and Remove where it belongs rather than being
-  // duplicated somewhere safer.
+  // Dimmed, and covering everything. The grid stays visible behind it so it
+  // is obvious what you are on top of, and the dark makes the card the only
+  // lit thing on the screen — which is the point of opening it.
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.78)',
+    justifyContent: 'center',
+    padding: 16,
+  },
   previewWrap: {
     backgroundColor: '#151922',
     borderColor: '#2d3142',
     borderWidth: 1,
     borderRadius: 12,
+    // Never taller than the screen. Without a cap a card with four buttons
+    // under it can run off the bottom on a short handset, and the button
+    // that runs off is the last one — which is the exact-printing one.
+    maxHeight: '92%',
   },
   previewInner: { padding: 16, gap: 8, alignItems: 'center' },
   pager: { width: '100%' },
+  // The width is overridden with the pager's measured width at render time;
+  // this is only the fallback for the first frame, before onLayout fires.
   page: { width: 300, alignItems: 'center', gap: 6, paddingHorizontal: 6 },
-  previewArt: { width: 280, aspectRatio: 745 / 1040, borderRadius: 12 },
+  previewArt: {
+    width: '100%',
+    maxWidth: 300,
+    aspectRatio: 745 / 1040,
+    borderRadius: 12,
+  },
   previewName: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
   // Wraps, because there are four buttons once a card has more than one
   // printing and a fixed row would push the last one off the edge — which on
