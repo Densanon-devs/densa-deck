@@ -490,9 +490,11 @@ class CardDatabase:
           name          — substring, case-insensitive (SQL LIKE %name%).
           colors        — subset of {"W","U","B","R","G","C"}. "C" means
                           colorless (empty color_identity).
-          color_match   — "identity" (card's color_identity is a subset
-                          of `colors` — commander rule) or "any" (card
-                          has at least one of the selected colors).
+          color_match   — "any" (at least one of the selected colors),
+                          "exact" (these colors and no others — U+B gives
+                          Dimir cards only), or "identity" (a subset of the
+                          selected — the commander rule, so U+B also gives
+                          mono-blue, mono-black and colorless).
           cmc_min/max   — inclusive bounds.
           types         — any-of list of type-line substrings
                           (creature / instant / sorcery / artifact /
@@ -687,19 +689,30 @@ class CardDatabase:
             params.append(f'%"{fmt}": "legal"%')
 
         # Colors: this filter is the expensive one because color_identity
-        # is a JSON array in SQLite. We split into two modes:
-        #   - "identity": card.color_identity ⊆ selected — the commander
-        #     rule. Implemented by requiring the card has ZERO colors
-        #     NOT in the selected set.
-        #   - "any": card has at least one of the selected colors.
-        # Colorless ("C") is special: identity=[] means the card fits
-        # any color-identity filter, and in "any" mode we OR in a
-        # "empty array" check so the user can explicitly pull colorless
-        # cards alongside W/U/B.
+        # is a JSON array in SQLite. THREE modes, and picking U and B means
+        # something different in each — which is why it is a control the user
+        # holds rather than a decision the search makes for them:
+        #
+        #   - "any":      at least one of the selected. U+B gives every blue
+        #                 card and every black one, mono ones included. Good
+        #                 for "show me things I could play".
+        #   - "exact":    the selected colors and NO others. U+B gives Dimir
+        #                 cards only — not mono-blue, not Grixis. Good for
+        #                 "find me the gold cards for this pair".
+        #   - "identity": a SUBSET of the selected — the commander rule. U+B
+        #                 gives Dimir, mono-blue, mono-black and colorless,
+        #                 i.e. everything legal in a Dimir deck.
+        #
+        # Colorless ("C") is special: identity=[] means the card fits any
+        # color-identity filter, and in "any" mode we OR in an "empty array"
+        # check so the user can explicitly pull colorless cards alongside
+        # W/U/B.
         if colors:
             selected = [c.strip().upper() for c in colors if c and c.strip()]
             colorful = [c for c in selected if c in {"W", "U", "B", "R", "G"}]
             wants_colorless = "C" in selected
+            outside = [c for c in ("W", "U", "B", "R", "G") if c not in colorful]
+
             if color_match == "any":
                 any_parts = []
                 for c in colorful:
@@ -709,12 +722,25 @@ class CardDatabase:
                     any_parts.append("color_identity = '[]'")
                 if any_parts:
                     conditions.append("(" + " OR ".join(any_parts) + ")")
+            elif color_match == "exact":
+                # Every selected color present AND nothing else. The protocol
+                # has declared this mode for some time; the SQL never had it,
+                # so asking for "exact" quietly got you "identity" — a strictly
+                # larger set, with no way to tell from the results.
+                for c in colorful:
+                    conditions.append('color_identity LIKE ?')
+                    params.append(f'%"{c}"%')
+                for c in outside:
+                    conditions.append('color_identity NOT LIKE ?')
+                    params.append(f'%"{c}"%')
+                if wants_colorless and not colorful:
+                    # "Exactly colorless" is the only sense C alone can carry.
+                    conditions.append("color_identity = '[]'")
             else:
                 # identity mode: allow only cards whose color identity is a
                 # subset of `selected`. We express this by requiring the card
                 # NOT contain any color NOT in the selection.
-                excluded = [c for c in ("W", "U", "B", "R", "G") if c not in colorful]
-                for c in excluded:
+                for c in outside:
                     conditions.append('color_identity NOT LIKE ?')
                     params.append(f'%"{c}"%')
 

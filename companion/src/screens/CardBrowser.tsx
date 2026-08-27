@@ -93,6 +93,23 @@ const COLOURS: Array<{ key: string; label: string }> = [
 
 const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
 
+/**
+ * What picking two colours MEANS, which is three different questions.
+ *
+ * It was hardcoded to "any", so putting in U and B gave every blue card and
+ * every black one — thousands of results, most of them mono-coloured, when
+ * what you often want is the handful that are genuinely both.
+ */
+const COLOUR_MODES: Array<{
+  key: NonNullable<CardQuery['color_match']>;
+  label: string;
+  hint: string;
+}> = [
+  { key: 'any', label: 'Any', hint: 'cards with at least one of these colours' },
+  { key: 'exact', label: 'Exactly', hint: 'these colours and no others' },
+  { key: 'identity', label: 'Within', hint: 'anything a deck of these colours could play' },
+];
+
 const SORTS: Array<{ key: NonNullable<CardQuery['sort']>; label: string }> = [
   { key: 'name', label: 'A–Z' },
   { key: 'cmc', label: 'Cost ↑' },
@@ -173,6 +190,8 @@ export function CardBrowser({
   }, [preview, state]);
   const [name, setName] = useState('');
   const [colours, setColours] = useState<string[]>([]);
+  const [colourMode, setColourMode] =
+    useState<NonNullable<CardQuery['color_match']>>('any');
   const [types, setTypes] = useState<string[]>([]);
   const [ownedOnly, setOwnedOnly] = useState(false);
   const [rarities, setRarities] = useState<string[]>([]);
@@ -197,7 +216,7 @@ export function CardBrowser({
     if (term) query.anywhere = term;
     if (colours.length) {
       query.colors = colours;
-      query.color_match = 'any';
+      query.color_match = colourMode;
     }
     if (types.length) query.types = types;
     if (rarities.length) query.rarities = rarities;
@@ -221,7 +240,7 @@ export function CardBrowser({
     } finally {
       setBusy(false);
     }
-  }, [name, colours, types, rarities, sets, ownedOnly, sort, state]);
+  }, [name, colours, colourMode, types, rarities, sets, ownedOnly, sort, state]);
 
   // Re-run when a filter changes, but not on every keystroke: the search
   // goes to the PC and typing "Lightning Bolt" would send eleven requests.
@@ -230,7 +249,7 @@ export function CardBrowser({
         !ownedOnly && !name.trim()) return;
     void run().catch(reporting('searching', setProblem));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colours, types, rarities, sets, ownedOnly, sort]);
+  }, [colours, colourMode, types, rarities, sets, ownedOnly, sort]);
 
   /**
    * The next page, appended.
@@ -271,8 +290,8 @@ export function CardBrowser({
     } finally {
       setLoadingMore(false);
     }
-  }, [cards.length, total, loadingMore, name, colours, types, rarities,
-      sets, ownedOnly, sort, state]);
+  }, [cards.length, total, loadingMore, name, colours, colourMode, types,
+      rarities, sets, ownedOnly, sort, state]);
 
   useEffect(() => {
     if (!nearEnd) return;
@@ -337,6 +356,34 @@ export function CardBrowser({
           );
         })}
       </View>
+
+      {/*
+        Only shown once a colour is picked, because until then it modifies
+        nothing and is one more control to read past.
+      */}
+      {colours.length ? (
+        <View style={[styles.filters, styles.filterRow]}>
+          {COLOUR_MODES.map((option) => {
+            const on = colourMode === option.key;
+            return (
+              <Pressable
+                key={option.key}
+                style={[styles.chip, on && styles.chipOn]}
+                onPress={() => setColourMode(option.key)}
+              >
+                <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
+      {colours.length ? (
+        <Text style={styles.fieldLabel}>
+          {COLOUR_MODES.find((m) => m.key === colourMode)?.hint}
+        </Text>
+      ) : null}
 
       <ScrollView
         horizontal

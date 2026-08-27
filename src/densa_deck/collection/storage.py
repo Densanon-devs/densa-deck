@@ -264,6 +264,30 @@ _ITEM_COLUMNS = (
 )
 
 
+def _repoint_membership(conn, item_id: int, from_collection_id: int,
+                        to_collection_id: int, now: str) -> None:
+    """A stack that moved box is no longer a member of the box it left.
+
+    Membership and filing are different questions — a card can be in five
+    lists and one box — but "where it lives" is one of the memberships, and a
+    physical move has to carry it. Without this the source collection keeps
+    counting a card it does not hold, which reads as cards that will not go
+    away however many times you clear them out.
+
+    Other lists are untouched: they were never about where it lives.
+    """
+    if from_collection_id == to_collection_id:
+        return
+    conn.execute(
+        "DELETE FROM collection_membership "
+        "WHERE item_id = ? AND collection_id = ?",
+        (int(item_id), int(from_collection_id)))
+    conn.execute(
+        "INSERT OR IGNORE INTO collection_membership "
+        "(item_id, collection_id, added_at, quantity) VALUES (?, ?, ?, 0)",
+        (int(item_id), int(to_collection_id), now))
+
+
 def _now() -> str:
     return datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
 
@@ -1020,6 +1044,14 @@ class CollectionStore:
                 (item_id, printing_id, card_name, -quantity,
                  f"Deleted with collection {name!r}", now))
             cards += quantity
+        # Memberships go with the cards. This is the "clear everything out"
+        # path, so leaving them behind orphans a row per stack per list — the
+        # largest source of dangling membership there is, and the one most
+        # likely to be hit right before someone looks at their lists and
+        # wonders why the numbers are wrong.
+        conn.executemany(
+            "DELETE FROM collection_membership WHERE item_id = ?",
+            [(item_id,) for item_id, _, _, _ in rows])
         conn.execute("DELETE FROM collection_items WHERE collection_id = ?",
                      (collection_id,))
         return {"cards": cards, "stacks": len(rows)}
@@ -1081,6 +1113,13 @@ class CollectionStore:
         (printing_id, oracle_id, card_name, fin, cond, language, location,
          notes, have, unit_cost, acquisition_id, created_at) = row
         now = _now()
+        # Which collection it is leaving, so its membership there can go with
+        # it. A card that has physically moved is not still IN the old box —
+        # and leaving that membership behind made the source collection keep
+        # counting a card it no longer holds.
+        from_collection_id = conn.execute(
+            "SELECT collection_id FROM collection_items WHERE item_id = ?",
+            (item_id,)).fetchone()[0]
 
         target = conn.execute(
             """SELECT item_id, quantity FROM collection_items
@@ -1099,6 +1138,8 @@ class CollectionStore:
             conn.execute(
                 "UPDATE collection_items SET collection_id = ?, updated_at = ? "
                 "WHERE item_id = ?", (to_collection_id, now, item_id))
+            _repoint_membership(conn, item_id, from_collection_id,
+                                to_collection_id, now)
             return
         else:
             conn.execute(
@@ -1118,6 +1159,9 @@ class CollectionStore:
                 "WHERE item_id = ?", (remaining, now, item_id))
         else:
             conn.execute("DELETE FROM collection_items WHERE item_id = ?", (item_id,))
+            # The stack is gone; every list that mentioned it has to stop.
+            conn.execute("DELETE FROM collection_membership WHERE item_id = ?",
+                         (item_id,))
 
     def list_collections(self) -> list[dict]:
         """Every collection with what's in it, default first."""
@@ -1130,8 +1174,17 @@ class CollectionStore:
                           COALESCE(SUM(i.quantity), 0) AS cards,
                           COUNT(DISTINCT i.printing_id) AS unique_printings
                    FROM collections c
+                   -- Membership OR filing, matching what the list itself
+                   -- shows. Counting only where a card is FILED meant tagging
+                   -- a thousand cards into a group left the number beside it
+                   -- reading zero, which looks exactly like the tagging not
+                   -- having worked. The phone has always counted both.
                    LEFT JOIN collection_items i
-                          ON i.collection_id = c.collection_id
+                          ON (i.collection_id = c.collection_id
+                              OR i.item_id IN (
+                                  SELECT item_id FROM collection_membership
+                                   WHERE collection_id = c.collection_id))
+                         AND i.quantity > 0
                    GROUP BY c.collection_id
                    ORDER BY c.is_default DESC, c.name COLLATE NOCASE"""
             ).fetchall()
@@ -1324,6 +1377,14 @@ class CollectionStore:
             now = _now()
             if quantity <= 0:
                 conn.execute("DELETE FROM collection_items WHERE item_id = ?", (item_id,))
+                # And the lists that mentioned it. `add_copies` has always
+                # done this — "memberships would otherwise dangle, and the
+                # overlap view would keep reporting a card that is not here" —
+                # and this path, which is what the quantity controls and
+                # retiring a group both use, did not.
+                conn.execute(
+                    "DELETE FROM collection_membership WHERE item_id = ?",
+                    (item_id,))
             else:
                 conn.execute(
                     "UPDATE collection_items SET quantity = ?, updated_at = ? WHERE item_id = ?",

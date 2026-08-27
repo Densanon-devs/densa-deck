@@ -157,6 +157,18 @@ export class AppState {
     this.emit({ pendingEdits: await this.engine.pending() });
   }
 
+  /**
+   * How many edits are waiting for the desktop.
+   *
+   * Exposed so a screen that ASKS the desktop something can push first. The
+   * subscription carries the same number, but a screen loading for the first
+   * time has not been told anything yet — and that is exactly when it would
+   * show the desktop's stale answer.
+   */
+  async pendingCount(): Promise<number> {
+    return this.engine.pending();
+  }
+
   // ------------------------------------------------------------- reading
   //
   // Reads come from the LOCAL mirror, always. Going to the desktop for a list

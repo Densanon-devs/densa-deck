@@ -162,3 +162,47 @@ describe('applying what the desktop sends', () => {
     assert.ok(lists.includes(DECK));
   });
 });
+
+describe('lists do not outlive their cards', () => {
+  test('removing the last copy takes its lists with it', async () => {
+    // A membership for a card you no longer own is a row that outlives its
+    // card. Inert today because every count reads from `stacks` — and a trap
+    // the moment one does not.
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const delta = {
+      printing_id: 'p1', card_name: 'Sol Ring', oracle_id: '',
+      finish: 'nonfoil', condition: 'NM', language: 'en', location: '',
+      collection_uid: DEFAULT_COLLECTION_UID, delta: 1, reason: 'test',
+    };
+    await store.applyDelta(delta);
+    const key = stackKey(delta);
+    await store.addMembership(key, 'some-list');
+    // Filing puts it in the default collection too, so this is two lists.
+    assert.ok((await store.membershipsFor(key)).includes('some-list'));
+
+    await store.applyDelta({ ...delta, delta: -1 });
+    assert.deepEqual(await store.membershipsFor(key), [],
+                     'no list mentions a card that is gone');
+  });
+
+  test('discarding a collection clears the memberships too', async () => {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const delta = {
+      printing_id: 'p1', card_name: 'Sol Ring', oracle_id: '',
+      finish: 'nonfoil', condition: 'NM', language: 'en', location: '',
+      collection_uid: DEFAULT_COLLECTION_UID, delta: 2, reason: 'test',
+    };
+    await store.applyDelta(delta);
+    const key = stackKey(delta);
+    await store.addMembership(key, 'some-list');
+
+    await store.deleteCollection(DEFAULT_COLLECTION_UID, true);
+    assert.equal(await store.totalCards(), 0);
+    assert.deepEqual(await store.membershipsFor(key), [],
+                     'cleared cards leave no lists behind');
+  });
+});

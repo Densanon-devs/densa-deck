@@ -37,11 +37,35 @@ export function OverlapsScreen({ state }: Props) {
   const [cards, setCards] = useState<OverlapCard[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
+  /**
+   * Edits this phone has made that the PC has not seen.
+   *
+   * This screen shows the PC's answer while the Cards tab shows the phone's
+   * own mirror, and when those two disagree the screen looked simply wrong —
+   * "it thinks I have more than I do". Clearing cards here and not syncing is
+   * exactly how that happens, and nothing on the screen said which machine it
+   * was describing.
+   */
+  const [pending, setPending] = useState(0);
+
+  useEffect(() => state.subscribe((snapshot) => setPending(snapshot.pendingEdits)),
+            [state]);
 
   const load = useCallback(async () => {
     setBusy(true);
     setProblem('');
     try {
+      // Push what this phone knows BEFORE asking the PC what it thinks.
+      //
+      // This screen asks the PC a question about data the phone may have
+      // newer information about — cards removed here that have not reached it
+      // yet. Asking first showed the PC's stale answer, which reads as the
+      // app claiming you own things you have just got rid of. Best-effort:
+      // with no signal there is nothing to push and the PC's last answer is
+      // still the best one available, so the banner explains it instead.
+      if (await state.pendingCount()) {
+        await state.sync().catch(() => undefined);
+      }
       const reply = await state.overlaps();
       setCards(reply.cards ?? []);
     } finally {
@@ -69,6 +93,18 @@ export function OverlapsScreen({ state }: Props) {
       }
     >
       <Text style={styles.title}>In more than one list</Text>
+      <Text style={styles.muted}>
+        Counted on your PC, over your whole collection — the phone mirrors
+        what you own, not how the lists overlap.
+      </Text>
+
+      {pending > 0 ? (
+        <Text style={styles.stale}>
+          {pending} change{pending === 1 ? '' : 's'} on this phone haven’t
+          reached your PC yet, so this list is one sync behind. Cards you’ve
+          removed here can still appear until it catches up.
+        </Text>
+      ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
@@ -139,6 +175,7 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
   warnTitle: { color: '#ecc94b', fontSize: 16, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
+  stale: { color: '#ecc94b', fontSize: 13, lineHeight: 19 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

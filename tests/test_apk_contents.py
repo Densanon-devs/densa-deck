@@ -80,6 +80,12 @@ SCREENS = {
     "tag mode on the scanner": "Tag what I own",
     "tag mode explains itself": "Nothing is added to your",
     "choosing which copy to tag": "Which copy?",
+    # Picking U and B means three different questions and the browser only
+    # ever asked one of them.
+    "colour match toggle": "these colours and no others",
+    # Cards reads the phone, Shared reads the PC. When they disagree the
+    # screen looked simply wrong; now it says which machine it is describing.
+    "shared says whose answer it is": "Counted on your PC",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.

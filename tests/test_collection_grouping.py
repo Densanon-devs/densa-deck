@@ -527,3 +527,157 @@ class TestLettingItGo:
         out = retire_group(store, db, bundle)
         assert out["copies_removed"] == 0
         assert store.collection_by_uid(bundle) != {}, "an empty group is not deleted"
+
+
+class TestListsDoNotOutliveTheirCards:
+    """A membership for a card you no longer own is a row that outlives its
+    card, and it is how a collection you have cleared keeps reporting things
+    you do not have.
+
+    `add_copies` has always cleaned up on the way to zero, with a comment
+    saying exactly why. Three other paths that delete a stack did not.
+    """
+
+    def _memberships(self, store) -> int:
+        with store._connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) FROM collection_membership").fetchone()[0]
+
+    def test_setting_a_stack_to_zero_takes_its_lists_with_it(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=2)
+        tag_item(store, item.item_id, bundle)
+        store.set_item_quantity(item.item_id, 0)
+        assert self._memberships(store) == 0
+
+    def test_retiring_a_group_leaves_no_memberships_behind(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=1)
+        tag_item(store, item.item_id, bundle)
+        retire_group(store, db, bundle)
+        assert self._memberships(store) == 0
+
+    def test_clearing_everything_out_clears_the_lists_too(self, kit):
+        """The largest source of dangling rows there is — one per stack per
+        list — and the one most likely to be hit right before someone looks
+        at their collection and wonders why the numbers are wrong."""
+        store, db, bundle = kit
+        for pid in (SOL, BOLT):
+            item = store.add_copies(pid, "Card", quantity=2)
+            tag_item(store, item.item_id, bundle)
+        default_id = store.default_collection_id()
+        store.delete_collection(default_id, discard_cards=True)
+        assert self._memberships(store) == 0
+
+    def test_a_moved_stack_stops_being_in_the_box_it_left(self, kit):
+        """Filing is one of the memberships, so a physical move has to carry
+        it. Left behind, the source collection keeps counting a card it does
+        not hold — cards that will not go away however often you clear them."""
+        store, db, bundle = kit
+        trade = store.create_collection("Trade box")["collection_id"]
+        item = store.add_copies(SOL, "Sol Ring", quantity=4)
+        store.move_copies(item.item_id, trade)
+        counts = {c["name"]: c["cards"] for c in store.list_collections()}
+        assert counts["Trade box"] == 4
+        assert counts["Main Collection"] == 0
+
+    def test_other_lists_survive_a_move(self, kit):
+        # Only "where it lives" moves. A card in a deck list that changes box
+        # is still in the deck list.
+        store, db, bundle = kit
+        trade = store.create_collection("Trade box")["collection_id"]
+        item = store.add_copies(SOL, "Sol Ring", quantity=1)
+        tag_item(store, item.item_id, bundle)
+        store.move_copies(item.item_id, trade)
+        names = {c["name"] for c in store.collections_for_item(item.item_id)}
+        assert "Bundle for Dave" in names
+
+    def test_the_count_beside_a_group_matches_what_is_in_it(self, kit):
+        """It counted where cards are FILED while the list read filing OR
+        membership, so tagging a thousand cards into a group left the number
+        beside it reading zero — which looks like the tagging not working."""
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=3)
+        tag_item(store, item.item_id, bundle)
+        counts = {c["name"]: c["cards"] for c in store.list_collections()}
+        assert counts["Bundle for Dave"] == 3
+
+    def test_an_emptied_collection_counts_zero(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=3)
+        tag_item(store, item.item_id, bundle)
+        store.set_item_quantity(item.item_id, 0)
+        counts = {c["name"]: c["cards"] for c in store.list_collections()}
+        assert counts["Bundle for Dave"] == 0
+        assert counts["Main Collection"] == 0
+
+
+class TestPickingColoursExactly:
+    """Selecting U and B means three different things, and the search had a
+    name for the third mode without any code behind it.
+
+    `exact` was declared in the wire protocol and the SQL never implemented
+    it, so asking for it quietly got you `identity` — a strictly larger set,
+    with nothing in the results to say so.
+    """
+
+    @pytest.fixture
+    def catalogue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = CardDatabase(db_path=Path(tmp) / "cards.db")
+            def card(name, identity):
+                return Card(
+                    scryfall_id=name.lower().replace(" ", "-"),
+                    oracle_id=name.lower(), name=name,
+                    layout=CardLayout.NORMAL, cmc=2, type_line="Creature",
+                    color_identity=identity,
+                    legalities={"commander": Legality.LEGAL})
+            from densa_deck.models import Color
+            db.upsert_cards([
+                card("Dimir Thing", [Color.BLUE, Color.BLACK]),
+                card("Mono Blue", [Color.BLUE]),
+                card("Mono Black", [Color.BLACK]),
+                card("Grixis Thing", [Color.BLUE, Color.BLACK, Color.RED]),
+                card("Mono Red", [Color.RED]),
+                card("Colourless Thing", []),
+            ])
+            yield db
+            db.close()
+
+    def _names(self, db, mode):
+        cards, _ = db.search_structured(colors=["U", "B"], color_match=mode,
+                                        limit=50)
+        return sorted(c.name for c in cards)
+
+    def test_exact_is_the_pair_and_nothing_else(self, catalogue):
+        # What "I put in B and U and want cards that are exactly both" means.
+        assert self._names(catalogue, "exact") == ["Dimir Thing"]
+
+    def test_any_is_everything_touching_either_colour(self, catalogue):
+        assert self._names(catalogue, "any") == [
+            "Dimir Thing", "Grixis Thing", "Mono Black", "Mono Blue",
+        ]
+
+    def test_identity_is_what_a_dimir_deck_could_play(self, catalogue):
+        # The commander rule: a subset of the selected, colourless included.
+        assert self._names(catalogue, "identity") == [
+            "Colourless Thing", "Dimir Thing", "Mono Black", "Mono Blue",
+        ]
+
+    def test_exact_on_one_colour_excludes_the_pairs(self, catalogue):
+        cards, _ = catalogue.search_structured(colors=["U"], color_match="exact",
+                                               limit=50)
+        assert sorted(c.name for c in cards) == ["Mono Blue"]
+
+    def test_exactly_colourless_is_the_only_sense_C_alone_can_carry(self, catalogue):
+        cards, _ = catalogue.search_structured(colors=["C"], color_match="exact",
+                                               limit=50)
+        assert sorted(c.name for c in cards) == ["Colourless Thing"]
+
+    def test_the_three_modes_are_genuinely_different(self, catalogue):
+        # If two of them ever return the same set for this catalogue, one of
+        # them has silently stopped being its own mode — which is exactly how
+        # `exact` went unnoticed.
+        sets = {tuple(self._names(catalogue, m))
+                for m in ("any", "exact", "identity")}
+        assert len(sets) == 3

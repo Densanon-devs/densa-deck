@@ -211,6 +211,14 @@ export class LocalStore {
         // A stack at zero is not a thing you own. Keeping it would make
         // "unique cards" wrong and clutter every list.
         await this.db.run('DELETE FROM stacks WHERE stack_key = ?', [key]);
+        // And the lists that mentioned it. A membership for a card you no
+        // longer own is a row that outlives its card — inert today because
+        // every count reads from `stacks`, and a trap the moment one does
+        // not. The desktop cleans up on the same event.
+        await this.db.run(
+          'DELETE FROM stack_collections WHERE stack_key = ?',
+          [key],
+        );
       } else {
         await this.db.run(
           'UPDATE stacks SET quantity = ?, updated_at = ? WHERE stack_key = ?',
@@ -354,6 +362,22 @@ export class LocalStore {
 
   async deleteCollection(uid: string, discardCards: boolean): Promise<void> {
     if (discardCards) {
+      // The memberships of the cards being destroyed go first, while the
+      // stacks are still there to identify them. Afterwards there is nothing
+      // to join against and the rows would outlive their cards — which is how
+      // a collection you have cleared keeps being counted.
+      //
+      // Read then delete, rather than one statement with a subquery: this has
+      // to run on the phone's SQLite and on the Node fake the data layer is
+      // tested against, and a list of keys is a thing both understand.
+      const doomed = await this.db.all<{ stack_key: string }>(
+        'SELECT * FROM stacks WHERE collection_uid = ?',
+        [uid],
+      );
+      for (const row of doomed) {
+        await this.db.run('DELETE FROM stack_collections WHERE stack_key = ?',
+                          [row.stack_key]);
+      }
       await this.db.run('DELETE FROM stacks WHERE collection_uid = ?', [uid]);
     } else {
       // The grouping goes; the cards move to the unfiled pile. Deleting a
@@ -363,6 +387,9 @@ export class LocalStore {
         [DEFAULT_COLLECTION_UID, uid],
       );
     }
+    // Either way, nothing is a member of a collection that no longer exists.
+    await this.db.run('DELETE FROM stack_collections WHERE collection_uid = ?',
+                      [uid]);
     await this.db.run('DELETE FROM collections WHERE collection_uid = ?', [uid]);
   }
 
