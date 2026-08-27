@@ -137,6 +137,10 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   // Which half the grid and the +/- act on. The text box always shows
   // both, because that is what a decklist IS.
   const [zone, setZone] = useState<'main' | 'side'>('main');
+  // Bumped when the page nears its bottom. The browser owns no scroller of
+  // its own — two nested ones is why the grid could not scroll at all — so
+  // the page watches and nudges it to fetch the next sixty.
+  const [nearEnd, setNearEnd] = useState(0);
 
   useEffect(() => {
     void (async () => {
@@ -239,7 +243,22 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   }, [deck, state]);
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      scrollEventThrottle={200}
+      onScroll={(event) => {
+        const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+        // Within a screen and a half of the bottom. Far enough ahead that the
+        // next page has usually arrived before you reach it, which is what
+        // makes it feel like there was never a page at all.
+        const remaining =
+          contentSize.height - (contentOffset.y + layoutMeasurement.height);
+        if (remaining < layoutMeasurement.height * 1.5) {
+          setNearEnd((n) => n + 1);
+        }
+      }}
+    >
       <Pressable onPress={onBack}>
         <Text style={styles.back}>‹ Decks</Text>
       </Pressable>
@@ -325,6 +344,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             onPick={(card) => add(card.name)}
             onUnpick={(card) => drop(card.name)}
             previewOnTap
+            nearEnd={nearEnd}
             onClose={() => setBrowsing(false)}
             countFor={(card) =>
               (zone === 'side' ? deck?.sideboard : deck?.decklist)?.[

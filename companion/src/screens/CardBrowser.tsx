@@ -55,6 +55,14 @@ interface Props {
    * wishlist, where the answer is just yes, adding straight away is right.
    */
   previewOnTap?: boolean;
+  /**
+   * Bumped by the page when the user scrolls near the bottom.
+   *
+   * The browser cannot see the scroll itself — the page it sits in owns the
+   * scroller, deliberately, because two nested ones meant the grid never
+   * scrolled at all. So the page nudges and the browser fetches.
+   */
+  nearEnd?: number;
 }
 
 const COLOURS: Array<{ key: string; label: string }> = [
@@ -93,6 +101,7 @@ export function CardBrowser({
   onClose,
   countFor,
   previewOnTap = false,
+  nearEnd = 0,
 }: Props) {
   const [preview, setPreview] = useState<CatalogueCard | null>(null);
   // Every printing of the card being looked at, so you can swipe through the
@@ -123,10 +132,14 @@ export function CardBrowser({
   const [text, setText] = useState('');
   const [allSets, setAllSets] = useState<CatalogueSet[]>([]);
   const [pickingSet, setPickingSet] = useState(false);
+  const [setFilter, setSetFilter] = useState('');
   const [cards, setCards] = useState<CatalogueCard[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const [searched, setSearched] = useState(false);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const PAGE = 60;
 
   const run = useCallback(async () => {
     const query: CardQuery = { limit: 60, sort };
@@ -155,6 +168,7 @@ export function CardBrowser({
     try {
       const reply = await state.searchCards(query);
       setCards(reply.cards ?? []);
+      setTotal(reply.total ?? (reply.cards ?? []).length);
       setSearched(true);
     } finally {
       setBusy(false);
@@ -169,6 +183,51 @@ export function CardBrowser({
     void run().catch(reporting('searching', setProblem));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colours, types, rarities, sets, ownedOnly, sort]);
+
+  /**
+   * The next page, appended.
+   *
+   * Asking for 419 cards at once would be 419 image requests and a payload
+   * nobody scrolls to the end of. Sixty at a time, more as you approach the
+   * bottom, and the count says how many there are so "60 of 419" never
+   * reads as "419 does not exist".
+   */
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !cards.length || cards.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const query: CardQuery = { limit: PAGE, offset: cards.length, sort };
+      const term = name.trim();
+      const words = text.trim();
+      if (term) query.name = term;
+      if (words) query.text = words;
+      if (colours.length) {
+        query.colors = colours;
+        query.color_match = 'any';
+      }
+      if (types.length) query.types = types;
+      if (rarities.length) query.rarities = rarities;
+      if (sets.length) query.set_codes = sets;
+      if (ownedOnly) query.ownership = 'owned';
+
+      const reply = await state.searchCards(query);
+      // Appended by key rather than concatenated blindly: a page boundary
+      // that shifts would otherwise show the same card twice.
+      setCards((current) => {
+        const seen = new Set(current.map((c) => c.scryfall_id));
+        return [...current, ...(reply.cards ?? []).filter((c) => !seen.has(c.scryfall_id))];
+      });
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cards.length, total, loadingMore, name, text, colours, types, rarities,
+      sets, ownedOnly, sort, state]);
+
+  useEffect(() => {
+    if (!nearEnd) return;
+    void loadMore().catch(reporting('loading more', setProblem));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nearEnd]);
 
   useEffect(() => {
     if (!pickingSet || allSets.length) return;
@@ -280,29 +339,64 @@ export function CardBrowser({
         </Pressable>
       </ScrollView>
 
-      {/* Newest first: alphabetical would bury this year's under thirty
-          years of others. Picking two means "either" — a card cannot be in
-          two sets, so an AND returns nothing and looks broken. */}
+      {/*
+        A window, not a strip. This was a short ScrollView nested inside the
+        page's own, so it could not scroll and showed two rows of 335 sets.
+        Positioned out of flow it scrolls properly — the same reason the card
+        preview works.
+
+        Newest first: alphabetical buries this year's under thirty years of
+        others, and the set you want is almost always a recent one.
+      */}
       {pickingSet ? (
-        <ScrollView style={styles.setList}>
-          <View style={styles.filters}>
-            {allSets.map((entry) => {
-              const on = sets.includes(entry.set_code);
-              return (
-                <Pressable
-                  key={entry.set_code}
-                  style={[styles.chip, on && styles.chipOn]}
-                  onPress={() => setSets((list) => toggle(list, entry.set_code))}
-                >
-                  <Text style={[styles.chipText, on && styles.chipTextOn]}>
-                    {entry.set_code.toUpperCase()}
-                  </Text>
-                </Pressable>
-              );
-            })}
+        <View style={styles.overlay}>
+          <View style={styles.overlayHead}>
+            <Text style={styles.overlayTitle}>
+              Sets{sets.length ? ` — ${sets.length} picked` : ''}
+            </Text>
+            <Pressable onPress={() => setPickingSet(false)}>
+              <Text style={styles.close}>Done</Text>
+            </Pressable>
           </View>
-        </ScrollView>
+          <TextInput
+            style={styles.search}
+            placeholder="Filter by set code..."
+            placeholderTextColor="#8a8f9c"
+            value={setFilter}
+            onChangeText={setSetFilter}
+            autoCorrect={false}
+            autoCapitalize="characters"
+          />
+          <ScrollView style={styles.overlayList}>
+            {allSets
+              .filter((entry) =>
+                entry.set_code
+                  .toLowerCase()
+                  .includes(setFilter.trim().toLowerCase()),
+              )
+              .map((entry) => {
+                const on = sets.includes(entry.set_code);
+                return (
+                  <Pressable
+                    key={entry.set_code}
+                    style={[styles.setRow, on && styles.setRowOn]}
+                    onPress={() => setSets((list) => toggle(list, entry.set_code))}
+                  >
+                    <Text style={[styles.setCode, on && styles.setCodeOn]}>
+                      {on ? '✓ ' : ''}
+                      {entry.set_code.toUpperCase()}
+                    </Text>
+                    <Text style={styles.muted}>{entry.cards} cards</Text>
+                  </Pressable>
+                );
+              })}
+            {allSets.length === 0 ? (
+              <Text style={styles.muted}>Asking your PC for the set list...</Text>
+            ) : null}
+          </ScrollView>
+        </View>
       ) : null}
+
 
       <ScrollView
         horizontal
@@ -339,6 +433,14 @@ export function CardBrowser({
         <Text style={styles.muted}>Nothing matches that.</Text>
       ) : null}
 
+      {cards.length ? (
+        <Text style={styles.muted}>
+          {cards.length === total
+            ? `${total} card${total === 1 ? '' : 's'}`
+            : `${cards.length} of ${total} — keep scrolling for more`}
+        </Text>
+      ) : null}
+
       <View style={styles.grid}>
         {cards.map((card) => {
           const held = countFor?.(card) ?? 0;
@@ -369,6 +471,18 @@ export function CardBrowser({
           );
         })}
       </View>
+
+      {cards.length && cards.length < total ? (
+        <Pressable
+          style={styles.more}
+          disabled={loadingMore}
+          onPress={() => void loadMore().catch(reporting('loading more', setProblem))}
+        >
+          <Text style={styles.moreText}>
+            {loadingMore ? 'Loading…' : `Show more (${total - cards.length} left)`}
+          </Text>
+        </Pressable>
+      ) : null}
 
       {/* The card, big enough to read, and the three things you might want
           to do with it. */}
@@ -546,6 +660,14 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13 },
+  more: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 13,
+    alignItems: 'center',
+  },
+  moreText: { color: '#e4e6eb', fontSize: 15 },
   previewWrap: {
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
@@ -568,6 +690,32 @@ const styles = StyleSheet.create({
   previewButtonText: { color: '#e4e6eb', fontSize: 15 },
   previewAdd: { backgroundColor: '#38a169', borderColor: '#38a169' },
   previewAddText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  setList: { maxHeight: 130, flexShrink: 0 },
+  overlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0,
+    height: 520,
+    backgroundColor: '#0f1117f8',
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
+    zIndex: 15,
+  },
+  overlayHead: { flexDirection: 'row', alignItems: 'center' },
+  overlayTitle: { color: '#e4e6eb', fontSize: 17, fontWeight: '700', flex: 1 },
+  overlayList: { flex: 1 },
+  setRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 11,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1d27',
+  },
+  setRowOn: { backgroundColor: '#16241c' },
+  setCode: { color: '#c9ced9', fontSize: 15, flex: 1, fontWeight: '600' },
+  setCodeOn: { color: '#68d391' },
   problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
 });

@@ -480,9 +480,29 @@ class CardDatabase:
         conditions: list[str] = []
         params: list = []
 
+        def contains(value: str) -> str:
+            """A LIKE pattern that means what the user typed.
+
+            `%` and `_` are wildcards in LIKE, so a search for `50%` matched
+            "50" followed by anything and `draw_a` matched "draw a" — 3,160
+            cards for a phrase that appears on almost none. Escaped here and
+            declared with ESCAPE on every clause that uses this. The escape
+            character is `!` rather than the customary backslash, which has
+            to survive a Python string, an f-string and SQL to arrive as one
+            character and did not.
+
+            `+1/+1` needs nothing special and never did, but it is exactly
+            the sort of thing people search for, so there is a test.
+            """
+            escaped = (value.strip()
+                       .replace("!", "!!")
+                       .replace("%", "!%")
+                       .replace("_", "!_"))
+            return f"%{escaped}%"
+
         if name and name.strip():
-            conditions.append("name LIKE ? COLLATE NOCASE")
-            params.append(f"%{name.strip()}%")
+            conditions.append("name LIKE ? ESCAPE '!' COLLATE NOCASE")
+            params.append(contains(name))
 
         if cmc_min is not None:
             conditions.append("cmc >= ?")
@@ -516,11 +536,11 @@ class CardDatabase:
         # the oracle text and the keyword list together. A keyword is often
         # only in `keywords` and never spelled out in the rules box.
         if text and text.strip():
-            needle = f"%{text.strip()}%"
+            needle = contains(text)
             conditions.append(
-                "(oracle_text LIKE ? COLLATE NOCASE"
-                " OR keywords LIKE ? COLLATE NOCASE"
-                " OR type_line LIKE ? COLLATE NOCASE)")
+                "(oracle_text LIKE ? ESCAPE '!' COLLATE NOCASE"
+                " OR keywords LIKE ? ESCAPE '!' COLLATE NOCASE"
+                " OR type_line LIKE ? ESCAPE '!' COLLATE NOCASE)")
             params.extend([needle, needle, needle])
 
         if max_price is not None:

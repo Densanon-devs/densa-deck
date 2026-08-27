@@ -134,3 +134,39 @@ class TestSorting:
 
     def test_the_default_is_still_by_name(self, db):
         assert _names(db) == sorted(_names(db), key=str.lower)
+
+
+class TestSearchingForCharactersThatMeanSomethingToSQL:
+    """`%` and `_` are LIKE wildcards, and card text is full of neither —
+    but the box people type into does not know that.
+
+    Before escaping, `draw_a` matched "draw a" and returned 3,160 cards for a
+    phrase that appears on almost none. The user cannot see why, and the
+    answer looks like the search being bad at its job rather than the string
+    being interpreted.
+    """
+
+    def test_a_plus_one_counter_is_findable(self, db):
+        """The thing people actually search for, and it needs no escaping —
+        which is exactly why it is worth a test that says so."""
+        db.upsert_cards([_card("Counter Bear", text="Put a +1/+1 counter on it.")])
+        assert _names(db, text="+1/+1") == ["Counter Bear"]
+
+    def test_an_underscore_is_a_character_not_a_wildcard(self, db):
+        assert _names(db, text="draw_a") == []
+
+    def test_a_percent_is_a_character_not_a_wildcard(self, db):
+        assert _names(db, text="50%") == []
+
+    def test_the_escape_character_itself_is_searchable(self, db):
+        # `!` is the escape char. If it were not escaped in turn, searching
+        # for it would produce broken SQL rather than a result.
+        db.upsert_cards([_card("Shout", text="Do it!")])
+        assert _names(db, text="it!") == ["Shout"]
+
+    def test_escaping_did_not_break_ordinary_words(self, db):
+        assert set(_names(db, text="deathtouch")) == {
+            "Deathtouch Snake", "Venom Adept"}
+
+    def test_names_are_escaped_too(self, db):
+        assert _names(db, name="Plain_Bear") == []

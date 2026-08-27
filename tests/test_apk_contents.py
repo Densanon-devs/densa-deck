@@ -39,6 +39,8 @@ SCREENS = {
     "deck editing": "Still needed",
     "sideboard panel": "Sideboard (",
     "printing swipe": "swipe to see them",
+    "result paging": "keep scrolling for more",
+    "set picker window": "Filter by set code",
     "card browser": "Browse cards",
     "browser filters": "Only mine",
     "rules text search": "Rules text",
