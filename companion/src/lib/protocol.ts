@@ -288,3 +288,13 @@ export interface CatalogueSet {
   set_code: string;
   cards: number;
 }
+
+/** One printing of a card — the same rules text, different art and set. */
+export interface CataloguePrinting {
+  printing_id: string;
+  set_code: string;
+  set_name?: string;
+  collector_number: string;
+  rarity?: string;
+  price_usd?: number | null;
+}

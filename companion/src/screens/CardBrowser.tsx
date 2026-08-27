@@ -30,7 +30,12 @@ import {
 
 import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
-import type { CardQuery, CatalogueCard, CatalogueSet } from '../lib/protocol.ts';
+import type {
+  CardQuery,
+  CatalogueCard,
+  CataloguePrinting,
+  CatalogueSet,
+} from '../lib/protocol.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -90,6 +95,24 @@ export function CardBrowser({
   previewOnTap = false,
 }: Props) {
   const [preview, setPreview] = useState<CatalogueCard | null>(null);
+  // Every printing of the card being looked at, so you can swipe through the
+  // art. The same card in six sets is six different pictures, and which one
+  // you own or want is a real question — this is the only place in the app
+  // that could answer it and did not.
+  const [variants, setVariants] = useState<CataloguePrinting[]>([]);
+
+  useEffect(() => {
+    if (!preview) {
+      setVariants([]);
+      return;
+    }
+    void state
+      .printingsFor(preview.name)
+      .then((r) => setVariants(r.printings ?? []))
+      // A card whose printings cannot be fetched still shows its own art;
+      // losing the swipe is not losing the screen.
+      .catch(() => setVariants([]));
+  }, [preview, state]);
   const [name, setName] = useState('');
   const [colours, setColours] = useState<string[]>([]);
   const [types, setTypes] = useState<string[]>([]);
@@ -316,7 +339,7 @@ export function CardBrowser({
         <Text style={styles.muted}>Nothing matches that.</Text>
       ) : null}
 
-      <ScrollView style={styles.results} contentContainerStyle={styles.grid}>
+      <View style={styles.grid}>
         {cards.map((card) => {
           const held = countFor?.(card) ?? 0;
           return (
@@ -345,18 +368,49 @@ export function CardBrowser({
             </Pressable>
           );
         })}
-      </ScrollView>
+      </View>
 
       {/* The card, big enough to read, and the three things you might want
           to do with it. */}
       {preview ? (
         <View style={styles.previewWrap}>
           <ScrollView contentContainerStyle={styles.previewInner}>
-            <Image
-              source={artSource(preview.scryfall_id, 'large')}
-              style={styles.previewArt}
-              resizeMode="contain"
-            />
+            {variants.length > 1 ? (
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                style={styles.pager}
+              >
+                {variants.map((printing) => (
+                  <View key={printing.printing_id} style={styles.page}>
+                    <Image
+                      source={artSource(printing.printing_id, 'large')}
+                      style={styles.previewArt}
+                      resizeMode="contain"
+                    />
+                    <Text style={styles.muted}>
+                      {printing.set_code.toUpperCase()} #
+                      {printing.collector_number}
+                      {printing.price_usd != null
+                        ? `  ·  $${printing.price_usd.toFixed(2)}`
+                        : ''}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <Image
+                source={artSource(preview.scryfall_id, 'large')}
+                style={styles.previewArt}
+                resizeMode="contain"
+              />
+            )}
+            {variants.length > 1 ? (
+              <Text style={styles.muted}>
+                {variants.length} printings — swipe to see them
+              </Text>
+            ) : null}
             <Text style={styles.previewName}>{preview.name}</Text>
             <Text style={styles.muted}>{preview.type_line}</Text>
             {countFor ? (
@@ -397,7 +451,12 @@ export function CardBrowser({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, gap: 8 },
+  // No flex and no fixed height: the browser is as tall as its content
+  // and the page it sits in does the scrolling. A fixed box crushed the
+  // rows to fit AND left the grid unscrollable, because the outer page
+  // had already taken the gesture — so only the rows that happened to
+  // fit were ever reachable.
+  screen: { gap: 8 },
   // Every fixed-height row needs this, and the grid needs `flex: 1`.
   //
   // The browser lives in a 560px box. Its rows add up to more than that, so
@@ -460,7 +519,6 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
   chipText: { color: '#c9ced9', fontSize: 12, flexShrink: 0 },
   chipTextOn: { color: '#ffffff', fontWeight: '700' },
-  results: { flex: 1 },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -495,7 +553,9 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   previewInner: { padding: 16, gap: 8, alignItems: 'center' },
-  previewArt: { width: '86%', aspectRatio: 745 / 1040, borderRadius: 12 },
+  pager: { width: '100%' },
+  page: { width: 300, alignItems: 'center', gap: 6, paddingHorizontal: 6 },
+  previewArt: { width: 280, aspectRatio: 745 / 1040, borderRadius: 12 },
   previewName: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
   previewButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
   previewButton: {

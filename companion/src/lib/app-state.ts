@@ -17,6 +17,7 @@ import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
   CardDetail,
+  CataloguePrinting,
   CatalogueSet,
   OverlapsReply,
   CardQuery,
@@ -264,6 +265,19 @@ export class AppState {
   /** Every set in the catalogue, newest first. Needs the desktop. */
   async sets(): Promise<{ sets: CatalogueSet[] }> {
     return this.client.call<{ sets: CatalogueSet[] }>('cards/sets', {});
+  }
+
+  /**
+   * Every printing of one card.
+   *
+   * Needs the desktop: the phone mirrors what you own, and the point here is
+   * the printings you do not.
+   */
+  async printingsFor(cardName: string): Promise<{ printings: CataloguePrinting[] }> {
+    return this.client.call<{ printings: CataloguePrinting[] }>(
+      'cards/printings',
+      { card_name: cardName },
+    );
   }
 
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {

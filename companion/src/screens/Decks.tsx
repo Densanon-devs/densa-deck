@@ -424,7 +424,7 @@ const styles = StyleSheet.create({
   plus: { color: '#48bb78', fontSize: 22, fontWeight: '700', paddingLeft: 8 },
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
-  browser: { height: 560 },
+  browser: { marginBottom: 8 },
   overLimit: { color: '#ecc94b', fontSize: 12, lineHeight: 18 },
   zoneRow: { flexDirection: 'row', gap: 8 },
   zone: {

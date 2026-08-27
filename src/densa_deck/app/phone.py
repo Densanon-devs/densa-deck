@@ -551,6 +551,11 @@ class PhoneBridge:
             return _unwrap(api.get_overlaps(
                 int(payload.get("min_collections", 2) or 2)))
 
+        # Every printing of one card, for flipping between the variants of
+        # something you already have on screen.
+        if route == "cards/printings":
+            return _unwrap(api.get_card_printings(payload.get("card_name", "")))
+
         if route == "cards/sets":
             return _unwrap(api.list_sets())
 

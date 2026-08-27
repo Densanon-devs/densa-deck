@@ -38,6 +38,7 @@ SCREENS = {
     "deck list": "New deck name",
     "deck editing": "Still needed",
     "sideboard panel": "Sideboard (",
+    "printing swipe": "swipe to see them",
     "card browser": "Browse cards",
     "browser filters": "Only mine",
     "rules text search": "Rules text",
