@@ -3758,9 +3758,19 @@ class AppApi:
                 continue
             collection_uid = uid_of.get(
                 getattr(item, "collection_id", None), "") or DEFAULT_COLLECTION_UID
+            # Every part of the stack key, LOCATION INCLUDED.
+            #
+            # It was missing, and the far side keys a stack by location too —
+            # so the same printing in two boxes produced two events with one
+            # id, the second was recognised as already known, and that stack
+            # never arrived. A first sync silently delivered fewer cards than
+            # the collection holds, which is the worst possible place for a
+            # collision: the baseline is what a phone falls back on when it
+            # has nothing.
             uid = "-".join([
                 f"baseline-{head}-stack", item.printing_id, item.finish,
-                item.condition, item.language, collection_uid,
+                item.condition, item.language, item.location or "-",
+                collection_uid,
             ])
             events.append(SyncEvent(
                 event_uid=uid,

@@ -119,3 +119,101 @@ class TestTheCursorAlwaysMovesForward:
         events, cursor = log.since(0, limit=2)
         assert len(events) == 2
         assert cursor == 2, "the window end and the last row agree here"
+
+
+class TestTheBaselineDeliversEveryStack:
+    """The first sync, which is what a phone falls back on when it has
+    nothing — and therefore the worst possible place for a card to go missing.
+
+    Every baseline event carries an id derived from the stack itself, so a
+    phone that asks twice recognises the second set as duplicates rather than
+    doubling the collection. That only works if the id is as specific as the
+    STACK KEY the far side uses. It was not: `location` was missing, so the
+    same printing in two boxes produced two events with one id, and the phone
+    skipped the second as already known. The cards in it never arrived, and
+    nothing anywhere said so.
+    """
+
+    @pytest.fixture
+    def api(self):
+        import tempfile
+        from pathlib import Path
+
+        from densa_deck.app.api import AppApi
+        from densa_deck.collection.storage import CollectionStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            a = AppApi(db_path=root / "cards.db",
+                       version_db_path=root / "versions.db")
+            a._collection_store = CollectionStore(db_path=root / "collection.db")
+            yield a
+            a.close()
+
+    def _baseline(self, api):
+        reply = api.sync_pull(since=0, limit=1000, peer="probe")
+        return reply.get("data", reply)["events"]
+
+    def _stack_sets(self, api):
+        return [e for e in self._baseline(api) if e["kind"] == "stack-set"]
+
+    def test_two_boxes_of_one_printing_are_two_events(self, api):
+        """The bug, exactly. Same card, same finish, same condition, two
+        locations — and the phone received one of them."""
+        store = api._get_collection_store()
+        store.add_copies("p1", "Death Wind", quantity=1, location="binder")
+        store.add_copies("p1", "Death Wind", quantity=2, location="deck box")
+
+        events = self._stack_sets(api)
+        assert len(events) == 2
+        uids = [e["event_uid"] for e in events]
+        assert len(set(uids)) == 2, "one id for two stacks loses one of them"
+
+    def test_the_whole_collection_arrives(self, api):
+        store = api._get_collection_store()
+        store.add_copies("p1", "Death Wind", quantity=1, location="binder")
+        store.add_copies("p1", "Death Wind", quantity=2, location="deck box")
+        store.add_copies("p2", "Radha", quantity=2)
+
+        events = self._stack_sets(api)
+        # Deduplicated by uid the way the receiving side does it.
+        by_uid = {e["event_uid"]: e for e in events}
+        delivered = sum(e["payload"]["quantity"] for e in by_uid.values())
+        assert delivered == store.summary().total_cards == 5
+
+    def test_finish_condition_and_language_still_separate_stacks(self, api):
+        # The parts that were already there have to stay there.
+        store = api._get_collection_store()
+        store.add_copies("p1", "Death Wind", quantity=1, finish="foil")
+        store.add_copies("p1", "Death Wind", quantity=1, finish="nonfoil")
+        store.add_copies("p1", "Death Wind", quantity=1, condition="LP")
+        uids = {e["event_uid"] for e in self._stack_sets(api)}
+        assert len(uids) == 3
+
+    def test_asking_twice_gives_identical_ids(self, api):
+        """A retried first sync must be recognised as duplicates, not applied
+        again — a first sync is exactly when a connection drops."""
+        store = api._get_collection_store()
+        store.add_copies("p1", "Death Wind", quantity=1, location="binder")
+        store.add_copies("p1", "Death Wind", quantity=2, location="deck box")
+        first = [e["event_uid"] for e in self._stack_sets(api)]
+        second = [e["event_uid"] for e in self._stack_sets(api)]
+        assert first == second
+
+    def test_a_stack_with_no_location_still_gets_an_id(self, api):
+        # Empty is the normal case; it must not collapse the id or collide
+        # with a stack whose location happens to be something else.
+        store = api._get_collection_store()
+        store.add_copies("p1", "Death Wind", quantity=1)
+        store.add_copies("p1", "Death Wind", quantity=1, location="binder")
+        uids = {e["event_uid"] for e in self._stack_sets(api)}
+        assert len(uids) == 2
+
+    def test_memberships_are_one_per_stack_and_list(self, api):
+        # The other half of the baseline, keyed by item_id, which is unique
+        # per stack — so it does not share this failure.
+        store = api._get_collection_store()
+        item = store.add_copies("p1", "Death Wind", quantity=1, location="a")
+        other = store.add_copies("p1", "Death Wind", quantity=1, location="b")
+        members = [e for e in self._baseline(api) if e["kind"] == "membership"]
+        assert len({e["event_uid"] for e in members}) == len(members)

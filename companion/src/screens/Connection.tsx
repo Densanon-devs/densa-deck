@@ -53,7 +53,18 @@ export function ConnectionScreen({ state, onClose }: Props) {
     setProblem('');
     try {
       setReports(await state.diagnose());
-      // Both sides' totals, before the sync below changes either of them.
+      // Deliberately separate. Card art comes from Scryfall over the public
+      // internet; the collection comes from a machine on the tailnet. They
+      // fail independently and the app used to report only one of them.
+      setArt(await checkArtReachable());
+      // A probe that answers proves nothing until a real request follows it,
+      // so the sync runs too and the banner updates from the result.
+      await state.sync();
+
+      // Counted AFTER the sync, not before it. Read first, the phone's total
+      // was the one from before this exchange — so the screen reported a
+      // discrepancy it had just finished fixing, and pressing again appeared
+      // to change the number by magic.
       const phone = (await state.totals()).cards;
       let desktop: number | null = null;
       try {
@@ -63,13 +74,6 @@ export function ConnectionScreen({ state, onClose }: Props) {
         desktop = null;               // asleep or unreachable; say so, do not guess
       }
       setCounts({ phone, desktop });
-      // Deliberately separate. Card art comes from Scryfall over the public
-      // internet; the collection comes from a machine on the tailnet. They
-      // fail independently and the app used to report only one of them.
-      setArt(await checkArtReachable());
-      // A probe that answers proves nothing until a real request follows it,
-      // so the sync runs too and the banner updates from the result.
-      await state.sync();
     } finally {
       setBusy(false);
     }
@@ -131,7 +135,7 @@ export function ConnectionScreen({ state, onClose }: Props) {
               }}
             >
               <Text style={styles.rebuildText}>
-                Copy my PC’s cards down again
+                {busy ? 'Copying…' : '↻  Copy my PC’s cards down again'}
               </Text>
               <Text style={styles.muted}>
                 Throws this phone’s copy away and asks for all of it fresh.
@@ -251,15 +255,24 @@ const styles = StyleSheet.create({
   tallyRow: { color: '#c9ced9', fontSize: 14 },
   tallyNum: { color: '#e4e6eb', fontWeight: '700' },
   tallyWarn: { color: '#ecc94b', fontSize: 13, lineHeight: 19, marginTop: 4 },
+  // Filled, not outlined. Outlined, it sat among outlined panels and read as
+  // one — the user pressed it on a guess, which is not a thing a control
+  // should require.
   rebuild: {
+    backgroundColor: '#276749',
     borderColor: '#38a169',
     borderWidth: 1,
     borderRadius: 10,
-    padding: 12,
+    padding: 14,
     gap: 4,
     marginTop: 8,
   },
-  rebuildText: { color: '#68d391', fontSize: 15, fontWeight: '700' },
+  rebuildText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 20 },
   summary: { color: '#e4e6eb', fontSize: 15, lineHeight: 22 },
   row: {
