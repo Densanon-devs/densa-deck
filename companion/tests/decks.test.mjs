@@ -16,6 +16,7 @@ import {
   costToFinish,
   deckSize,
   formatDecklist,
+  mergeCounts,
   parseDecklist,
   removeFromDeck,
   shortfall,
@@ -343,5 +344,71 @@ describe('the wishlist', () => {
     const cost = wishlistCost(rows, { 'sol ring': 2 });
     assert.equal(cost.usd, 4, 'two Sol Rings at 2');
     assert.equal(cost.unpriced, 1, 'the Lotus is not counted as free');
+  });
+});
+
+describe('the fifteen you bring but do not start with', () => {
+  test('a Sideboard header separates the two', async () => {
+    // It used to be SKIPPED and everything under it folded into the
+    // maindeck, so a fifteen-card board silently became fifteen extra
+    // maindeck cards and the deck read as 75.
+    const { cards, sideboard } = parseDecklist(
+      '4 Lightning Bolt\n\nSideboard\n2 Pyroblast',
+    );
+    assert.deepEqual(cards, { 'Lightning Bolt': 4 });
+    assert.deepEqual(sideboard, { Pyroblast: 2 });
+  });
+
+  test('the abbreviations the exporters actually emit', async () => {
+    for (const header of ['Sideboard', 'SIDEBOARD', 'sb', 'Side:']) {
+      const { sideboard } = parseDecklist(`4 Bolt\n${header}\n1 Pyroblast`);
+      assert.deepEqual(sideboard, { Pyroblast: 1 }, header);
+    }
+  });
+
+  test('a later Deck header goes back to the maindeck', async () => {
+    const { cards, sideboard } = parseDecklist(
+      'Sideboard\n1 Pyroblast\nDeck\n4 Bolt',
+    );
+    assert.deepEqual(sideboard, { Pyroblast: 1 });
+    assert.deepEqual(cards, { Bolt: 4 });
+  });
+
+  test('a card can be in both, and the counts stay apart', async () => {
+    // Three in the deck and one in the board is a real and common shape.
+    const { cards, sideboard } = parseDecklist(
+      '3 Bolt\nSideboard\n1 Bolt',
+    );
+    assert.equal(cards.Bolt, 3);
+    assert.equal(sideboard.Bolt, 1);
+  });
+
+  test('a deck with no board is unchanged', async () => {
+    const { cards, sideboard } = parseDecklist('4 Bolt');
+    assert.deepEqual(cards, { Bolt: 4 });
+    assert.deepEqual(sideboard, {});
+  });
+
+  test('formatting writes the header back out', async () => {
+    // Without it, one round trip through the text box moves the board into
+    // the deck and nothing says so.
+    const text = formatDecklist({ Bolt: 4 }, { Pyroblast: 2 });
+    assert.match(text, /Sideboard/);
+    const again = parseDecklist(text);
+    assert.deepEqual(again.sideboard, { Pyroblast: 2 });
+    assert.deepEqual(again.cards, { Bolt: 4 });
+  });
+
+  test('formatting a deck with no board adds no header', async () => {
+    assert.equal(formatDecklist({ Bolt: 4 }), '4 Bolt');
+  });
+
+  test('what you still need counts the board as well', async () => {
+    // Those cards get bought and carried like any other. A shortfall from
+    // the maindeck alone would tell you to buy none of them.
+    assert.deepEqual(mergeCounts({ Bolt: 3 }, { Bolt: 1, Pyroblast: 2 }), {
+      Bolt: 4,
+      Pyroblast: 2,
+    });
   });
 });

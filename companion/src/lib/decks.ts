@@ -21,6 +21,14 @@ export interface Deck {
   format: string;
   /** Card name -> copies. Deliberately not printings; see above. */
   decklist: Record<string, number>;
+  /**
+   * The fifteen you bring but do not start with.
+   *
+   * Its own field rather than a flag on each entry: a card can legitimately
+   * be in both, three in the deck and one in the board, and a single map
+   * cannot say that.
+   */
+  sideboard?: Record<string, number>;
   notes: string;
   updated_at: string;
 }
@@ -38,16 +46,30 @@ const LINE = /^\s*(?:(\d+)\s*x?\s+)?(.+?)\s*$/;
  */
 export function parseDecklist(text: string): {
   cards: Record<string, number>;
+  sideboard: Record<string, number>;
   skipped: string[];
 } {
   const cards: Record<string, number> = {};
+  const sideboard: Record<string, number> = {};
   const skipped: string[] = [];
+  // Which section we are in. A `Sideboard` header used to be SKIPPED and
+  // everything under it folded into the maindeck — so a fifteen-card board
+  // silently became fifteen extra maindeck cards and the deck read as 75
+  // with nothing to say anything had gone wrong.
+  let zone: 'main' | 'side' = 'main';
 
   for (const raw of (text || '').split('\n')) {
     const line = raw.trim();
     if (!line || line.startsWith('#') || line.startsWith('//')) continue;
-    // Section headers from exported lists.
-    if (/^(sideboard|commander|deck|maybeboard)\b:?$/i.test(line)) continue;
+    // `sb` and `side` as well, because that is what the exporters emit.
+    if (/^(sideboard|sb|side)\b:?$/i.test(line)) {
+      zone = 'side';
+      continue;
+    }
+    if (/^(commander|deck|mainboard|maybeboard)\b:?$/i.test(line)) {
+      zone = 'main';
+      continue;
+    }
 
     const match = LINE.exec(line);
     if (!match) {
@@ -65,16 +87,45 @@ export function parseDecklist(text: string): {
       skipped.push(line);
       continue;
     }
-    cards[name] = (cards[name] ?? 0) + count;
+    const into = zone === 'side' ? sideboard : cards;
+    into[name] = (into[name] ?? 0) + count;
   }
-  return { cards, skipped };
+  return { cards, sideboard, skipped };
 }
 
-export function formatDecklist(cards: Record<string, number>): string {
-  return Object.entries(cards)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, count]) => `${count} ${name}`)
-    .join('\n');
+export function formatDecklist(
+  cards: Record<string, number>,
+  sideboard: Record<string, number> = {},
+): string {
+  const lines = (entries: Record<string, number>) =>
+    Object.entries(entries)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, count]) => `${count} ${name}`);
+
+  const main = lines(cards);
+  const side = lines(sideboard);
+  // The header is written back out, or a round trip through the text box
+  // quietly moves the board into the deck.
+  return side.length
+    ? [...main, '', 'Sideboard', ...side].join('\n')
+    : main.join('\n');
+}
+
+/**
+ * Deck plus board, added together.
+ *
+ * Three in the deck and one in the board is four copies you have to own, and
+ * a shortfall computed from the maindeck alone would tell you to buy none.
+ */
+export function mergeCounts(
+  main: Record<string, number>,
+  side: Record<string, number> = {},
+): Record<string, number> {
+  const out: Record<string, number> = { ...main };
+  for (const [name, count] of Object.entries(side)) {
+    out[name] = (out[name] ?? 0) + count;
+  }
+  return out;
 }
 
 export function deckSize(cards: Record<string, number>): number {
@@ -172,7 +223,7 @@ export async function analyzeOnDesktop(
   deck: Deck,
 ): Promise<unknown> {
   return client.call('analyst/analyze', {
-    decklist_text: formatDecklist(deck.decklist),
+    decklist_text: formatDecklist(deck.decklist, deck.sideboard),
     name: deck.name,
     format: deck.format,
   });

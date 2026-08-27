@@ -29,6 +29,7 @@ import {
   formatDecklist,
   parseDecklist,
   removeFromDeck,
+  mergeCounts,
   shortfall,
 } from '../lib/decks.ts';
 import type { Deck } from '../lib/decks.ts';
@@ -138,7 +139,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       const found = await decks.get(deckId);
       if (!found) return;
       setDeck(found);
-      setText(formatDecklist(found.decklist));
+      setText(formatDecklist(found.decklist, found.sideboard));
     })().catch(reporting('opening the deck', setProblem));
   }, [decks, deckId]);
 
@@ -156,7 +157,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   }, [deck, recheck]);
 
   const save = useCallback(async () => {
-    const { cards, skipped } = parseDecklist(text);
+    const { cards, sideboard, skipped } = parseDecklist(text);
     setProblem(
       skipped.length
         ? `Couldn't read ${skipped.length} line${skipped.length === 1 ? '' : 's'}: ` +
@@ -168,12 +169,15 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       name: deck?.name ?? 'Untitled deck',
       format: deck?.format ?? '',
       decklist: cards,
+      sideboard,
       notes: deck?.notes ?? '',
       updated_at: new Date().toISOString(),
     };
     await decks.save(next);
     setDeck(next);
-    await recheck(cards);
+    // The board counts toward what you still need — those cards get
+    // bought and carried like any other.
+    await recheck(mergeCounts(cards, sideboard));
   }, [text, deck, deckId, decks, recheck]);
 
   const add = useCallback(async (name: string) => {
@@ -185,7 +189,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     };
     await decks.save(next);
     setDeck(next);
-    setText(formatDecklist(next.decklist));
+    setText(formatDecklist(next.decklist, next.sideboard));
     await recheck(next.decklist);
   }, [deck, decks, recheck]);
 
@@ -198,7 +202,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     };
     await decks.save(next);
     setDeck(next);
-    setText(formatDecklist(next.decklist));
+    setText(formatDecklist(next.decklist, next.sideboard));
     await recheck(next.decklist);
   }, [deck, decks, recheck]);
 
