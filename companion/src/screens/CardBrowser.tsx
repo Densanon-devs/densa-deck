@@ -349,7 +349,7 @@ export function CardBrowser({
         others, and the set you want is almost always a recent one.
       */}
       {pickingSet ? (
-        <View style={styles.overlay}>
+        <View style={styles.setPanel}>
           <View style={styles.overlayHead}>
             <Text style={styles.overlayTitle}>
               Sets{sets.length ? ` — ${sets.length} picked` : ''}
@@ -367,7 +367,17 @@ export function CardBrowser({
             autoCorrect={false}
             autoCapitalize="characters"
           />
-          <ScrollView style={styles.overlayList}>
+          {/*
+            Every set at once, wrapped, with NO scroller of its own.
+            
+            Three attempts at this were a scroller inside the page's
+            scroller, and each one showed the half-dozen rows that fitted and
+            refused to move — a nested vertical ScrollView never gets the
+            gesture. There is one scroller on this screen and it belongs to
+            the page. Anything that needs to be reachable has to be laid out,
+            not scrolled.
+          */}
+          <View style={styles.setGrid}>
             {allSets
               .filter((entry) =>
                 entry.set_code
@@ -379,21 +389,20 @@ export function CardBrowser({
                 return (
                   <Pressable
                     key={entry.set_code}
-                    style={[styles.setRow, on && styles.setRowOn]}
+                    style={[styles.setTile, on && styles.setTileOn]}
                     onPress={() => setSets((list) => toggle(list, entry.set_code))}
                   >
-                    <Text style={[styles.setCode, on && styles.setCodeOn]}>
-                      {on ? '✓ ' : ''}
+                    <Text style={[styles.setTileCode, on && styles.setTileCodeOn]}>
                       {entry.set_code.toUpperCase()}
                     </Text>
-                    <Text style={styles.muted}>{entry.cards} cards</Text>
+                    <Text style={styles.setTileCount}>{entry.cards}</Text>
                   </Pressable>
                 );
               })}
             {allSets.length === 0 ? (
               <Text style={styles.muted}>Asking your PC for the set list...</Text>
             ) : null}
-          </ScrollView>
+          </View>
         </View>
       ) : null}
 
@@ -690,21 +699,30 @@ const styles = StyleSheet.create({
   previewButtonText: { color: '#e4e6eb', fontSize: 15 },
   previewAdd: { backgroundColor: '#38a169', borderColor: '#38a169' },
   previewAddText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  overlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0,
-    height: 520,
-    backgroundColor: '#0f1117f8',
+  setPanel: {
     borderColor: '#2d3142',
     borderWidth: 1,
     borderRadius: 12,
     padding: 12,
     gap: 8,
-    zIndex: 15,
   },
+  setGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  setTile: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 68,
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  setTileOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  setTileCode: { color: '#c9ced9', fontSize: 13, fontWeight: '700' },
+  setTileCodeOn: { color: '#ffffff' },
+  setTileCount: { color: '#8a8f9c', fontSize: 10 },
   overlayHead: { flexDirection: 'row', alignItems: 'center' },
   overlayTitle: { color: '#e4e6eb', fontSize: 17, fontWeight: '700', flex: 1 },
-  overlayList: { flex: 1 },
   setRow: {
     flexDirection: 'row',
     alignItems: 'center',
