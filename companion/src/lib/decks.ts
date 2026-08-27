@@ -139,7 +139,20 @@ export class DeckStore {
     this.db = db;
   }
 
+  /**
+   * The sideboard lives in the same column as the deck.
+   *
+   * `decklist_json` holds either a bare map, as it always did, or
+   * `{main, side}`. A separate column would have needed a migration on a
+   * table that already has rows on people's phones, and reading the old
+   * shape is two lines. What must not happen is what nearly did: saving a
+   * deck and losing its board because the writer knew about it and the
+   * schema did not.
+   */
   async save(deck: Deck): Promise<void> {
+    const payload = deck.sideboard && Object.keys(deck.sideboard).length
+      ? JSON.stringify({ main: deck.decklist, side: deck.sideboard })
+      : JSON.stringify(deck.decklist);
     await this.db.run(
       `INSERT INTO decks (deck_id, name, format, decklist_json, notes, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -153,11 +166,35 @@ export class DeckStore {
         deck.deck_id,
         deck.name,
         deck.format,
-        JSON.stringify(deck.decklist),
+        payload,
         deck.notes,
         deck.updated_at,
       ],
     );
+  }
+
+  /** Reads both shapes: a bare map, or `{main, side}`. */
+  private static unpack(json: string): {
+    decklist: Record<string, number>;
+    sideboard: Record<string, number>;
+  } {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json || '{}');
+    } catch {
+      return { decklist: {}, sideboard: {} };
+    }
+    if (parsed && typeof parsed === 'object' && 'main' in (parsed as object)) {
+      const wrapped = parsed as {
+        main?: Record<string, number>;
+        side?: Record<string, number>;
+      };
+      return { decklist: wrapped.main ?? {}, sideboard: wrapped.side ?? {} };
+    }
+    return {
+      decklist: (parsed as Record<string, number>) ?? {},
+      sideboard: {},
+    };
   }
 
   async list(): Promise<Deck[]> {
@@ -169,14 +206,18 @@ export class DeckStore {
       notes: string;
       updated_at: string;
     }>('SELECT * FROM decks ORDER BY updated_at DESC LIMIT 200');
-    return rows.map((r) => ({
-      deck_id: r.deck_id,
-      name: r.name,
-      format: r.format,
-      decklist: JSON.parse(r.decklist_json || '{}'),
-      notes: r.notes,
-      updated_at: r.updated_at,
-    }));
+    return rows.map((r) => {
+      const { decklist, sideboard } = DeckStore.unpack(r.decklist_json);
+      return {
+        deck_id: r.deck_id,
+        name: r.name,
+        format: r.format,
+        decklist,
+        sideboard,
+        notes: r.notes,
+        updated_at: r.updated_at,
+      };
+    });
   }
 
   async get(deckId: string): Promise<Deck | undefined> {
@@ -352,4 +393,75 @@ export function wishlistCost(
     rows.map((r) => ({ name: r.card_name, short: r.quantity })),
     prices,
   );
+}
+
+/**
+ * Cards you may hold any number of.
+ *
+ * Basic lands, and the handful of cards that say so on themselves. Named
+ * rather than looked up because this has to work with no signal, and the
+ * list changes about once a decade.
+ */
+const UNLIMITED = new Set([
+  'plains', 'island', 'swamp', 'mountain', 'forest', 'wastes',
+  'snow-covered plains', 'snow-covered island', 'snow-covered swamp',
+  'snow-covered mountain', 'snow-covered forest', 'snow-covered wastes',
+  'relentless rats', 'shadowborn apostle', 'rat colony',
+  'persistent petitioners', 'dragon’s approach', "dragon's approach",
+  'nazgul', 'nazgûl', 'seven dwarves', 'templar knight',
+]);
+
+export interface DeckWarning {
+  kind: 'copies' | 'size' | 'sideboard';
+  text: string;
+}
+
+/**
+ * What is over the line, without stopping you crossing it.
+ *
+ * Deliberately advisory. Half of deckbuilding is holding a pile that is not
+ * legal yet — thirty maybes and no lands — and an app that refused the fifth
+ * copy would be arguing with you during the part where you are thinking.
+ * So it counts, it says, and it gets out of the way.
+ *
+ * Commander is singleton and wants 100; everything else allows four and
+ * wants at least 60. Formats this does not know get the common rules rather
+ * than silence, because silence reads as approval.
+ */
+export function deckWarnings(
+  main: Record<string, number>,
+  sideboard: Record<string, number> = {},
+  format = '',
+): DeckWarning[] {
+  const commander = /commander|brawl|oathbreaker/i.test(format);
+  const maxCopies = commander ? 1 : 4;
+  const wanted = commander ? 100 : 60;
+  const out: DeckWarning[] = [];
+
+  const total = mergeCounts(main, sideboard);
+  for (const [name, count] of Object.entries(total)) {
+    if (UNLIMITED.has(name.trim().toLowerCase())) continue;
+    if (count > maxCopies) {
+      out.push({
+        kind: 'copies',
+        text: `${count} copies of ${name} — ${maxCopies} allowed`,
+      });
+    }
+  }
+
+  const size = deckSize(main);
+  if (size > 0 && size < wanted) {
+    out.push({ kind: 'size', text: `${size} cards in the deck — ${wanted} needed` });
+  }
+  if (commander && size > wanted) {
+    out.push({ kind: 'size', text: `${size} cards in the deck — ${wanted} allowed` });
+  }
+
+  const board = deckSize(sideboard);
+  // Commander has no sideboard in most rules sets, so any board is worth a
+  // word rather than a limit.
+  if (!commander && board > 15) {
+    out.push({ kind: 'sideboard', text: `${board} in the sideboard — 15 allowed` });
+  }
+  return out;
 }

@@ -26,6 +26,7 @@ import {
   DeckStore,
   addToDeck,
   deckSize,
+  deckWarnings,
   formatDecklist,
   parseDecklist,
   removeFromDeck,
@@ -133,6 +134,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [thinking, setThinking] = useState(false);
   const [problem, setProblem] = useState('');
   const [browsing, setBrowsing] = useState(false);
+  // Which half the grid and the +/- act on. The text box always shows
+  // both, because that is what a decklist IS.
+  const [zone, setZone] = useState<'main' | 'side'>('main');
 
   useEffect(() => {
     void (async () => {
@@ -180,31 +184,39 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     await recheck(mergeCounts(cards, sideboard));
   }, [text, deck, deckId, decks, recheck]);
 
-  const add = useCallback(async (name: string) => {
-    if (!deck) return;
-    const next: Deck = {
-      ...deck,
-      decklist: addToDeck(deck.decklist, name),
-      updated_at: new Date().toISOString(),
-    };
-    await decks.save(next);
-    setDeck(next);
-    setText(formatDecklist(next.decklist, next.sideboard));
-    await recheck(next.decklist);
-  }, [deck, decks, recheck]);
+  /**
+   * Add or remove, in whichever half is selected.
+   *
+   * One function rather than two pairs, because the only difference between
+   * putting a card in the deck and putting it in the board is which map it
+   * lands in — and writing that twice is how the two drift apart.
+   */
+  const change = useCallback(
+    async (name: string, delta: 1 | -1) => {
+      if (!deck) return;
+      const edit = delta > 0 ? addToDeck : removeFromDeck;
+      const next: Deck =
+        zone === 'side'
+          ? {
+              ...deck,
+              sideboard: edit(deck.sideboard ?? {}, name),
+              updated_at: new Date().toISOString(),
+            }
+          : {
+              ...deck,
+              decklist: edit(deck.decklist, name),
+              updated_at: new Date().toISOString(),
+            };
+      await decks.save(next);
+      setDeck(next);
+      setText(formatDecklist(next.decklist, next.sideboard));
+      await recheck(mergeCounts(next.decklist, next.sideboard));
+    },
+    [deck, decks, recheck, zone],
+  );
 
-  const drop = useCallback(async (name: string) => {
-    if (!deck) return;
-    const next: Deck = {
-      ...deck,
-      decklist: removeFromDeck(deck.decklist, name),
-      updated_at: new Date().toISOString(),
-    };
-    await decks.save(next);
-    setDeck(next);
-    setText(formatDecklist(next.decklist, next.sideboard));
-    await recheck(next.decklist);
-  }, [deck, decks, recheck]);
+  const add = useCallback((name: string) => change(name, 1), [change]);
+  const drop = useCallback((name: string) => change(name, -1), [change]);
 
   const analyse = useCallback(async () => {
     if (!deck) return;
@@ -253,8 +265,43 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
+      {/*
+        Which half you are editing. Not a mode buried in a menu: adding to
+        the wrong one is silent, and you would find out at the table.
+      */}
+      {/* Over the line, not blocked at it. Half of deckbuilding is holding
+          a pile that is not legal yet. */}
+      {deck
+        ? deckWarnings(deck.decklist, deck.sideboard, deck.format).map((w) => (
+            <Text key={w.text} style={styles.overLimit}>
+              {w.text}
+            </Text>
+          ))
+        : null}
+
+      <View style={styles.zoneRow}>
+        <Pressable
+          style={[styles.zone, zone === 'main' && styles.zoneOn]}
+          onPress={() => setZone('main')}
+        >
+          <Text style={[styles.zoneText, zone === 'main' && styles.zoneTextOn]}>
+            Deck ({deckSize(deck?.decklist ?? {})})
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.zone, zone === 'side' && styles.zoneOn]}
+          onPress={() => setZone('side')}
+        >
+          <Text style={[styles.zoneText, zone === 'side' && styles.zoneTextOn]}>
+            Sideboard ({deckSize(deck?.sideboard ?? {})})
+          </Text>
+        </Pressable>
+      </View>
+
       <View style={styles.row}>
-        <Text style={[styles.section, styles.grow]}>Add a card</Text>
+        <Text style={[styles.section, styles.grow]}>
+          {zone === 'side' ? 'Add to the sideboard' : 'Add to the deck'}
+        </Text>
         <Pressable
           style={styles.secondary}
           onPress={() => setBrowsing((open) => !open)}
@@ -277,7 +324,11 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             state={state}
             onPick={(card) => add(card.name)}
             onClose={() => setBrowsing(false)}
-            countFor={(card) => deck?.decklist?.[card.name] ?? 0}
+            countFor={(card) =>
+              (zone === 'side' ? deck?.sideboard : deck?.decklist)?.[
+                card.name
+              ] ?? 0
+            }
           />
         </View>
       ) : null}
@@ -372,6 +423,19 @@ const styles = StyleSheet.create({
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { height: 560 },
+  overLimit: { color: '#ecc94b', fontSize: 12, lineHeight: 18 },
+  zoneRow: { flexDirection: 'row', gap: 8 },
+  zone: {
+    flex: 1,
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  zoneOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  zoneText: { color: '#c9ced9', fontSize: 14 },
+  zoneTextOn: { color: '#ffffff', fontWeight: '700' },
   analysis: {
     color: '#8a8f9c',
     fontFamily: 'monospace',

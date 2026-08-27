@@ -15,6 +15,7 @@ import {
   addToDeck,
   costToFinish,
   deckSize,
+  deckWarnings,
   formatDecklist,
   mergeCounts,
   parseDecklist,
@@ -410,5 +411,110 @@ describe('the fifteen you bring but do not start with', () => {
       Bolt: 4,
       Pyroblast: 2,
     });
+  });
+});
+
+describe('the sideboard survives being saved', () => {
+  test('a deck round-trips through the store with its board', async () => {
+    // It did not. `save` wrote only `decklist_json` and the board was gone
+    // the next time the deck was opened — the writer knew about it and the
+    // schema did not.
+    const store = new DeckStore(new MemoryDatabase());
+    await store.save({
+      deck_id: 'd1',
+      name: 'Burn',
+      format: 'modern',
+      decklist: { Bolt: 4 },
+      sideboard: { Pyroblast: 2 },
+      notes: '',
+      updated_at: new Date(0).toISOString(),
+    });
+    const back = await store.get('d1');
+    assert.deepEqual(back.decklist, { Bolt: 4 });
+    assert.deepEqual(back.sideboard, { Pyroblast: 2 });
+  });
+
+  test('a deck saved before sideboards existed still reads', async () => {
+    // Rows on people's phones hold a bare map. Reading it as `{main, side}`
+    // would return an empty deck and look like the deck had been wiped.
+    const db = new MemoryDatabase();
+    await db.run(
+      `INSERT INTO decks (deck_id, name, format, decklist_json, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['old', 'Legacy deck', 'modern', '{"Bolt":4}', '', new Date(0).toISOString()],
+    );
+    const back = await new DeckStore(db).get('old');
+    assert.deepEqual(back.decklist, { Bolt: 4 });
+    assert.deepEqual(back.sideboard, {});
+  });
+
+  test('unreadable json is an empty deck, not a crash', async () => {
+    const db = new MemoryDatabase();
+    await db.run(
+      `INSERT INTO decks (deck_id, name, format, decklist_json, notes, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      ['bad', 'Broken', '', '{not json', '', new Date(0).toISOString()],
+    );
+    const back = await new DeckStore(db).get('bad');
+    assert.deepEqual(back.decklist, {});
+  });
+});
+
+describe('over the line, but not stopped at it', () => {
+  test('a fifth copy is allowed and flagged', async () => {
+    // Half of deckbuilding is holding a pile that is not legal yet.
+    const over = addToDeck({ Bolt: 4 }, 'Bolt');
+    assert.equal(over.Bolt, 5);
+    const said = deckWarnings(over, {}, 'modern');
+    assert.ok(said.some((w) => w.kind === 'copies' && /Bolt/.test(w.text)));
+  });
+
+  test('basic lands are never over', async () => {
+    assert.deepEqual(
+      deckWarnings({ Mountain: 24 }, {}, 'modern').filter((w) => w.kind === 'copies'),
+      [],
+    );
+  });
+
+  test('the cards that say so on themselves are not over either', async () => {
+    assert.deepEqual(
+      deckWarnings({ 'Relentless Rats': 30 }, {}, 'modern')
+        .filter((w) => w.kind === 'copies'),
+      [],
+    );
+  });
+
+  test('commander is singleton, so a second copy is flagged', async () => {
+    assert.ok(
+      deckWarnings({ 'Sol Ring': 2 }, {}, 'commander')
+        .some((w) => w.kind === 'copies'),
+    );
+  });
+
+  test('deck and board are counted together for the copy limit', async () => {
+    // Three in the deck and two in the board is five copies you own.
+    assert.ok(
+      deckWarnings({ Bolt: 3 }, { Bolt: 2 }, 'modern')
+        .some((w) => w.kind === 'copies'),
+    );
+  });
+
+  test('an oversized sideboard is flagged', async () => {
+    const board = Object.fromEntries(
+      Array.from({ length: 16 }, (_, i) => [`Card ${i}`, 1]),
+    );
+    assert.ok(deckWarnings({}, board, 'modern').some((w) => w.kind === 'sideboard'));
+  });
+
+  test('an empty deck is not nagged about its size', async () => {
+    // Warning that a deck you have not started is too small is noise.
+    assert.deepEqual(deckWarnings({}, {}, 'modern'), []);
+  });
+
+  test('a legal deck says nothing at all', async () => {
+    const legal = Object.fromEntries(
+      Array.from({ length: 15 }, (_, i) => [`Card ${i}`, 4]),
+    );
+    assert.deepEqual(deckWarnings(legal, {}, 'modern'), []);
   });
 });

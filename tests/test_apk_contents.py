@@ -37,6 +37,7 @@ SCREENS = {
     "collection browsing": "Search your collection",
     "deck list": "New deck name",
     "deck editing": "Still needed",
+    "sideboard panel": "Sideboard (",
     "card browser": "Browse cards",
     "browser filters": "Only mine",
     "rules text search": "Rules text",
