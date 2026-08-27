@@ -88,7 +88,7 @@ export class AppState {
    * every time it cannot reach home would spend most of its life shouting,
    * and the edits are safe either way.
    */
-  async sync(): Promise<AppSnapshot> {
+  async sync(rounds = 0): Promise<AppSnapshot> {
     const outcome = await this.engine.sync();
     const pending = await this.engine.pending();
 
@@ -112,7 +112,19 @@ export class AppState {
 
     // The desktop had more than one round could carry; keep going rather than
     // leaving the phone quietly out of date.
-    if (outcome.more) return this.sync();
+    //
+    // BOUNDED, and that bound is not a formality. This was an unguarded
+    // recursion on a flag the desktop computes, so a desktop that said "more"
+    // without the cursor advancing meant a pull-to-refresh that never
+    // returned and a spinner that never stopped. The cause of that is fixed
+    // on the desktop; the reason it was FOREVER rather than a slow sync was
+    // here, and a phone must not be able to hang on what a peer tells it.
+    //
+    // Twenty rounds is 10,000 events at the desktop's page size — far past
+    // any real backlog — so hitting this is a bug elsewhere, not a big
+    // collection. Stopping leaves the phone partly caught up, which is the
+    // normal state between syncs and self-corrects on the next one.
+    if (outcome.more && rounds < 20) return this.sync(rounds + 1);
     return this.snapshot;
   }
 

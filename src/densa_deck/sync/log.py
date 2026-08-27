@@ -247,6 +247,17 @@ class SyncLog:
         `exclude_device` keeps a peer's own events from being echoed back to
         it. Harmless if they were — they would be recognised as known and
         dropped — but it halves the traffic on every exchange.
+
+        The returned cursor is HOW FAR THIS SCAN REACHED, not the last row it
+        handed back, and that distinction is load-bearing. It used to be the
+        last returned rowid, so a window containing nothing but the peer's own
+        events returned no rows and left the cursor where it was — while the
+        caller was told `more`, because the head was still beyond it. The
+        phone asked again, got the same nothing, and looped forever.
+
+        That is not a rare shape. The tail of this log is entirely the peer's
+        own events immediately after the peer pushes, which is what happens
+        every time someone edits on the phone and then syncs.
         """
         where = "WHERE rowid > ?"
         params: list = [int(cursor)]
@@ -261,11 +272,19 @@ class SyncLog:
                            created_at
                     FROM sync_events {where} ORDER BY rowid LIMIT ?""",
                 params).fetchall()
+            # The end of the window this scan covered, filter or no filter.
+            # Everything up to here has been considered; skipping the peer's
+            # own events is still progress through the log.
+            scanned = conn.execute(
+                """SELECT MAX(rowid) FROM (
+                     SELECT rowid FROM sync_events
+                      WHERE rowid > ? ORDER BY rowid LIMIT ?)""",
+                (int(cursor), int(limit))).fetchone()[0]
 
         events = [SyncEvent(
             event_uid=r[1], device=r[2], seq=r[3], kind=r[4],
             payload=json.loads(r[5]), created_at=r[6]) for r in rows]
-        next_cursor = rows[-1][0] if rows else int(cursor)
+        next_cursor = int(scanned) if scanned is not None else int(cursor)
         return events, next_cursor
 
     def head(self) -> int:
