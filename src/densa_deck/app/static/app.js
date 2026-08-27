@@ -1748,6 +1748,19 @@ async function refreshSettings() {
       if (els.about_version && v.version) {
         els.about_version.textContent = `v${v.version}`;
       }
+      // And the Settings stamp, which is the one a person can read out when
+      // something is wrong. "Which build is this" is where every debugging
+      // conversation starts, and the window title is not where anyone looks.
+      const stamp = document.getElementById("build-version");
+      if (stamp && v.version) stamp.textContent = `Densa Deck v${v.version}`;
+      const detail = document.getElementById("build-detail");
+      if (detail) {
+        // Where its data lives, because two copies of the app pointed at two
+        // directories look identical and disagree about everything.
+        const paths = v.data_dir ? ` · data in ${v.data_dir}` : "";
+        detail.textContent = (v.frozen ? "packaged build" : "running from source")
+          + paths;
+      }
     } catch (e) { /* non-fatal */ }
 
     const status = await callApi("get_system_status");

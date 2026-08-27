@@ -32,6 +32,19 @@ export function ConnectionScreen({ state, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [art, setArt] = useState<ArtReach | null>(null);
+  /**
+   * What each machine thinks you own.
+   *
+   * The phone answers browsing from its own mirror; the PC answers analysis,
+   * overlaps and anything catalogue-shaped. When those two disagree — cards
+   * cleared here that have not reached the PC, or a phone reinstalled with an
+   * empty mirror — every screen is individually telling the truth and the app
+   * as a whole looks broken. Nowhere showed both numbers, so there was no way
+   * to see that was what was happening.
+   */
+  const [counts, setCounts] = useState<
+    { phone: number; desktop: number | null } | null
+  >(null);
 
   useEffect(() => state.subscribe(setSnapshot), [state]);
 
@@ -40,6 +53,16 @@ export function ConnectionScreen({ state, onClose }: Props) {
     setProblem('');
     try {
       setReports(await state.diagnose());
+      // Both sides' totals, before the sync below changes either of them.
+      const phone = (await state.totals()).cards;
+      let desktop: number | null = null;
+      try {
+        const reply = await state.desktopCollections();
+        desktop = reply.master?.cards ?? null;
+      } catch {
+        desktop = null;               // asleep or unreachable; say so, do not guess
+      }
+      setCounts({ phone, desktop });
       // Deliberately separate. Card art comes from Scryfall over the public
       // internet; the collection comes from a machine on the tailnet. They
       // fail independently and the app used to report only one of them.
@@ -70,6 +93,38 @@ export function ConnectionScreen({ state, onClose }: Props) {
       <Text style={styles.summary}>
         {describeConnection(snapshot ?? { connection: 'unknown', pendingEdits: 0 }).text}
       </Text>
+
+      {/*
+        Both sides' totals, side by side. Not a diagnostic curiosity: when the
+        phone says nothing and the PC says four hundred, every screen in the
+        app is correct and the app still looks wrong, and this is the only
+        place that can say which is which.
+      */}
+      {counts ? (
+        <View style={styles.tally}>
+          <Text style={styles.tallyRow}>
+            This phone: <Text style={styles.tallyNum}>{counts.phone}</Text> cards
+          </Text>
+          <Text style={styles.tallyRow}>
+            Your PC:{' '}
+            <Text style={styles.tallyNum}>
+              {counts.desktop === null ? '—' : counts.desktop}
+            </Text>{' '}
+            {counts.desktop === null ? '(couldn’t ask)' : 'cards'}
+          </Text>
+          {counts.desktop !== null && counts.desktop !== counts.phone ? (
+            <Text style={styles.tallyWarn}>
+              {snapshot?.pendingEdits
+                ? `They disagree because ${snapshot.pendingEdits} edit` +
+                  `${snapshot.pendingEdits === 1 ? '' : 's'} from this phone ` +
+                  'haven’t reached your PC. Syncing settles it.'
+                : 'They disagree and there is nothing waiting to send, so one ' +
+                  'of them has cards the other has never heard of. Syncing ' +
+                  'copies the PC’s cards down; it will not delete anything.'}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
@@ -157,6 +212,16 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center' },
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700', flex: 1 },
   close: { color: '#e53e3e', fontSize: 16, fontWeight: '600' },
+  tally: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+  },
+  tallyRow: { color: '#c9ced9', fontSize: 14 },
+  tallyNum: { color: '#e4e6eb', fontWeight: '700' },
+  tallyWarn: { color: '#ecc94b', fontSize: 13, lineHeight: 19, marginTop: 4 },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 20 },
   summary: { color: '#e4e6eb', fontSize: 15, lineHeight: 22 },
   row: {

@@ -689,6 +689,16 @@ Mainboard:
     <!-- ============ SETTINGS VIEW ============ -->
     <section id="view-settings" class="view">
       <div class="panel settings-panel">
+        <!-- Which build this is.
+             It was only in the window title, which is the one place nobody
+             reads out when reporting a problem — and "is the app running the
+             fix" is the first question every debugging session starts with. -->
+        <h2>This build</h2>
+        <div id="build-stamp" class="settings-row build-stamp">
+          <span id="build-version" class="build-version">Densa Deck</span>
+          <span id="build-detail" class="status-text"></span>
+        </div>
+
         <h2>Tier</h2>
         <div id="tier-status" class="settings-row"></div>
 

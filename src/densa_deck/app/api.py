@@ -966,9 +966,21 @@ class AppApi:
 
     @_safe
     def get_current_version(self) -> dict:
-        """Return the version baked into this build."""
+        """Which build this is, and where its data lives.
+
+        The paths matter as much as the number. Two copies of the app — one
+        packaged, one run from source — look identical and can be pointed at
+        different directories, so they disagree about the whole collection
+        while both insisting they are right. Showing where each one reads
+        from turns that from a mystery into a glance.
+        """
         from densa_deck import __version__ as v
-        return {"version": v}
+        return {
+            "version": v,
+            # True in a PyInstaller bundle, false running from source.
+            "frozen": bool(getattr(sys, "frozen", False)),
+            "data_dir": str(Path(self._get_db().db_path).parent),
+        }
 
     @_safe
     def check_for_updates(self, url: str = "https://toolkit.densanon.com/densa-deck-version.json") -> dict:

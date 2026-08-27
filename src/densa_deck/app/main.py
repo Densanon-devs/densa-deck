@@ -37,6 +37,28 @@ def run(debug: bool = False):
         print(f"ERROR: Frontend assets not found at {entry}", file=sys.stderr)
         sys.exit(1)
 
+    # One app at a time, per data directory.
+    #
+    # Two copies share cards.db, collection.db and versions.db, and SQLite in
+    # WAL mode lets both write — so the second window shows a collection the
+    # first has already changed, edits land in whichever process the click
+    # reached, and the two disagree about what you own with nothing on screen
+    # to explain it. Closing a window and opening another is exactly how
+    # someone gets there.
+    #
+    # Taken AFTER the asset check so a broken install still fails with the
+    # message about the actual problem.
+    from densa_deck.app.single_instance import AlreadyRunning, InstanceLock
+
+    lock = InstanceLock(Path(api._get_db().db_path).parent)
+    try:
+        lock.acquire()
+    except AlreadyRunning as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        _report_already_running(exc)
+        api.close()
+        sys.exit(1)
+
     # Pull the version at import time so the window title is informative —
     # the installer shows "Densa Deck" but the running window adds
     # version so users who installed via different channels know what's up.
@@ -59,6 +81,10 @@ def run(debug: bool = False):
 
     def _on_closing():
         api.close()
+        # Released here as well as in the `finally` below: a window closed
+        # normally should free the lock at the moment it closes, not whenever
+        # the interpreter gets round to unwinding.
+        lock.release()
 
     window.events.closing += _on_closing
 
@@ -93,14 +119,20 @@ def run(debug: bool = False):
         _apply_windows_icon(icon)
 
     try:
-        if icon:
-            webview.start(_after_start, debug=debug, icon=str(icon))
-        else:
+        try:
+            if icon:
+                webview.start(_after_start, debug=debug, icon=str(icon))
+            else:
+                webview.start(_after_start, debug=debug)
+        except TypeError:
+            # Older pywebview builds don't accept `icon`. Losing it is not
+            # worth failing to launch over.
             webview.start(_after_start, debug=debug)
-    except TypeError:
-        # Older pywebview builds don't accept `icon`. Losing it is not worth
-        # failing to launch over.
-        webview.start(_after_start, debug=debug)
+    finally:
+        # However the loop ended — closed, crashed, or killed from the task
+        # manager while the interpreter still got to unwind — the next launch
+        # must not find a lock nobody holds.
+        lock.release()
 
 
 def _apply_windows_icon(icon_path, *, timeout: float = 8.0) -> bool:
@@ -214,6 +246,51 @@ def _set_windows_app_id() -> None:
             "Densanon.DensaDeck")
     except Exception:
         pass  # cosmetic only — never block launch
+
+
+def _report_already_running(exc) -> None:
+    """Say so in a window, not only on a console nobody is watching.
+
+    Launched from a shortcut there is no terminal, so a printed message is a
+    silent failure — which is what "it just does not open" looks like from the
+    outside. Best-effort: if a dialog cannot be raised, the console line above
+    is still there.
+    """
+    message = (
+        f"{exc}\n\n"
+        "Two copies would share the same card and collection databases, "
+        "which is how the two windows end up disagreeing about what you own."
+    )
+    # Only when there is nobody watching a console. A message box is modal —
+    # it blocks until someone clicks it — which is right for a double-clicked
+    # shortcut and wrong for a scripted or startup launch, where it would hang
+    # forever with no one to dismiss it. A real terminal already got the line
+    # printed above.
+    has_console = False
+    try:
+        has_console = bool(sys.stderr and sys.stderr.isatty())
+    except Exception:
+        has_console = False
+    if has_console:
+        return
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                None, message, "Densa Deck is already running", 0x40)
+            return
+        except Exception:
+            pass
+    try:
+        import webview
+
+        webview.create_window("Densa Deck is already running", html=(
+            f"<body style='font:14px system-ui;padding:24px'>{message}</body>"))
+        webview.start()
+    except Exception:
+        pass
 
 
 def _print_install_hint():
