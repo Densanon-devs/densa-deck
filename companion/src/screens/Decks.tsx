@@ -323,6 +323,8 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           <CardBrowser
             state={state}
             onPick={(card) => add(card.name)}
+            onUnpick={(card) => drop(card.name)}
+            previewOnTap
             onClose={() => setBrowsing(false)}
             countFor={(card) =>
               (zone === 'side' ? deck?.sideboard : deck?.decklist)?.[

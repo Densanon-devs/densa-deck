@@ -592,9 +592,74 @@
     ["Other", () => true],
   ];
 
+  /**
+   * How many cards each zone holds, written onto its tab.
+   *
+   * Without it the only way to know the sideboard has fifteen in it is to
+   * click through to it, and a sideboard you have to go and look at is one
+   * you forget to fill.
+   */
+  function renderZoneCounts() {
+    document.querySelectorAll(".zone-tab").forEach(btn => {
+      const zone = btn.dataset.zone;
+      const entries = builderState.deck[zone] || {};
+      const n = Object.values(entries).reduce((a, c) => a + (c.qty || 0), 0);
+      const label = zone.charAt(0).toUpperCase() + zone.slice(1);
+      btn.textContent = n ? `${label} (${n})` : label;
+    });
+  }
+
+  /**
+   * What is over the line, without stopping you crossing it.
+   *
+   * The same rule the phone follows: half of deckbuilding is holding a pile
+   * that is not legal yet, so this counts, says so, and gets out of the way.
+   * Copies are counted across mainboard AND sideboard, because three in one
+   * and two in the other is five you have to own.
+   */
+  const UNLIMITED = new Set([
+    "plains", "island", "swamp", "mountain", "forest", "wastes",
+    "snow-covered plains", "snow-covered island", "snow-covered swamp",
+    "snow-covered mountain", "snow-covered forest", "snow-covered wastes",
+    "relentless rats", "shadowborn apostle", "rat colony",
+    "persistent petitioners", "dragon's approach", "seven dwarves",
+  ]);
+
+  function renderOverLimit() {
+    const host = e("build-over-limit");
+    if (!host) return;
+    const fmt = (builderState.deck.format || "").toLowerCase();
+    const commander = /commander|brawl|oathbreaker/.test(fmt);
+    const maxCopies = commander ? 1 : 4;
+
+    const totals = {};
+    for (const zone of ["mainboard", "sideboard", "commander"]) {
+      for (const [name, entry] of Object.entries(builderState.deck[zone] || {})) {
+        totals[name] = (totals[name] || 0) + (entry.qty || 0);
+      }
+    }
+
+    const over = Object.entries(totals)
+      .filter(([name, n]) => n > maxCopies && !UNLIMITED.has(name.toLowerCase()))
+      .map(([name, n]) => `${n} copies of ${escape(name)} — ${maxCopies} allowed`);
+
+    const board = Object.values(builderState.deck.sideboard || {})
+      .reduce((a, c) => a + (c.qty || 0), 0);
+    if (!commander && board > 15) {
+      over.push(`${board} in the sideboard — 15 allowed`);
+    }
+
+    host.innerHTML = over.length
+      ? over.map(t => `<p class="build-over-limit-line">${t}</p>`).join("")
+      : "";
+    host.classList.toggle("hidden", !over.length);
+  }
+
   function renderDeck() {
     const host = e("build-deck-body");
     if (!host) return;
+    renderZoneCounts();
+    renderOverLimit();
     const entries = builderState.deck[builderState.activeZone];
     const names = Object.keys(entries);
     // Count summary

@@ -35,11 +35,21 @@ import { reporting } from './report.ts';
 
 interface Props {
   state: AppState;
-  /** What tapping a card does. The deck screen adds it. */
   onPick: (card: CatalogueCard) => void | Promise<void>;
+  /** Offered alongside Add when the caller can take one back out. */
+  onUnpick?: (card: CatalogueCard) => void | Promise<void>;
   onClose?: () => void;
   /** Shown on each tile, e.g. how many are already in the deck. */
   countFor?: (card: CatalogueCard) => number;
+  /**
+   * Whether a tap opens the card or adds it outright.
+   *
+   * Building a deck, a tap should show you the card — at this size you
+   * cannot read the rules text, and adding something you have not read on a
+   * thumbnail you may have misidentified is a mistake you find later. On the
+   * wishlist, where the answer is just yes, adding straight away is right.
+   */
+  previewOnTap?: boolean;
 }
 
 const COLOURS: Array<{ key: string; label: string }> = [
@@ -71,7 +81,15 @@ const TYPES = [
   'Land',
 ];
 
-export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
+export function CardBrowser({
+  state,
+  onPick,
+  onUnpick,
+  onClose,
+  countFor,
+  previewOnTap = false,
+}: Props) {
+  const [preview, setPreview] = useState<CatalogueCard | null>(null);
   const [name, setName] = useState('');
   const [colours, setColours] = useState<string[]>([]);
   const [types, setTypes] = useState<string[]>([]);
@@ -160,7 +178,7 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.filters}>
+      <View style={[styles.filters, styles.filterRow]}>
         {COLOURS.map((colour) => {
           const on = colours.includes(colour.key);
           return (
@@ -178,7 +196,7 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
       </View>
 
       <TextInput
-        style={styles.search}
+        style={[styles.search, styles.filterRow]}
         placeholder="Rules text — deathtouch, draw a card…"
         placeholderTextColor="#8a8f9c"
         value={text}
@@ -190,6 +208,7 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
 
       <ScrollView
         horizontal
+        style={styles.filterRow}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filters}
       >
@@ -210,6 +229,7 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
 
       <ScrollView
         horizontal
+        style={styles.filterRow}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filters}
       >
@@ -263,6 +283,7 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
 
       <ScrollView
         horizontal
+        style={styles.filterRow}
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.filters}
       >
@@ -295,14 +316,16 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
         <Text style={styles.muted}>Nothing matches that.</Text>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.grid}>
+      <ScrollView style={styles.results} contentContainerStyle={styles.grid}>
         {cards.map((card) => {
           const held = countFor?.(card) ?? 0;
           return (
             <Pressable
               key={card.scryfall_id || card.name}
               style={styles.tile}
-              onPress={() => void onPick(card)}
+              onPress={() =>
+                previewOnTap ? setPreview(card) : void onPick(card)
+              }
             >
               <Image
                 source={artSource(card.scryfall_id, 'small')}
@@ -323,14 +346,74 @@ export function CardBrowser({ state, onPick, onClose, countFor }: Props) {
           );
         })}
       </ScrollView>
+
+      {/* The card, big enough to read, and the three things you might want
+          to do with it. */}
+      {preview ? (
+        <View style={styles.previewWrap}>
+          <ScrollView contentContainerStyle={styles.previewInner}>
+            <Image
+              source={artSource(preview.scryfall_id, 'large')}
+              style={styles.previewArt}
+              resizeMode="contain"
+            />
+            <Text style={styles.previewName}>{preview.name}</Text>
+            <Text style={styles.muted}>{preview.type_line}</Text>
+            {countFor ? (
+              <Text style={styles.muted}>
+                {countFor(preview)} in here already
+              </Text>
+            ) : null}
+
+            <View style={styles.previewButtons}>
+              <Pressable
+                style={styles.previewButton}
+                onPress={() => setPreview(null)}
+              >
+                <Text style={styles.previewButtonText}>Close</Text>
+              </Pressable>
+              {onUnpick ? (
+                <Pressable
+                  style={styles.previewButton}
+                  onPress={() => void onUnpick(preview)}
+                >
+                  <Text style={styles.previewButtonText}>Remove</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={[styles.previewButton, styles.previewAdd]}
+                onPress={() => void onPick(preview)}
+              >
+                <Text style={styles.previewAddText}>Add</Text>
+              </Pressable>
+            </View>
+            {/* Stays open on purpose: adding a second copy is one more tap
+                rather than finding the card again. */}
+          </ScrollView>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, gap: 8 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  // Every fixed-height row needs this, and the grid needs `flex: 1`.
+  //
+  // The browser lives in a 560px box. Its rows add up to more than that, so
+  // without a shrink guard React Native compresses them ALL vertically — the
+  // borders survive at full width and the text inside is clipped to nothing,
+  // which reads as pills with no labels and inputs with no placeholder.
+  // Chips also needed flexShrink horizontally; this is the other axis, and
+  // fixing one did not fix the other.
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 0,
+  },
   search: {
+    flexShrink: 0,
     flex: 1,
     backgroundColor: '#1a1d27',
     borderColor: '#2d3142',
@@ -342,6 +425,7 @@ const styles = StyleSheet.create({
   },
   close: { color: '#e53e3e', fontSize: 15, fontWeight: '600' },
   filters: { flexDirection: 'row', gap: 6, alignItems: 'center' },
+  filterRow: { flexGrow: 0, flexShrink: 0 },
   pip: {
     flexShrink: 0,
     width: 36,
@@ -376,6 +460,7 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
   chipText: { color: '#c9ced9', fontSize: 12, flexShrink: 0 },
   chipTextOn: { color: '#ffffff', fontWeight: '700' },
+  results: { flex: 1 },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -403,6 +488,26 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13 },
-  setList: { maxHeight: 130 },
+  previewWrap: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: '#0f1117f2',
+    zIndex: 20,
+  },
+  previewInner: { padding: 16, gap: 8, alignItems: 'center' },
+  previewArt: { width: '86%', aspectRatio: 745 / 1040, borderRadius: 12 },
+  previewName: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
+  previewButtons: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  previewButton: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+  },
+  previewButtonText: { color: '#e4e6eb', fontSize: 15 },
+  previewAdd: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  previewAddText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  setList: { maxHeight: 130, flexShrink: 0 },
   problem: { color: '#e53e3e', fontSize: 12, lineHeight: 18 },
 });

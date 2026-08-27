@@ -2527,3 +2527,13 @@ code {
   cursor: pointer;
 }
 .lists-row input { width: 17px; height: 17px; cursor: pointer; }
+
+/* Over the limit, not blocked at it — the deck builder says so and gets
+   out of the way. Matches the phone's wording and colour. */
+.build-over-limit { margin: 8px 0 4px; }
+.build-over-limit-line {
+  color: #ecc94b;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  margin: 0;
+}
