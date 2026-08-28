@@ -431,3 +431,52 @@ export interface BuiltDeck {
   analysis?: unknown;
   analysis_error?: string;
 }
+
+/** What the PC says after it saves a deck it was handed. */
+export interface SavedToPc {
+  deck_id?: string;
+  version_number?: number;
+  saved_at?: string;
+  /** Combo lines this save broke, if the combo cache is populated. */
+  combos_broken?: Array<{ name?: string }>;
+}
+
+/** What is in a group, what it is worth, and what you would regret selling. */
+export interface GroupReview {
+  collection_uid: string;
+  name: string;
+  stacks: number;
+  copies: number;
+  value_usd: number;
+  unpriced_stacks: number;
+  wanted_elsewhere: Array<{
+    card_name: string;
+    collections: string[];
+    quantity: number;
+    leaving?: number;
+    left_after?: number;
+  }>;
+  cards: Array<{
+    item_id: number;
+    printing_id: string;
+    card_name: string;
+    set_code: string;
+    collector_number: string;
+    finish: string;
+    condition: string;
+    quantity: number;
+    owned?: number;
+    unit_price_usd?: number | null;
+  }>;
+}
+
+/** A manifest rendered for someone else to read or import. */
+export interface GroupManifest {
+  text: string;
+  filename: string;
+  format: string;
+  name: string;
+  copies: number;
+  stacks: number;
+  value_usd: number;
+}

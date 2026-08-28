@@ -23,6 +23,9 @@ import type {
   DeckResolveReply,
   DesktopDeck,
   DesktopDeckDetail,
+  GroupManifest,
+  GroupReview,
+  SavedToPc,
   OverlapsReply,
   TagResult,
   ResolvedSlot,
@@ -530,6 +533,80 @@ export class AppState {
       'decks/list', {},
     );
     return reply.decks ?? [];
+  }
+
+  /**
+   * Push a deck from this phone up to the PC.
+   *
+   * The other half of copying one down, and the half that was missing: a
+   * deck built standing in a shop lived on the phone and nowhere else, which
+   * is the one place it is least useful afterwards. Saved on the PC it gets a
+   * version, static analysis, and everything else the desktop keeps.
+   *
+   * The deck keeps its id, so saving the same deck twice is a new VERSION of
+   * it rather than a second deck with the same name.
+   */
+  async saveDeckToDesktop(
+    deckId: string,
+    name: string,
+    decklistText: string,
+    format = '',
+  ): Promise<SavedToPc> {
+    return this.client.call<SavedToPc>('decks/save', {
+      deck_id: deckId,
+      name,
+      decklist_text: decklistText,
+      format: format || null,
+    });
+  }
+
+  /** What is in a group, what it is worth, and what your decks still want. */
+  async reviewGroup(collectionUid: string): Promise<GroupReview> {
+    return this.client.call<GroupReview>('group/review', {
+      collection_uid: collectionUid,
+    });
+  }
+
+  /** A group as a manifest — the thing you actually hand a buyer. */
+  async exportGroup(
+    collectionUid: string,
+    format: 'csv' | 'decklist' | 'json' = 'decklist',
+  ): Promise<GroupManifest> {
+    return this.client.call<GroupManifest>('group/export', {
+      collection_uid: collectionUid,
+      format,
+    });
+  }
+
+  /**
+   * You bought it: file the card and take it off every list that wanted it.
+   *
+   * The two halves belong together, which is why this is one call rather than
+   * an add followed by a wishlist edit — filing it without clearing the list
+   * leaves you shopping for a card that is already in your bag.
+   *
+   * Needs a printing, because a copy of a card is a copy of some PRINTING and
+   * the collection is keyed that way. A wishlist row that named one supplies
+   * it; one that did not gets a representative resolved first.
+   */
+  async acquireFromWishlist(
+    printingId: string,
+    cardName: string,
+    quantity = 1,
+  ): Promise<void> {
+    await this.client.call('wishlist/acquire', {
+      printing_id: printingId,
+      card_name: cardName,
+      quantity,
+    });
+    // The card is now owned on the PC; pull that down so the phone agrees
+    // rather than showing it as still wanted until the next refresh.
+    await this.sync();
+  }
+
+  /** Stop wanting a card, whichever printings were listed. */
+  async removeFromWishlist(cardName: string): Promise<void> {
+    await this.client.call('wishlist/remove', { card_name: cardName });
   }
 
   async desktopDeck(deckId: string): Promise<DesktopDeckDetail> {

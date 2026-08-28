@@ -32,6 +32,10 @@ interface Props {
 }
 
 export function WishlistScreen({ state, decks }: Props) {
+  // Which row is mid-purchase, so the button can say so and cannot be
+  // pressed twice — buying the same card twice is a real cost, not a
+  // cosmetic one.
+  const [buying, setBuying] = useState('');
   const [rows, setRows] = useState<WishlistRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
@@ -81,6 +85,60 @@ export function WishlistScreen({ state, decks }: Props) {
   useEffect(() => {
     void load().catch(reporting('your wishlist', setProblem));
   }, [load]);
+
+  /**
+   * You bought it.
+   *
+   * Files the card AND takes it off every list that wanted it, in one call,
+   * because the two halves belong together: filing it without clearing the
+   * list leaves you shopping for a card already in your bag, which is the
+   * exact confusion the wishlist exists to prevent.
+   *
+   * Needs a PRINTING, because a copy of a card is a copy of some printing and
+   * that is how the collection is keyed. A row that named one supplies it; a
+   * row that did not gets a representative resolved first — the same
+   * resolution the deck screen uses for art and prices.
+   */
+  const bought = useCallback(
+    async (row: WishlistRow) => {
+      setBuying(row.card_name);
+      setProblem('');
+      try {
+        let printingId = (row.printing_id || '').trim();
+        if (!printingId) {
+          const slots = await state.deckSlots([
+            {
+              name: row.card_name,
+              qty: 1,
+              set_code: row.set_code,
+              collector_number: row.collector_number,
+            },
+          ]);
+          printingId = Object.values(slots)[0]?.printing_id ?? '';
+        }
+        if (!printingId) {
+          setProblem(
+            `Couldn't work out which printing of ${row.card_name} to file. ` +
+              'Scan it instead — the scanner reads the exact one.',
+          );
+          return;
+        }
+        await state.acquireFromWishlist(printingId, row.card_name, 1);
+        await refresh();
+      } catch (err) {
+        setProblem(
+          `${(err as Error).message}. Filing a card you bought happens on ` +
+            'your PC, so it needs your PC to be reachable.',
+        );
+      } finally {
+        setBuying('');
+      }
+    },
+    // `refresh` is defined below and is stable; naming it here would be a
+    // use-before-define in the dependency array, which throws at render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state],
+  );
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -198,6 +256,20 @@ export function WishlistScreen({ state, decks }: Props) {
                   : ''}
               </Text>
             </View>
+            {/*
+              The button that belongs on this screen. You are holding the
+              wishlist in a shop; the moment you buy one is the moment it
+              should stop being on the list.
+            */}
+            <Pressable
+              style={styles.bought}
+              disabled={buying === item.card_name}
+              onPress={() => void bought(item)}
+            >
+              <Text style={styles.boughtText}>
+                {buying === item.card_name ? 'Filing…' : 'Got it'}
+              </Text>
+            </Pressable>
           </View>
         )}
       />
@@ -211,6 +283,14 @@ const styles = StyleSheet.create({
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
   printing: { color: '#68d391', fontSize: 12 },
+  bought: {
+    borderColor: '#38a169',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  boughtText: { color: '#68d391', fontSize: 13, fontWeight: '600' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

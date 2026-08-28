@@ -106,6 +106,11 @@ SCREENS = {
     "build a deck from a shelf": "Build one from a shelf",
     "a built deck says what it could not fill": "short of a legal deck",
     "taking a PC deck to the phone": "Copy to phone",
+    # The three places the phone could START something and not FINISH it.
+    "sending a deck up to the PC": "Save this deck to my PC",
+    "seeing what is in a group": "What's in this group?",
+    "the manifest, on the phone": "whoever is buying",
+    "ticking a card off the wishlist": "Got it",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -136,6 +141,9 @@ BEHAVIOUR = {
     "tag-into-group route": "group/tag-scanned",
     "build-from-collection route": "group/build-deck",
     "PC deck list route": "decks/list",
+    "deck save-to-PC route": "decks/save",
+    "group review route": "group/review",
+    "bought-it route": "wishlist/acquire",
     # The zoomed card is a real overlay, not a panel at the bottom of the
     # page. Inline it sat below a grid that keeps growing — tap a card,
     # scroll on, sixty more results load, and the thing you opened is further

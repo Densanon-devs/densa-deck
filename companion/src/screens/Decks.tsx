@@ -257,6 +257,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [missing, setMissing] = useState<ShortfallRow[]>([]);
   const [analysis, setAnalysis] = useState<string>('');
   const [thinking, setThinking] = useState(false);
+  // What the PC said when it took the deck. Kept on screen rather than as a
+  // flash: "saved" that vanishes is indistinguishable from nothing happening.
+  const [savedToPc, setSavedToPc] = useState('');
   const [problem, setProblem] = useState('');
   const [browsing, setBrowsing] = useState(false);
   // Which half the grid and the +/- act on. The text box always shows
@@ -428,6 +431,42 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     (card: string | DeckEntry) => change(card, -1),
     [change],
   );
+
+  /**
+   * Hand the deck to the PC.
+   *
+   * The other half of copying one down, and the half that was missing. A deck
+   * built standing in a shop lived here and nowhere else — the one place it
+   * is least useful afterwards. On the PC it gets a version, static analysis,
+   * and everything else the desktop keeps.
+   *
+   * Same id, so saving twice is a new VERSION rather than a second deck with
+   * the same name.
+   */
+  const saveToPc = useCallback(async () => {
+    if (!deck) return;
+    setSavedToPc('');
+    setProblem('');
+    try {
+      const said = await state.saveDeckToDesktop(
+        deck.deck_id,
+        deck.name,
+        formatDecklist(deck.decklist, deck.sideboard),
+        deck.format,
+      );
+      const broke = said.combos_broken?.length ?? 0;
+      setSavedToPc(
+        `Saved to your PC${
+          said.version_number ? ` as version ${said.version_number}` : ''
+        }.` + (broke ? ` ${broke} combo line${broke === 1 ? '' : 's'} broke.` : ''),
+      );
+    } catch (err) {
+      setProblem(
+        `${(err as Error).message}. Saving puts the deck on your PC, so it ` +
+          'only works when your PC is reachable.',
+      );
+    }
+  }, [deck, state]);
 
   const analyse = useCallback(async () => {
     if (!deck) return;
@@ -735,6 +774,16 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           ))}
         </>
       )}
+
+      <Text style={styles.section}>On your PC</Text>
+      <Pressable style={styles.secondary} onPress={() => void saveToPc()}>
+        <Text style={styles.secondaryText}>Save this deck to my PC</Text>
+      </Pressable>
+      <Text style={styles.muted}>
+        Puts it where the versions and the deep analysis live. Saving again
+        makes a new version rather than a second deck.
+      </Text>
+      {savedToPc ? <Text style={styles.good}>{savedToPc}</Text> : null}
 
       <Text style={styles.section}>Analysis</Text>
       <Pressable style={styles.secondary} onPress={analyse} disabled={thinking}>

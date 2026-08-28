@@ -26,6 +26,7 @@ import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
+import type { GroupManifest, GroupReview } from '../lib/protocol.ts';
 
 interface Props {
   state: AppState;
@@ -38,6 +39,21 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   const [rows, setRows] = useState<StackRow[]>([]);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
   const [chosen, setChosen] = useState<string | undefined>();
+  /**
+   * What the PC says is in the selected group, and the manifest for it.
+   *
+   * The bundle workflow was taggable from here and reviewable only on the PC,
+   * which is most of the point gone: you tag a thousand cards standing over
+   * the box and then have to walk to a desk to find out what you tagged or
+   * what it is worth.
+   *
+   * Counted on the PC because that is where the prices are and where the
+   * membership maths lives. The phone mirrors what you own, not what every
+   * list claims.
+   */
+  const [review, setReview] = useState<GroupReview | null>(null);
+  const [manifest, setManifest] = useState<GroupManifest | null>(null);
+  const [reviewing, setReviewing] = useState(false);
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
@@ -50,6 +66,46 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   // which is precisely what a filter must not be able to do.
   const [confirmDelete, setConfirmDelete] = useState('');
   const [warming, setWarming] = useState<string[]>([]);
+
+  /** Ask the PC what is in this group. Nothing here changes anything. */
+  const reviewGroup = useCallback(
+    async (uid: string) => {
+      setReviewing(true);
+      setManifest(null);
+      setProblem('');
+      try {
+        setReview(await state.reviewGroup(uid));
+      } catch (err) {
+        setReview(null);
+        setProblem(
+          `${(err as Error).message}. The group total is counted on your PC, ` +
+            'so it needs your PC to be reachable.',
+        );
+      } finally {
+        setReviewing(false);
+      }
+    },
+    [state],
+  );
+
+  /**
+   * The manifest, as text to copy.
+   *
+   * Decklist form rather than CSV: on a phone this gets pasted into a message
+   * to whoever is buying, and a page of comma-separated columns is not that.
+   * The CSV is a file, and files belong on the desktop.
+   */
+  const exportGroup = useCallback(
+    async (uid: string) => {
+      setProblem('');
+      try {
+        setManifest(await state.exportGroup(uid, 'decklist'));
+      } catch (err) {
+        setProblem((err as Error).message);
+      }
+    },
+    [state],
+  );
 
   const load = useCallback(async () => {
     setRows(await state.cards(chosen, search || undefined));
@@ -194,7 +250,14 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           <CollectionBar
             collections={collections}
             selected={chosen ?? ''}
-            onSelect={(uid) => setChosen(uid || undefined)}
+            onSelect={(uid) => {
+              setChosen(uid || undefined);
+              // A review belongs to the group it was asked about. Left on
+              // screen after the selection changes it is a number about
+              // something else.
+              setReview(null);
+              setManifest(null);
+            }}
             onCreate={async (name) => {
               const uid = await state.newCollection(name);
               await load();
@@ -206,6 +269,71 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
               await load();
             }}
           />
+
+          {/*
+            What is in this group, and what it is worth. Only for a named
+            group: "everything I own" already has its own total above, and
+            asking the PC to price the whole collection to repeat it would be
+            a slow way to say nothing.
+          */}
+          {chosen && chosen !== DEFAULT_COLLECTION_UID ? (
+            <View style={styles.groupBox}>
+              <View style={styles.groupRow}>
+                <Pressable
+                  style={[styles.groupBtn, styles.grow]}
+                  onPress={() => void reviewGroup(chosen)}
+                >
+                  <Text style={styles.groupBtnText}>
+                    {reviewing ? 'Asking your PC…' : "What's in this group?"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.groupBtn, styles.grow]}
+                  onPress={() => void exportGroup(chosen)}
+                >
+                  <Text style={styles.groupBtnText}>Manifest</Text>
+                </Pressable>
+              </View>
+
+              {review ? (
+                <>
+                  <Text style={styles.groupTotal}>
+                    {review.copies} card{review.copies === 1 ? '' : 's'} ·{' '}
+                    ${review.value_usd.toFixed(2)}
+                  </Text>
+                  {review.unpriced_stacks ? (
+                    <Text style={styles.muted}>
+                      {review.unpriced_stacks} stacks had no price and are not
+                      in that total.
+                    </Text>
+                  ) : null}
+                  {review.wanted_elsewhere.length ? (
+                    <Text style={styles.groupWarn}>
+                      {review.wanted_elsewhere.length} of these are in decks of
+                      yours:{' '}
+                      {review.wanted_elsewhere
+                        .slice(0, 5)
+                        .map((w) => w.card_name)
+                        .join(', ')}
+                      {review.wanted_elsewhere.length > 5 ? '…' : ''}
+                    </Text>
+                  ) : null}
+                </>
+              ) : null}
+
+              {manifest ? (
+                <>
+                  <Text style={styles.muted}>
+                    {manifest.copies} cards — hold to copy and send it to
+                    whoever is buying.
+                  </Text>
+                  <Text style={styles.manifest} selectable>
+                    {manifest.text}
+                  </Text>
+                </>
+              ) : null}
+            </View>
+          ) : null}
 
         </>
         }
@@ -339,6 +467,32 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 }
 
 const styles = StyleSheet.create({
+  groupBox: {
+    borderColor: '#2d3142',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 8,
+    marginTop: 8,
+  },
+  groupRow: { flexDirection: 'row', gap: 8 },
+  groupBtn: {
+    borderColor: '#38a169',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  groupBtnText: { color: '#68d391', fontSize: 13, fontWeight: '600' },
+  groupTotal: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
+  groupWarn: { color: '#ecc94b', fontSize: 13, lineHeight: 19 },
+  muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
+  manifest: {
+    color: '#c9ced9',
+    fontFamily: 'monospace',
+    fontSize: 11,
+    lineHeight: 16,
+  },
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19, paddingBottom: 6 },
   artRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 4 },
   artButton: {
