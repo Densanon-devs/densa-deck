@@ -266,11 +266,25 @@ def _report_already_running(exc) -> None:
     # shortcut and wrong for a scripted or startup launch, where it would hang
     # forever with no one to dismiss it. A real terminal already got the line
     # printed above.
+    #
+    # `isatty` alone cannot tell those apart: it is False for a shortcut with
+    # no console AND for `densa-deck app > log.txt`, which is a script, has a
+    # console, and is the case that hangs. So on Windows the question is asked
+    # of the process rather than of the stream — GetConsoleWindow returns null
+    # only when there genuinely is no console attached, which is exactly the
+    # double-clicked case and nothing else.
     has_console = False
     try:
         has_console = bool(sys.stderr and sys.stderr.isatty())
     except Exception:
         has_console = False
+    if not has_console and sys.platform == "win32":
+        try:
+            import ctypes
+
+            has_console = bool(ctypes.windll.kernel32.GetConsoleWindow())
+        except Exception:
+            has_console = False
     if has_console:
         return
 

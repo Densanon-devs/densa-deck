@@ -283,3 +283,113 @@ class TestTwoCopiesStartingAtTheSameMoment:
         with pytest.raises(AlreadyRunning):
             lock.acquire()
         assert not lock.held, "it started beside a live copy"
+
+
+class TestTellingTheSecondCopyWhyItWillNotOpen:
+    """The refusal has to be visible, and it must not hang.
+
+    A double-clicked shortcut has no console, so a printed line is a silent
+    failure — which is what "it just does not open" looks like from outside.
+    A modal fixes that and creates the opposite problem: a scripted launch
+    blocks forever on a dialog nobody is there to dismiss.
+
+    `isatty()` cannot separate them. It is False for the shortcut AND for
+    `densa-deck app > log.txt`, which has a console, is a script, and is the
+    one that hangs. Asking the PROCESS whether a console is attached does
+    separate them.
+    """
+
+    def test_a_redirected_launch_is_treated_as_having_a_console(self, monkeypatch):
+        """Output redirected to a file: isatty is False, but there is a
+        console and a person watching a terminal, so no modal."""
+        import sys
+
+        from densa_deck.app import main as main_mod
+
+        class NotATty:
+            def isatty(self):
+                return False
+
+        monkeypatch.setattr(sys, "stderr", NotATty())
+        shown = []
+        monkeypatch.setattr(main_mod.sys, "platform", "win32")
+
+        import ctypes
+        if not hasattr(ctypes, "windll"):
+            pytest.skip("Windows-only path")
+
+        class FakeKernel:
+            @staticmethod
+            def GetConsoleWindow():
+                return 12345            # a console exists
+
+        class FakeUser:
+            @staticmethod
+            def MessageBoxW(*args):
+                shown.append(args)
+                return 1
+
+        class FakeWinDLL:
+            kernel32 = FakeKernel
+            user32 = FakeUser
+
+        monkeypatch.setattr(ctypes, "windll", FakeWinDLL)
+        main_mod._report_already_running(
+            AlreadyRunning(4321, Path("app.lock")))
+        assert not shown, "it raised a modal that nothing would ever dismiss"
+
+    def test_a_shortcut_with_no_console_still_gets_told(self, monkeypatch):
+        """The case the dialog exists for: nothing printed anywhere, so the
+        window is the only way the person finds out."""
+        import ctypes
+        import sys
+
+        from densa_deck.app import main as main_mod
+
+        if not hasattr(ctypes, "windll"):
+            pytest.skip("Windows-only path")
+
+        class NotATty:
+            def isatty(self):
+                return False
+
+        monkeypatch.setattr(sys, "stderr", NotATty())
+        monkeypatch.setattr(main_mod.sys, "platform", "win32")
+        shown = []
+
+        class FakeKernel:
+            @staticmethod
+            def GetConsoleWindow():
+                return 0                # no console at all
+
+        class FakeUser:
+            @staticmethod
+            def MessageBoxW(*args):
+                shown.append(args)
+                return 1
+
+        class FakeWinDLL:
+            kernel32 = FakeKernel
+            user32 = FakeUser
+
+        monkeypatch.setattr(ctypes, "windll", FakeWinDLL)
+        main_mod._report_already_running(
+            AlreadyRunning(4321, Path("app.lock")))
+        assert shown, "the only channel there was, and it said nothing"
+        assert "4321" in shown[0][1], "the message must name the live process"
+
+    def test_a_real_terminal_never_gets_a_dialog(self, monkeypatch):
+        import sys
+
+        from densa_deck.app import main as main_mod
+
+        class IsATty:
+            def isatty(self):
+                return True
+
+        monkeypatch.setattr(sys, "stderr", IsATty())
+        shown = []
+        monkeypatch.setattr(main_mod, "webview", None, raising=False)
+        # Nothing to stub: returning early is the whole behaviour.
+        main_mod._report_already_running(AlreadyRunning(1, Path("app.lock")))
+        assert not shown
