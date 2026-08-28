@@ -97,6 +97,9 @@ SCREENS = {
     # Renaming and deleting a deck, which there was no way to do at all.
     "deck rename and delete": "hold to rename or delete",
     "deleting a deck spares the cards": "never touches the cards",
+    # Building a deck out of ONE collection rather than everything owned —
+    # a grouping you made is usually the shape of the deck you are making.
+    "building from one collection": "Anywhere",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.

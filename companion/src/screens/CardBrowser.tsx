@@ -194,6 +194,27 @@ export function CardBrowser({
     useState<NonNullable<CardQuery['color_match']>>('any');
   const [types, setTypes] = useState<string[]>([]);
   const [ownedOnly, setOwnedOnly] = useState(false);
+  /**
+   * Which collection "only mine" means, or '' for all of them.
+   *
+   * A grouping you have made is usually the shape of the deck you are
+   * making — "the cards in my Modern binder" is a far more useful question
+   * while building than "cards I own somewhere", and the collections were
+   * already there without being reachable from here.
+   *
+   * Only meaningful with `ownedOnly` on, so the chips only appear then.
+   */
+  const [ownedIn, setOwnedIn] = useState('');
+  // From the phone's own mirror, so the list is there with no signal — which
+  // is when someone is most likely to be searching what they physically have.
+  const [shelves, setShelves] = useState<Array<{ collection_uid: string; name: string }>>([]);
+
+  useEffect(() => {
+    void state
+      .collections()
+      .then((rows) => setShelves(rows))
+      .catch(() => setShelves([]));
+  }, [state]);
   const [rarities, setRarities] = useState<string[]>([]);
   const [sets, setSets] = useState<string[]>([]);
   const [sort, setSort] = useState<NonNullable<CardQuery['sort']>>('name');
@@ -221,7 +242,10 @@ export function CardBrowser({
     if (types.length) query.types = types;
     if (rarities.length) query.rarities = rarities;
     if (sets.length) query.set_codes = sets;
-    if (ownedOnly) query.ownership = 'owned';
+    if (ownedOnly) {
+      query.ownership = 'owned';
+      if (ownedIn) query.owned_in = ownedIn;
+    }
 
     // Every field empty would ask the desktop for the entire catalogue.
     if (!term && !colours.length && !types.length &&
@@ -240,7 +264,8 @@ export function CardBrowser({
     } finally {
       setBusy(false);
     }
-  }, [name, colours, colourMode, types, rarities, sets, ownedOnly, sort, state]);
+  }, [name, colours, colourMode, types, rarities, sets, ownedOnly, ownedIn,
+      sort, state]);
 
   // Re-run when a filter changes, but not on every keystroke: the search
   // goes to the PC and typing "Lightning Bolt" would send eleven requests.
@@ -249,7 +274,7 @@ export function CardBrowser({
         !ownedOnly && !name.trim()) return;
     void run().catch(reporting('searching', setProblem));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colours, colourMode, types, rarities, sets, ownedOnly, sort]);
+  }, [colours, colourMode, types, rarities, sets, ownedOnly, ownedIn, sort]);
 
   /**
    * The next page, appended.
@@ -278,7 +303,10 @@ export function CardBrowser({
       if (types.length) query.types = types;
       if (rarities.length) query.rarities = rarities;
       if (sets.length) query.set_codes = sets;
-      if (ownedOnly) query.ownership = 'owned';
+      if (ownedOnly) {
+      query.ownership = 'owned';
+      if (ownedIn) query.owned_in = ownedIn;
+    }
 
       const reply = await state.searchCards(query);
       // Appended by key rather than concatenated blindly: a page boundary
@@ -291,7 +319,7 @@ export function CardBrowser({
       setLoadingMore(false);
     }
   }, [cards.length, total, loadingMore, name, colours, colourMode, types,
-      rarities, sets, ownedOnly, sort, state]);
+      rarities, sets, ownedOnly, ownedIn, sort, state]);
 
   useEffect(() => {
     if (!nearEnd) return;
@@ -524,7 +552,15 @@ export function CardBrowser({
         })}
         <Pressable
           style={[styles.chip, ownedOnly && styles.chipOn]}
-          onPress={() => setOwnedOnly((o) => !o)}
+          onPress={() =>
+            setOwnedOnly((on) => {
+              // Switching it off drops the collection with it. A narrowing
+              // that outlives the filter it narrows is a filter nothing on
+              // screen explains.
+              if (on) setOwnedIn('');
+              return !on;
+            })
+          }
         >
           <Text style={[styles.chipText, ownedOnly && styles.chipTextOn]}>
             Only mine
@@ -532,11 +568,55 @@ export function CardBrowser({
         </Pressable>
       </ScrollView>
 
+      {/*
+        WHICH of your cards. Only while "Only mine" is on, because on its own
+        it would read as "cards in this collection and also every card in
+        Magic", which is not a question anyone is asking.
+      */}
+      {ownedOnly && shelves.length > 1 ? (
+        <ScrollView
+          horizontal
+          style={styles.filterRow}
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filters}
+        >
+          <Pressable
+            style={[styles.chip, !ownedIn && styles.chipOn]}
+            onPress={() => setOwnedIn('')}
+          >
+            <Text style={[styles.chipText, !ownedIn && styles.chipTextOn]}>
+              Anywhere
+            </Text>
+          </Pressable>
+          {shelves.map((shelf) => {
+            const on = ownedIn === shelf.collection_uid;
+            return (
+              <Pressable
+                key={shelf.collection_uid}
+                style={[styles.chip, on && styles.chipOn]}
+                onPress={() => setOwnedIn(on ? '' : shelf.collection_uid)}
+              >
+                <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                  {shelf.name}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      ) : null}
+
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
       {busy ? <ActivityIndicator color="#8a8f9c" /> : null}
 
       {searched && !busy && !cards.length && !problem ? (
-        <Text style={styles.muted}>Nothing matches that.</Text>
+        <Text style={styles.muted}>
+          {ownedIn
+            ? `Nothing in ${
+                shelves.find((c) => c.collection_uid === ownedIn)?.name ??
+                'that collection'
+              } matches that.`
+            : 'Nothing matches that.'}
+        </Text>
       ) : null}
 
       {cards.length ? (

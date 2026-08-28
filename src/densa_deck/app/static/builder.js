@@ -26,6 +26,8 @@
       rarity: "",
       max_price: null,
       ownership: null,
+      // Which collection "cards I own" means. null is all of them.
+      owned_in: null,
       set_code: "",
       limit: 60,
       offset: 0,
@@ -116,10 +118,34 @@
       builderState.query.offset = 0;
       debouncedSearch();
     });
+    // Which collection "cards I own" means. Only offered while the search IS
+    // scoped to what you own — on its own it would read as "cards in this
+    // collection and also every card in Magic", which is not a question.
+    const ownedIn = e("build-owned-in");
+    if (ownedIn) {
+      ownedIn.addEventListener("change", () => {
+        builderState.query.owned_in = ownedIn.value || null;
+        builderState.query.offset = 0;
+        debouncedSearch();
+      });
+      loadOwnedInOptions();
+    }
+
     document.querySelectorAll('input[name="ownership-filter"]').forEach(radio => {
       radio.addEventListener("change", () => {
         if (!radio.checked) return;
         builderState.query.ownership = radio.value || null;
+        // The narrowing goes with the filter it narrows. Left behind, it
+        // keeps applying to a search that no longer mentions ownership, and
+        // nothing on screen says why the results look short.
+        const picker = e("build-owned-in");
+        if (picker) {
+          picker.classList.toggle("hidden", radio.value !== "owned");
+          if (radio.value !== "owned") {
+            picker.value = "";
+            builderState.query.owned_in = null;
+          }
+        }
         builderState.query.offset = 0;
         debouncedSearch();
       });
@@ -484,7 +510,31 @@
     if (idRadio) idRadio.checked = true;
     const ownAll = document.querySelector("input[name='ownership-filter'][value='']");
     if (ownAll) ownAll.checked = true;
+    const ownedInSel = e("build-owned-in");
+    if (ownedInSel) {
+      ownedInSel.value = "";
+      ownedInSel.classList.add("hidden");
+    }
+    builderState.query.owned_in = null;
     debouncedSearch();
+  }
+
+  /** Fill the collection picker from the named collections that exist. */
+  async function loadOwnedInOptions() {
+    const picker = e("build-owned-in");
+    if (!picker) return;
+    try {
+      // An envelope, not a bare list — `{collections, master, ...}`.
+      const reply = await callApi("list_collections");
+      const rows = (reply && reply.collections) || [];
+      picker.innerHTML = '<option value="">In any collection</option>' +
+        rows.map(c =>
+          `<option value="${escape(c.collection_uid)}">${escape(c.name)}` +
+          ` (${c.cards})</option>`).join("");
+    } catch (_e) {
+      // Leave the "any" option. A picker that cannot be filled is a smaller
+      // loss than a search that will not run.
+    }
   }
 
   // ---------------- deck mutations ----------------

@@ -777,3 +777,106 @@ class TestStartingOver:
                          collection_id=trade["collection_id"])
         rows = store.all_stacks_for_sync()
         assert rows[0]["collection_uid"] == trade["collection_uid"]
+
+
+class TestBuildingOutOfOneCollection:
+    """Deckbuilding scoped to a grouping rather than to everything owned.
+
+    "Only the cards in my Modern binder" is a different and far more useful
+    question while building than "cards I own somewhere" — a grouping you
+    have made is usually the shape of the deck you are making. The
+    collections were already there; nothing in the search could reach them.
+    """
+
+    @pytest.fixture
+    def built(self):
+        from densa_deck.app.api import AppApi
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = CardDatabase(db_path=root / "cards.db")
+            from densa_deck.models import Color
+            db.upsert_cards([
+                Card(scryfall_id=f"id{i}", oracle_id=f"o{i}", name=name,
+                     layout=CardLayout.NORMAL, cmc=1, type_line="Artifact",
+                     legalities={"commander": Legality.LEGAL})
+                for i, name in enumerate(
+                    ["Sol Ring", "Lightning Bolt", "Black Lotus"])
+            ])
+            db.close()
+            api = AppApi(db_path=root / "cards.db",
+                         version_db_path=root / "versions.db")
+            api._collection_store = CollectionStore(
+                db_path=root / "collection.db")
+            yield api
+            api.close()
+
+    def _names(self, api, **query):
+        reply = api.search_cards({"ownership": "owned", **query})
+        reply = reply.get("data", reply)
+        return sorted(c["name"] for c in reply.get("cards", [])), reply
+
+    def test_without_a_collection_it_is_everything_owned(self, built):
+        store = built._get_collection_store()
+        store.add_copies("p1", "Sol Ring", quantity=1)
+        store.add_copies("p2", "Lightning Bolt", quantity=1)
+        names, _ = self._names(built)
+        assert names == ["Lightning Bolt", "Sol Ring"]
+
+    def test_naming_one_narrows_to_it(self, built):
+        store = built._get_collection_store()
+        binder = store.create_collection("Modern binder")
+        store.add_copies("p1", "Sol Ring", quantity=1)
+        item = store.add_copies("p2", "Lightning Bolt", quantity=1)
+        store.add_to_collection(item.item_id, binder["collection_id"])
+
+        names, _ = self._names(built, owned_in=binder["collection_uid"])
+        assert names == ["Lightning Bolt"]
+
+    def test_a_card_filed_there_counts_as_much_as_one_tagged(self, built):
+        # Membership OR filing, as everywhere else — a card belongs to a list
+        # either because it was put there or because that is where it lives.
+        store = built._get_collection_store()
+        binder = store.create_collection("Modern binder")
+        store.add_copies("p1", "Sol Ring", quantity=1,
+                         collection_id=binder["collection_id"])
+        names, _ = self._names(built, owned_in=binder["collection_uid"])
+        assert names == ["Sol Ring"]
+
+    def test_an_empty_collection_finds_nothing_rather_than_everything(self, built):
+        """The dangerous default. Falling back to "everything owned" answers
+        a question nobody asked and reads as the filter being ignored."""
+        store = built._get_collection_store()
+        empty = store.create_collection("Nothing here")
+        store.add_copies("p1", "Sol Ring", quantity=1)
+        names, _ = self._names(built, owned_in=empty["collection_uid"])
+        assert names == []
+
+    def test_a_collection_that_no_longer_exists_says_so(self, built):
+        store = built._get_collection_store()
+        store.add_copies("p1", "Sol Ring", quantity=1)
+        names, reply = self._names(built, owned_in="no-such-uid")
+        assert names == []
+        assert "no longer exists" in reply.get("error", "")
+
+    def test_it_does_nothing_without_an_ownership_filter(self, built):
+        # On its own it would mean "cards in this collection AND every card in
+        # Magic", which is not a question.
+        store = built._get_collection_store()
+        binder = store.create_collection("Modern binder")
+        store.add_copies("p1", "Sol Ring", quantity=1)
+        reply = built.search_cards({"owned_in": binder["collection_uid"]})
+        reply = reply.get("data", reply)
+        assert len(reply["cards"]) == 3, "the whole catalogue, unfiltered"
+
+    def test_unowned_can_be_scoped_too(self, built):
+        # "What is NOT in my Modern binder" is a real restocking question.
+        store = built._get_collection_store()
+        binder = store.create_collection("Modern binder")
+        item = store.add_copies("p1", "Sol Ring", quantity=1)
+        store.add_to_collection(item.item_id, binder["collection_id"])
+        reply = built.search_cards({"ownership": "unowned",
+                                    "owned_in": binder["collection_uid"]})
+        reply = reply.get("data", reply)
+        names = sorted(c["name"] for c in reply["cards"])
+        assert names == ["Black Lotus", "Lightning Bolt"]

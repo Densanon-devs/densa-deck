@@ -1160,8 +1160,10 @@ class AppApi:
         """Structured card search powering the Build tab's left column.
 
         `query` is a dict with any of: name, colors, color_match, cmc_min,
-        cmc_max, types, format_legal, rarity, max_price, set_code, limit,
-        offset. See `CardDatabase.search_structured` for semantics. Returns
+        cmc_max, types, format_legal, rarity, max_price, set_code, ownership,
+        owned_in, limit, offset. See `CardDatabase.search_structured` for
+        semantics — except `owned_in`, which is a collection UID and narrows
+        `ownership` to that one grouping. Returns
         `{cards: [...], total: N, offset: N, limit: N}` — the frontend uses
         offset + total to decide whether to show "Load more".
 
@@ -1186,10 +1188,32 @@ class AppApi:
         # (no collection yet), fall through unfiltered instead of returning
         # an empty page the user can't explain.
         ownership = query.get("ownership") or None
+        owned_in = None
         if ownership in ("owned", "unowned"):
             store = self._get_collection_store()
             if not db.attach_collection(store.db_path):
                 ownership = None
+            else:
+                # Narrow it to one grouping, if the caller named one. This is
+                # what makes a collection useful while BUILDING: "only the
+                # cards in my Modern binder" is a different and more useful
+                # question than "only cards I own somewhere".
+                #
+                # The uid rather than the local integer id, because the phone
+                # asks this too and integer ids do not survive the trip.
+                uid = (query.get("owned_in") or "").strip()
+                if uid:
+                    found = store.collection_by_uid(uid)
+                    if found:
+                        owned_in = found["collection_id"]
+                    else:
+                        # A grouping that no longer exists must not silently
+                        # widen the search to everything owned — that answers
+                        # a question nobody asked and looks like the filter
+                        # being ignored.
+                        return {"cards": [], "total": 0, "offset": offset,
+                                "limit": limit,
+                                "error": "That collection no longer exists."}
 
         cards, total = db.search_structured(
             name=query.get("name"),
@@ -1209,6 +1233,7 @@ class AppApi:
             exclude_digital=bool(query.get("exclude_digital")),
             sort=query.get("sort") or "name",
             ownership=ownership,
+            owned_in_collection_id=owned_in,
             limit=limit,
             offset=offset,
         )

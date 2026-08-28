@@ -229,6 +229,19 @@ export interface CardQuery extends Record<string, unknown> {
   sort?: 'name' | 'cmc' | 'cmc_desc' | 'rarity' | 'price';
   /** Omit for the whole catalogue. */
   ownership?: 'owned' | 'unowned';
+  /**
+   * Narrow `ownership` to ONE collection, by uid.
+   *
+   * "Only the cards in my Modern binder" is a different and more useful
+   * question while building a deck than "only cards I own somewhere" — a
+   * grouping you have made is usually the shape of the deck you are making.
+   *
+   * A uid rather than the local integer id, which means nothing across
+   * devices. Ignored unless `ownership` is set: on its own it would read as
+   * "cards in this collection AND every card in Magic", which is not a
+   * question.
+   */
+  owned_in?: string;
   limit?: number;
   offset?: number;
 }

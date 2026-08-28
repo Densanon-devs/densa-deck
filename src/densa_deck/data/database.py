@@ -475,6 +475,7 @@ class CardDatabase:
         rarities: list[str] | None = None,
         max_price: float | None = None,
         ownership: str | None = None,
+        owned_in_collection_id: int | None = None,
         set_code: str | None = None,
         set_codes: list[str] | None = None,
         text: str | None = None,
@@ -502,6 +503,11 @@ class CardDatabase:
           format_legal  — returns only cards whose legalities[format]
                           is "legal" (not "restricted" / "banned").
           rarity        — common / uncommon / rare / mythic.
+          ownership     — "owned" / "unowned", against the whole collection.
+          owned_in_collection_id
+                        — narrows `ownership` to ONE grouping, so a deck can
+                          be built out of a named collection rather than out
+                          of everything owned.
           max_price     — USD ceiling. NULL price_usd rows are NOT
                           excluded (unknown price passes the filter).
           set_code      — 3-letter set code, exact match.
@@ -644,11 +650,30 @@ class CardDatabase:
             # skip it get an unfiltered search rather than an error, since a
             # missing collection means "you own nothing", which would render
             # an empty and confusing result page.
+            scope = ""
+            if owned_in_collection_id is not None:
+                # Narrowed to ONE collection, which is what makes a grouping
+                # usable while building a deck: "only the cards in my Modern
+                # binder" is a different and more useful question than "only
+                # cards I own somewhere".
+                #
+                # Membership OR filing, as everywhere else — a card belongs to
+                # a list either because it was put there or because that is
+                # where it lives, and a filter that knew only one of those
+                # would hide cards from the collection they were scanned into.
+                scope = (
+                    " AND (ci.collection_id = ? OR ci.item_id IN "
+                    "(SELECT item_id FROM collection.collection_membership "
+                    "WHERE collection_id = ?))"
+                )
             owned_expr = (
                 "EXISTS (SELECT 1 FROM collection.collection_items ci "
-                "WHERE ci.quantity > 0 AND ci.card_name = cards.name COLLATE NOCASE)"
+                "WHERE ci.quantity > 0 AND ci.card_name = cards.name COLLATE NOCASE"
+                f"{scope})"
             )
             conditions.append(owned_expr if ownership == "owned" else f"NOT {owned_expr}")
+            if owned_in_collection_id is not None:
+                params.extend([int(owned_in_collection_id)] * 2)
 
         # Types: each token matches the PRIMARY type portion of type_line
         # only — i.e. the substring before the em-dash subtype delimiter.
