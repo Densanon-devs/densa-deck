@@ -2670,3 +2670,43 @@ code {
 }
 
 .history-limit-row input[type="number"] { width: 96px; }
+
+/* ---- card synergy panel ------------------------------------------------ */
+
+.card-synergy { margin-top: 14px; }
+
+.card-synergy h4 {
+  color: #a0aec0;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  margin: 12px 0 4px;
+  text-transform: uppercase;
+}
+
+.synergy-block { border-top: 1px solid #2d3748; padding-top: 4px; }
+
+.synergy-list { list-style: none; margin: 0; padding: 0; }
+
+.synergy-list li {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  padding: 3px 0;
+}
+
+/* A card name inside a sentence needs to read as a card name — otherwise
+   "Blood Artist tokens die to trigger payoffs" is one run-on phrase. */
+.synergy-chip {
+  background: #2d3748;
+  border-radius: 4px;
+  color: #e4e6eb;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* The one thing in this panel that changes what someone does next. */
+.synergy-now {
+  color: #68d391;
+  font-weight: 600;
+}
+
+.synergy-fit { font-size: 0.88rem; margin: 0 0 6px; }

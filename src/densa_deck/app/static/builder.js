@@ -338,6 +338,26 @@
     });
   }
 
+  // What the card panel judges a card against.
+  //
+  // Exposed rather than duplicated: `draftToDecklistText` is already the one
+  // place that knows how to serialise the three zones, and a second copy
+  // would drift the first time a zone was added.
+  //
+  // Returns "" when nothing is loaded, which the card panel treats as "no
+  // deck" rather than as an error — a card has roles either way.
+  window.__builderDecklistText = function () {
+    try {
+      return draftToDecklistText() || "";
+    } catch (_e) {
+      return "";
+    }
+  };
+
+  window.__builderFormat = function () {
+    return (builderState.deck && builderState.deck.format) || "commander";
+  };
+
   // Invalidate after a collection change so badges don't go stale.
   window.__builderInvalidateOwnership = function () {
     for (const k of Object.keys(ownershipCache)) delete ownershipCache[k];

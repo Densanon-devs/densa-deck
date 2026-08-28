@@ -812,7 +812,105 @@
       ${legal ? `<p class="subtle">Legal: ${legal}</p>` : ""}
       ${d.scryfall_url ? `<p><a href="${escape(d.scryfall_url)}" target="_blank" rel="noreferrer">Rulings and printings on Scryfall</a></p>` : ""}
       <p class="subtle card-detail-credit">Card images and data from Scryfall.
-        Not affiliated with Wizards of the Coast.</p>`;
+        Not affiliated with Wizards of the Coast.</p>
+      <div id="card-synergy" class="card-synergy"></div>`;
+
+    // Loaded AFTER the card text is on screen, and never awaited by it. The
+    // synergy report parses a decklist and walks the combo cache; making the
+    // art and the rules text wait on that would turn a fast panel into a
+    // slow one for the sake of a section further down.
+    void renderSynergy(cardName || d.name || "");
+  }
+
+  /**
+   * What this card does here, what it works with, and what it wants.
+   *
+   * The deck it is judged against is whatever is loaded in the builder. With
+   * no deck open the report still comes back — a card has roles and belongs
+   * to combos regardless — so the panel shrinks rather than disappearing.
+   */
+  async function renderSynergy(cardName) {
+    const host = e("card-synergy");
+    if (!host || !cardName) return;
+    host.innerHTML = "<p class=\"panel-hint\">Looking at what this works with…</p>";
+
+    const deckText = (window.__builderDecklistText
+      && window.__builderDecklistText()) || "";
+    const format = window.__builderFormat ? window.__builderFormat() : "commander";
+
+    let r;
+    try {
+      r = await callApi("card_synergy_report", cardName, deckText, format);
+    } catch (err) {
+      host.innerHTML = "";
+      return;                      // a card view is not worth breaking over
+    }
+    if (!r || r.ok === false) { host.innerHTML = ""; return; }
+
+    const chip = (n) => `<span class="synergy-chip">${escape(n)}</span>`;
+
+    // What it is doing here. Only the shortfalls are called out — "you have
+    // twelve ramp and wanted ten" is not a problem, and saying so trains
+    // people to ignore the panel.
+    const fit = r.fit || {};
+    const shorts = (fit.counts || []).filter(c => c.short > 0);
+    const fitLine = (fit.roles || []).length
+      ? `<p class="synergy-fit"><strong>Role:</strong> ${(fit.roles || []).map(escape).join(", ")}`
+        + (shorts.length
+          ? ` — ${shorts.map(c => `you have ${c.have} ${escape(c.role)}, `
+              + `${c.want} is the target`).join("; ")}`
+          : "")
+        + "</p>"
+      : "";
+
+    const inDeck = (r.in_deck || []).length
+      ? `<div class="synergy-block"><h4>Works with, in this deck</h4>
+           <ul class="synergy-list">${(r.in_deck).map(x =>
+             `<li>${chip(x.card_name)} <span class="subtle">${escape(x.reason)}</span></li>`
+           ).join("")}</ul></div>`
+      : "";
+
+    // Combos first among the suggestions, because a card that finishes a
+    // line you already almost have is the one thing here that changes what
+    // somebody does next.
+    const lines = (r.combo_lines || []).length
+      ? `<div class="synergy-block"><h4>Combo lines it is part of</h4>
+           <ul class="synergy-list">${r.combo_lines.map(c =>
+             `<li>with ${c.with.map(chip).join(" + ")}
+                ${c.produces.length ? `<span class="subtle">&rarr; ${escape(c.produces[0])}</span>` : ""}
+                ${c.spellbook_url ? `<a href="${escape(c.spellbook_url)}" target="_blank" rel="noreferrer">line</a>` : ""}
+              </li>`).join("")}</ul></div>`
+      : "";
+
+    const completions = (r.combo_completions || []).length
+      ? `<div class="synergy-block"><h4>Combos this would complete</h4>
+           <ul class="synergy-list">${r.combo_completions.map(c =>
+             `<li>${c.cards.map(chip).join(" + ")}
+                ${c.still_missing.length
+                  ? `<span class="subtle">still needs ${c.still_missing.map(escape).join(", ")}</span>`
+                  : "<span class=\"synergy-now\">completes it</span>"}
+              </li>`).join("")}</ul></div>`
+      : "";
+
+    const suggestions = (r.suggestions || []).length
+      ? `<div class="synergy-block"><h4>Would work well with it</h4>
+           <ul class="synergy-list">${r.suggestions.map(x =>
+             `<li>${chip(x.card_name)}
+                <span class="subtle">${escape(x.reason)}</span>
+                ${x.completes_combo ? "<span class=\"synergy-now\">completes a combo</span>" : ""}
+              </li>`).join("")}</ul></div>`
+      : "";
+
+    const nothing = !inDeck && !lines && !completions && !suggestions;
+    host.innerHTML = fitLine + inDeck + completions + lines + suggestions
+      + (nothing
+        ? `<p class="panel-hint">${r.has_deck
+            ? "Nothing in this deck pairs with it, and nothing obvious to add."
+            : "Open a deck in the Build tab to see how this fits it."}</p>`
+        : "")
+      + (r.has_deck ? "" :
+         "<p class=\"panel-hint subtle\">Judged without a deck — "
+         + "open one in the Build tab for the rest.</p>");
   }
 
   async function openPrintings(cardName) {

@@ -993,6 +993,104 @@ class AppApi:
         }
 
     @_safe
+    def card_synergy_report(self, card_name: str, decklist_text: str = "",
+                            format_: str | None = None) -> dict:
+        """Everything worth saying about one card, in the context of a deck.
+
+        Four answers, because clicking a card asks four questions and the
+        engine could previously answer none of them about a single card:
+        what it does here, what it already works with, what it would work
+        with, and which combo lines it sits in or would complete.
+
+        `decklist_text` empty is a supported case, not an error — a card
+        looked at from the browser with no deck open still has roles and
+        still belongs to combos. The deck-relative parts simply come back
+        empty rather than the call failing.
+
+        No model is involved. Same input, same answer, and it works with
+        nothing loaded.
+        """
+        name = (card_name or "").strip()
+        if not name:
+            return {"ok": False, "error": "Which card?"}
+
+        db = self._get_db()
+        card = db.lookup_by_name(name)
+        if card is None:
+            return {"ok": False,
+                    "error": f"{name} is not in the card database."}
+
+        from densa_deck.analysis import card_synergy
+
+        out: dict = {
+            "card_name": card.name,
+            "printing_id": getattr(card, "scryfall_id", "") or "",
+            # No deck and no analysis: the card's own roles and nothing
+            # deck-relative. `role_fit` returns before it reads the deck.
+            "fit": card_synergy.role_fit(card, None, None),
+            "in_deck": [],
+            "suggestions": [],
+            "combo_lines": [],
+            "combo_completions": [],
+            "has_deck": False,
+        }
+
+        if not (decklist_text or "").strip():
+            return out
+
+        try:
+            entries = parse_auto(decklist_text)
+            fmt = Format(format_) if format_ else Format.COMMANDER
+            deck = resolve_deck(entries, db, name="Deck", format=fmt)
+        except Exception as exc:
+            # The card half is still worth returning. A decklist that will
+            # not parse is a reason to say less, not to say nothing.
+            out["deck_error"] = str(exc)
+            return out
+
+        out["has_deck"] = True
+        analysis = run_static_analysis(deck)
+        out["fit"] = card_synergy.role_fit(card, deck, analysis)
+        out["in_deck"] = card_synergy.synergies_in_deck(card, deck)
+        out["in_the_deck"] = any(
+            e.card and e.card.name == card.name for e in deck.entries)
+
+        # Combos, folded in rather than left in their own panel — a card that
+        # completes a line you already almost have is the most useful thing
+        # that can be said about it.
+        completers: set[str] = set()
+        try:
+            cstore = self._get_combo_store()
+            if cstore.combo_count() > 0:
+                from densa_deck.combos import (
+                    detect_combos,
+                    detect_near_miss_combos,
+                )
+                names = [e.card.name for e in deck.entries if e.card]
+                identity = [c.value if hasattr(c, "value") else str(c)
+                            for c in (deck.color_identity or [])]
+                matched = detect_combos(
+                    store=cstore, deck_card_names=names,
+                    deck_color_identity=identity or None, limit=200)
+                near = detect_near_miss_combos(
+                    store=cstore, deck_card_names=names,
+                    deck_color_identity=identity or None, limit=200)
+                out["combo_lines"] = card_synergy.combo_lines_for(card.name, matched)
+                out["combo_completions"] = card_synergy.completions_for(
+                    card.name, near)
+                for miss in near:
+                    for missing in (getattr(miss, "missing_cards", None) or []):
+                        completers.add(str(missing))
+        except Exception:
+            # Combo data is optional and separately downloaded. Its absence
+            # makes this panel smaller, never broken.
+            pass
+
+        out["suggestions"] = card_synergy.suggestions_for_card(
+            card, deck, db, combo_completers=completers)
+        return out
+
+    @_safe
     def record_deck_game(self, deck_id: str, result: str,
                          version_number: int | None = None,
                          opponent: str = "", notes: str = "") -> dict:
