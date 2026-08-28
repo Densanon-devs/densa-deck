@@ -69,7 +69,8 @@ function cacheElements() {
     "editor-record", "log-win-btn", "log-loss-btn", "log-draw-btn",
     "editor-games-btn", "editor-games", "games-tbody", "games-empty",
     "editor-textarea", "editor-notes-input",
-    "editor-save-version-btn", "editor-analyze-btn", "editor-history-btn", "editor-delete-btn",
+    "editor-save-version-btn", "editor-analyze-btn", "editor-build-btn",
+    "editor-history-btn", "editor-delete-btn",
     "editor-duel-btn", "editor-duel", "duel-opponent-select", "duel-sims-select",
     "duel-run-btn", "duel-result",
     "compare-decks-btn", "compare-decks-result",
@@ -266,6 +267,9 @@ async function bootstrap() {
   if (els.log_draw_btn) els.log_draw_btn.addEventListener("click", () => logGame("draw"));
   if (els.editor_games_btn) els.editor_games_btn.addEventListener("click", toggleGameLog);
   els.editor_analyze_btn.addEventListener("click", () => loadIntoAnalyzeTab());
+  if (els.editor_build_btn) {
+    els.editor_build_btn.addEventListener("click", () => loadIntoBuildTab());
+  }
   els.editor_history_btn.addEventListener("click", toggleHistory);
   els.editor_delete_btn.addEventListener("click", deleteCurrentDeck);
   els.editor_duel_btn.addEventListener("click", toggleDuelPanel);
@@ -1397,6 +1401,51 @@ async function loadIntoAnalyzeTab(deckId) {
   toast(`Loaded "${(snap && (snap.name || snap.deck_id)) || "deck"}" into Analyze tab.`, "success");
 }
 
+/**
+ * Open a saved deck in the Build tab.
+ *
+ * The Build tab could only ever hold something started in that session —
+ * search, add, save as a NEW deck, clear — so a deck saved last week could
+ * not be worked on there at all. It is also the tab the card panel asks
+ * "what deck am I looking at", which is why that panel had nothing to say
+ * about decks that existed.
+ *
+ * Loads the SAVED version rather than the editor's textarea: the two differ
+ * whenever there are unsaved edits, and quietly carrying half-finished text
+ * into another tab is how someone ends up with two divergent copies.
+ */
+async function loadIntoBuildTab(deckId) {
+  const target = deckId || state.currentDeckId;
+  if (!target) {
+    toast("Open a saved deck first.", "error");
+    return;
+  }
+  let draft;
+  try {
+    draft = await callApi("deck_as_builder_draft", target);
+  } catch (e) {
+    toast("Could not open that deck: " + e.message, "error");
+    return;
+  }
+  if (!draft || draft.ok === false) {
+    toast((draft && draft.error) || "That deck has no saved version yet.",
+          "error");
+    return;
+  }
+  if (typeof window.__builderLoadDraft !== "function") {
+    toast("The Build tab is not ready yet. Open it once and try again.",
+          "error");
+    return;
+  }
+  switchView("build");
+  window.__builderLoadDraft(draft);
+  const count = ["mainboard", "sideboard", "commander"].reduce(
+    (n, zone) => n + Object.values(draft[zone] || {})
+      .reduce((z, entry) => z + (entry.qty || 0), 0), 0);
+  toast(`Loaded "${draft.name}" (${count} cards) into the Build tab.`,
+        "success");
+}
+
 async function openDeck(deckId) {
   try {
     const snap = await callApi("get_deck_latest", deckId);
@@ -1452,6 +1501,19 @@ async function toggleHistory() {
     els.editor_history.classList.add("hidden");
     return;
   }
+  await renderHistory();
+}
+
+/**
+ * Paint the version table.
+ *
+ * Separate from the toggle so anything that CHANGES the record can repaint
+ * it. Fused together, the Record column only ever refreshed when the panel
+ * was opened — so removing a game updated the header and left the table
+ * showing the old figures until the tab was closed and reopened.
+ */
+async function renderHistory() {
+  if (!state.currentDeckId) return;
   try {
     const versions = await callApi("get_deck_history", state.currentDeckId);
     state.history = versions;
@@ -1547,6 +1609,7 @@ async function logGame(result) {
   if (els.editor_games && !els.editor_games.classList.contains("hidden")) {
     await renderGameLog();
   }
+  await refreshHistoryIfShowing();
   toast(`Logged a ${result}.`, "success");
 }
 
@@ -1558,6 +1621,13 @@ async function toggleGameLog() {
   }
   await renderGameLog();
   els.editor_games.classList.remove("hidden");
+}
+
+/** Repaint the version table, but only when it is actually on screen. */
+async function refreshHistoryIfShowing() {
+  if (els.editor_history && !els.editor_history.classList.contains("hidden")) {
+    await renderHistory();
+  }
 }
 
 async function renderGameLog() {
@@ -1587,6 +1657,7 @@ async function renderGameLog() {
       await callApi("forget_deck_game", +btn.dataset.game, state.currentDeckId);
       await renderGameLog();
       await refreshDeckRecord();
+      await refreshHistoryIfShowing();
     }));
   if (els.games_empty) els.games_empty.classList.toggle("hidden", games.length > 0);
 }

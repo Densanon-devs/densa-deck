@@ -493,3 +493,211 @@ class TestClearingFromTheDesktop:
     def test_clearing_an_empty_collection_sends_nothing(self, api):
         out = api.clear_all_cards("CLEAR")
         assert out.get("data", out)["synced_events"] == 0
+
+
+class TestTheEditableTextCarriesThePrintings:
+    """What the editor puts in the box is what it sends back on save.
+
+    So a reconstruction that dropped the set code did two things at once, and
+    both were reported as separate bugs:
+
+      * it DESTROYED the printing — save a deck twice and the exact cards you
+        chose were gone, replaced by whatever the resolver picks;
+      * and because the deck genuinely differed from the one before it, every
+        press of Save minted a version on a deck nobody had edited.
+
+    The second symptom is the visible one. The first is the one that loses
+    work.
+    """
+
+    @pytest.fixture
+    def api(self):
+        import tempfile
+        from pathlib import Path
+
+        from densa_deck.app.api import AppApi
+        from densa_deck.data.database import CardDatabase
+        from densa_deck.models import Card, CardLayout, Legality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = CardDatabase(db_path=root / "cards.db")
+            db.upsert_cards([
+                Card(scryfall_id="s1", oracle_id="o1", name="Sol Ring",
+                     layout=CardLayout.NORMAL, cmc=1, mana_cost="{1}",
+                     type_line="Artifact",
+                     legalities={"commander": Legality.LEGAL}),
+                Card(scryfall_id="s2", oracle_id="o2", name="Island",
+                     layout=CardLayout.NORMAL, cmc=0, mana_cost="",
+                     type_line="Basic Land — Island",
+                     legalities={"commander": Legality.LEGAL}),
+            ])
+            db.close()
+            made = AppApi(db_path=root / "cards.db",
+                          version_db_path=root / "versions.db")
+            yield made
+            made.close()
+
+    def _round_trip(self, api, text, deck_id="d"):
+        """Save, reload the way the editor does, and save that back."""
+        first = api.save_deck_version(deck_id, "D", text, "commander", "")["data"]
+        editable = api.get_deck_latest(deck_id)["data"]["decklist_text"]
+        second = api.save_deck_version(deck_id, "D", editable,
+                                       "commander", "")["data"]
+        return first, editable, second
+
+    def test_a_named_printing_is_written_back_into_the_text(self, api):
+        _first, editable, _second = self._round_trip(
+            api, "Mainboard:\n1 Sol Ring (cmm) 410\n30 Island\n")
+        assert "(cmm)" in editable and "410" in editable
+
+    def test_and_therefore_survives_being_saved_again(self, api):
+        self._round_trip(api, "Mainboard:\n1 Sol Ring (cmm) 410\n30 Island\n")
+        latest = api._get_vstore().get_latest("d")
+        assert [(p["card_name"], p["set_code"]) for p in latest.printings] == \
+               [("Sol Ring", "cmm")], "the printing was destroyed by a re-save"
+
+    def test_and_therefore_no_phantom_version_is_minted(self, api):
+        _first, _editable, second = self._round_trip(
+            api, "Mainboard:\n1 Sol Ring (cmm) 410\n30 Island\n")
+        assert second["created"] is False
+        assert second["version_number"] == 1
+
+    def test_two_printings_of_one_card_stay_two_lines(self, api):
+        """Collapsing them into `3 Sol Ring` is the same loss by another
+        route — it is exactly what a printing-level decklist exists to
+        avoid."""
+        _first, editable, second = self._round_trip(
+            api, "Mainboard:\n2 Sol Ring (cmm) 410\n1 Sol Ring (ltc) 285\n"
+                 "30 Island\n")
+        assert "2 Sol Ring (cmm) 410" in editable
+        assert "1 Sol Ring (ltc) 285" in editable
+        assert second["created"] is False
+
+    def test_a_deck_that_never_named_a_printing_is_unaffected(self, api):
+        _first, editable, second = self._round_trip(
+            api, "Commander:\n1 Sol Ring\n\nMainboard:\n30 Island\n")
+        assert "(" not in editable, "invented a printing nobody asked for"
+        assert second["created"] is False
+
+    def test_the_total_is_never_inflated_by_the_rewrite(self, api):
+        """The plain-name line has to account for what the printing lines
+        already covered, or a card appears twice and the deck grows."""
+        self._round_trip(api, "Mainboard:\n2 Sol Ring (cmm) 410\n30 Island\n")
+        latest = api._get_vstore().get_latest("d")
+        assert latest.decklist == {"Sol Ring": 2, "Island": 30}
+
+    def test_a_card_in_two_zones_is_not_emitted_at_full_count_in_both(self, api):
+        self._round_trip(
+            api, "Mainboard:\n2 Sol Ring\n30 Island\n\nSideboard:\n1 Sol Ring\n")
+        latest = api._get_vstore().get_latest("d")
+        assert latest.decklist["Sol Ring"] == 3, latest.decklist
+
+
+class TestASavedDeckCanReachTheBuildTab:
+    """The Build tab could only ever hold something started in that session.
+
+    Search, add, save as a NEW deck, clear — and no way to open one you
+    already had. A deck saved last week could not be worked on there at all,
+    and the card panel, which asks the builder what deck it is looking at,
+    therefore had nothing to say about any deck that existed.
+    """
+
+    @pytest.fixture
+    def api(self):
+        import tempfile
+        from pathlib import Path
+
+        from densa_deck.app.api import AppApi
+        from densa_deck.data.database import CardDatabase
+        from densa_deck.models import Card, CardLayout, Legality
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = CardDatabase(db_path=root / "cards.db")
+            db.upsert_cards([
+                Card(scryfall_id="s1", oracle_id="o1", name="Sol Ring",
+                     layout=CardLayout.NORMAL, cmc=1, mana_cost="{1}",
+                     type_line="Artifact",
+                     legalities={"commander": Legality.LEGAL}),
+                Card(scryfall_id="s2", oracle_id="o2", name="Island",
+                     layout=CardLayout.NORMAL, cmc=0, mana_cost="",
+                     type_line="Basic Land — Island",
+                     legalities={"commander": Legality.LEGAL}),
+                Card(scryfall_id="s3", oracle_id="o3", name="Ledger Shredder",
+                     layout=CardLayout.NORMAL, cmc=2, mana_cost="{1}{U}",
+                     type_line="Creature — Bird Advisor",
+                     legalities={"commander": Legality.LEGAL}),
+            ])
+            db.close()
+            made = AppApi(db_path=root / "cards.db",
+                          version_db_path=root / "versions.db")
+            yield made
+            made.close()
+
+    DECK = ("Commander:\n1 Ledger Shredder\n\nMainboard:\n"
+            "2 Sol Ring (cmm) 410\n1 Sol Ring (ltc) 285\n30 Island\n")
+
+    def _draft(self, api):
+        api.save_deck_version("d", "Blue", self.DECK, "commander", "")
+        return api.deck_as_builder_draft("d")["data"]
+
+    def test_it_comes_back_in_the_shape_the_builder_holds(self, api):
+        draft = self._draft(api)
+        assert set(draft) >= {"name", "format", "mainboard", "sideboard",
+                              "commander"}
+        assert draft["name"] == "Blue"
+        assert draft["format"] == "commander"
+
+    def test_the_commander_lands_in_the_commander_zone(self, api):
+        draft = self._draft(api)
+        assert "Ledger Shredder" in draft["commander"]
+        assert "Ledger Shredder" not in draft["mainboard"]
+
+    def test_two_printings_of_a_card_stay_two_slots(self, api):
+        """Merging them is what a printing-level decklist exists to avoid."""
+        draft = self._draft(api)
+        sol = [k for k in draft["mainboard"] if k.startswith("Sol Ring")]
+        assert len(sol) == 2, sol
+        assert {draft["mainboard"][k]["set_code"] for k in sol} == {"cmm", "ltc"}
+
+    def test_no_card_is_gained_or_lost_in_the_conversion(self, api):
+        draft = self._draft(api)
+        total = sum(entry["qty"]
+                    for zone in ("mainboard", "sideboard", "commander")
+                    for entry in draft[zone].values())
+        assert total == 34
+
+    def test_entries_carry_the_facts_the_curve_needs(self, api):
+        """Without these the Build tab renders the deck with no curve, no
+        colours and a validity line that cannot judge anything."""
+        draft = self._draft(api)
+        island = draft["mainboard"]["Island"]
+        assert island["is_land"] is True
+        assert island["type_line"]
+        shredder = draft["commander"]["Ledger Shredder"]
+        assert shredder["is_creature"] is True
+        assert shredder["cmc"] == 2
+
+    def test_a_deck_with_no_saved_version_says_so(self, api):
+        reply = api.deck_as_builder_draft("never-saved")
+        body = reply.get("data", reply)
+        assert body.get("ok") is False
+
+    def test_a_card_missing_from_the_catalogue_is_kept_not_dropped(self, api):
+        """Losing a card because it could not be looked up would be a far
+        worse answer than showing it without curve data."""
+        api.save_deck_version(
+            "odd", "Odd", "Mainboard:\n1 Sol Ring\n30 Island\n", "commander", "")
+        store = api._get_vstore()
+        snap = store.get_latest("odd")
+        # Force a name the catalogue does not know, the way a deck imported
+        # before an ingest would look.
+        store.save_version(
+            deck_id="odd", name="Odd", format="commander",
+            decklist={**snap.decklist, "Ghost Card": 1},
+            zones={**snap.zones, "mainboard": list(snap.zones.get("mainboard", []))
+                   + ["Ghost Card"]})
+        draft = api.deck_as_builder_draft("odd")["data"]
+        assert "Ghost Card" in draft["mainboard"]
+        assert draft["mainboard"]["Ghost Card"]["qty"] == 1

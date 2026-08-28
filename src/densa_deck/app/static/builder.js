@@ -338,6 +338,34 @@
     });
   }
 
+  /**
+   * Replace the draft with a saved deck.
+   *
+   * Marked dirty on purpose. The draft autosaves, and a deck opened here is
+   * a draft like any other — leaving it clean would mean closing the app
+   * loses it, which is not what "open this deck" should mean.
+   */
+  window.__builderLoadDraft = function (draft) {
+    if (!draft || typeof draft !== "object") return;
+    builderState.deck.name = draft.name || "";
+    builderState.deck.format = draft.format || "commander";
+    builderState.deck.mainboard = draft.mainboard || {};
+    builderState.deck.sideboard = draft.sideboard || {};
+    builderState.deck.commander = draft.commander || {};
+    const nameInput = e("build-deck-name");
+    if (nameInput) nameInput.value = builderState.deck.name;
+    const fmtInput = e("build-deck-format");
+    if (fmtInput) fmtInput.value = builderState.deck.format;
+    markDirty();
+    renderDeck();
+    recomputeStats();
+    // The badges and the deck-vs-collection panel are about the deck that is
+    // loaded, so they are stale the instant it changes.
+    if (typeof window.__builderInvalidateOwnership === "function") {
+      window.__builderInvalidateOwnership();
+    }
+  };
+
   // What the card panel judges a card against.
   //
   // Exposed rather than duplicated: `draftToDecklistText` is already the one

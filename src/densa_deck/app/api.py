@@ -582,6 +582,111 @@ class AppApi:
         return _snapshot_to_dict(snap)
 
     @_safe
+    def deck_as_builder_draft(self, deck_id: str) -> dict:
+        """A saved deck in the shape the Build tab holds a draft in.
+
+        The Build tab could only ever hold something built in that session:
+        you could search, add, save as a NEW deck, and clear — with no way to
+        open one you already had. So a deck you saved last week could not be
+        worked on there at all, and the card panel, which asks the builder
+        what deck it is looking at, had nothing to answer with.
+
+        Resolved through the same catalogue lookup the search results use, so
+        the entries carry the facts the curve, the colours and the validity
+        line need. Slots keep the printing they named.
+        """
+        snap = self._get_vstore().get_latest(deck_id)
+        if snap is None:
+            return {"ok": False, "error": f"No saved versions for '{deck_id}'."}
+
+        db = self._get_db()
+        # Which zone each name belongs to, and the printing each slot named.
+        zone_of: dict[str, str] = {}
+        for zone, names in (snap.zones or {}).items():
+            for name in names:
+                zone_of.setdefault(name, zone)
+        printings_for: dict[str, list[dict]] = {}
+        for row in (snap.printings or []):
+            printings_for.setdefault(str(row.get("card_name", "")), []).append(row)
+
+        draft = {"name": snap.name or deck_id,
+                 "format": snap.format or "commander",
+                 "mainboard": {}, "sideboard": {}, "commander": {}}
+
+        def facts(card, name, quantity, printing):
+            set_code = str((printing or {}).get("set_code", "") or "")
+            number = str((printing or {}).get("collector_number", "") or "")
+            out = {
+                "qty": int(quantity), "name": name,
+                "set_code": set_code, "collector_number": number,
+                "printing_id": "",
+                "cmc": 0, "mana_cost": "", "type_line": "",
+                "colors": [], "color_identity": [],
+                "is_land": False, "is_creature": False, "is_instant": False,
+                "is_sorcery": False, "is_artifact": False,
+                "is_enchantment": False, "is_planeswalker": False,
+                "is_battle": False, "scryfall_id": "",
+            }
+            if card is None:
+                # Not in the catalogue. Carried anyway rather than dropped —
+                # losing a card because it could not be looked up would be a
+                # far worse answer than showing it with no curve data.
+                return out
+            type_line = (card.type_line or "")
+            # Read off the PRIMARY type — the part before the em-dash — not
+            # the whole line. Subtypes carry words like "Island" and would
+            # otherwise file a creature under lands.
+            #
+            # Derived rather than taken from the stored `is_land` flags: those
+            # are written during Scryfall ingest and are simply absent on a
+            # card that reached the database any other way, which would give
+            # the Build tab a deck with no lands in its curve.
+            primary = type_line.split("—")[0].lower()
+            out.update({
+                "cmc": card.display_cmc(),
+                "mana_cost": card.mana_cost or "",
+                "type_line": type_line,
+                "colors": [c.value for c in (card.colors or [])],
+                "color_identity": [c.value for c in (card.color_identity or [])],
+                "is_land": "land" in primary,
+                "is_creature": "creature" in primary,
+                "is_instant": "instant" in primary,
+                "is_sorcery": "sorcery" in primary,
+                "is_artifact": "artifact" in primary,
+                "is_enchantment": "enchantment" in primary,
+                "is_planeswalker": "planeswalker" in primary,
+                "is_battle": "battle" in primary,
+                "scryfall_id": card.scryfall_id or "",
+            })
+            return out
+
+        for name, total in (snap.decklist or {}).items():
+            zone = zone_of.get(name, "mainboard")
+            bucket = {"commander": "commander", "sideboard": "sideboard"}.get(
+                zone, "mainboard")
+            card = db.lookup_by_name(name)
+
+            rows = printings_for.get(name, [])
+            spoken_for = 0
+            for row in rows:
+                quantity = int(row.get("quantity", 0) or 0)
+                if quantity <= 0:
+                    continue
+                set_code = str(row.get("set_code", "") or "")
+                number = str(row.get("collector_number", "") or "")
+                # The same key the builder makes for a slot, so two printings
+                # of one card stay two rows rather than merging.
+                key = f"{name}|{set_code}|{number}" if set_code else name
+                draft[bucket][key] = facts(card, name, quantity, row)
+                spoken_for += quantity
+
+            remainder = int(total) - spoken_for
+            if remainder > 0:
+                draft[bucket][name] = facts(card, name, remainder, None)
+
+        return draft
+
+    @_safe
     def get_deck_history(self, deck_id: str) -> list[dict]:
         """Return all version snapshots (newest first) for the history view."""
         versions = self._get_vstore().get_all_versions(deck_id)
@@ -6897,18 +7002,56 @@ def _snapshot_to_text(snap: DeckSnapshot) -> str:
     others trailing) so the reconstructed text is deterministic across
     loads — important because the user will edit and re-save, and a
     shuffled diff would be meaningless noise.
+
+    A slot that named a PRINTING is written back as `1 Sol Ring (cmm) 410`.
+    That is not cosmetic. This text is what the editor puts in the box and
+    what it sends back on save, so a reconstruction that dropped the set code
+    silently destroyed the printing on the next save — and, because the saved
+    deck then genuinely differed from the one before it, minted a version
+    every time somebody pressed Save on a deck they had not touched. Both
+    reported symptoms were the same missing line.
     """
     order = ["commander", "companion", "mainboard", "sideboard", "maybeboard"]
     seen_in_order = [z for z in order if z in snap.zones]
     other_zones = [z for z in snap.zones.keys() if z not in order]
+
+    # Printing rows grouped by the zone they belong to. Each row is one slot
+    # with its own quantity, so two printings of the same card stay two lines
+    # rather than collapsing into one — which is the entire point of a
+    # printing-level decklist.
+    by_zone: dict[str, list[dict]] = {}
+    for row in (snap.printings or []):
+        by_zone.setdefault(str(row.get("zone", "")), []).append(row)
+
+    # How many copies of each name have been written out already, so a card
+    # in two zones is not emitted at full quantity in both.
+    emitted: dict[str, int] = {}
     lines: list[str] = []
+
     for zone in seen_in_order + other_zones:
         lines.append(f"{zone.capitalize()}:")
-        # Count quantities from the decklist, limited to cards listed in this zone
+
+        for row in sorted(by_zone.get(zone, []),
+                          key=lambda r: (str(r.get("card_name", "")),
+                                         str(r.get("set_code", "")),
+                                         str(r.get("collector_number", "")))):
+            name = str(row.get("card_name", ""))
+            qty = int(row.get("quantity", 0) or 0)
+            if not name or qty <= 0:
+                continue
+            set_code = str(row.get("set_code", "") or "").strip()
+            number = str(row.get("collector_number", "") or "").strip()
+            suffix = f" ({set_code}){f' {number}' if number else ''}" if set_code else ""
+            lines.append(f"{qty} {name}{suffix}")
+            emitted[name] = emitted.get(name, 0) + qty
+
+        # Whatever this zone holds that no printing row accounted for.
         for name in sorted(set(snap.zones.get(zone, []))):
-            qty = snap.decklist.get(name, 0)
-            if qty > 0:
-                lines.append(f"{qty} {name}")
+            remaining = snap.decklist.get(name, 0) - emitted.get(name, 0)
+            if remaining > 0:
+                lines.append(f"{remaining} {name}")
+                emitted[name] = emitted.get(name, 0) + remaining
+
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
