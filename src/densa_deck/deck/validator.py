@@ -12,6 +12,22 @@ from densa_deck.models import (
 
 # Format-specific deck size rules
 FORMAT_RULES: dict[Format, dict] = {
+    Format.LIMITED: {
+        # Forty is the FLOOR, not the size. Playing more than forty in
+        # limited is legal and usually a mistake, which is advice rather than
+        # a rule — so there is no max here.
+        "min_deck": 40,
+        "max_deck": None,
+        # You play what you opened. There is no four-copy limit in a pool
+        # format, and enforcing one would call a legal deck illegal.
+        "max_copies": 99,
+        "requires_commander": False,
+        "has_sideboard": True,
+        # Everything you opened and did not play IS the sideboard, so there
+        # is no fifteen-card cap.
+        "max_sideboard": None,
+        "singleton": False,
+    },
     Format.COMMANDER: {
         "min_deck": 100,
         "max_deck": 100,

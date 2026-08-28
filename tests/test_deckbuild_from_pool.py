@@ -263,3 +263,121 @@ class TestThroughTheApi:
         out = out.get("data", out)
         assert out["total_cards"] > 0
         assert "decklist" in out
+
+
+class TestFortyCardLimited:
+    """Draft and sealed, which is the case this builder fits best of all.
+
+    Limited IS a pool format: you open cards and make a deck out of exactly
+    those. Three things separate it from everything else here, and each one
+    breaks something that assumed constructed:
+
+    * **No legality key.** Scryfall publishes none, because there is nothing
+      to publish — everything you opened is legal. A check that reads
+      `legalities['limited']` finds it absent and rejects the whole pool.
+    * **No four-copy limit.** Someone who opened seven of a common may play
+      all seven.
+    * **Forty cards, seventeen of them lands.** Not a scaled-down sixty.
+    """
+
+    def _limited_catalogue(self):
+        # Deliberately NO limited legality on any of these, mirroring real
+        # card data.
+        cards = [
+            _card("Plains", "Basic Land - Plains", 0),
+            _card("Swamp", "Basic Land - Swamp", 0),
+            _card("Off Colour Drake", "Creature - Drake", 4, [Color.BLUE],
+                  power="3"),
+        ]
+        for i in range(14):
+            cards.append(_card(f"White Soldier {i}", "Creature - Soldier",
+                               2 + i % 4, [Color.WHITE], power="3"))
+        for i in range(8):
+            cards.append(_card(f"Black Fiend {i}", "Creature - Horror",
+                               3 + i % 3, [Color.BLACK], power="4"))
+        for i in range(5):
+            cards.append(_card(f"Doom Blade {i}", "Instant", 2, [Color.BLACK],
+                               "Destroy target creature."))
+        for card in cards:
+            card.legalities = {"standard": Legality.LEGAL}
+        return cards
+
+    @pytest.fixture
+    def sealed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cards = self._limited_catalogue()
+            db = CardDatabase(db_path=root / "cards.db")
+            db.upsert_cards(cards)
+            db.close()
+            a = AppApi(db_path=root / "cards.db",
+                       version_db_path=root / "versions.db")
+            a._collection_store = CollectionStore(db_path=root / "collection.db")
+            store = a._collection_store
+            shelf = store.create_collection("Sealed pool")
+            for i, card in enumerate(cards):
+                quantity = (30 if "Basic Land" in card.type_line
+                            else 3 if card.name == "White Soldier 0" else 1)
+                item = store.add_copies(f"p{i}", card.name, quantity=quantity)
+                store.add_to_collection(item.item_id, shelf["collection_id"])
+            yield a, shelf["collection_uid"]
+            a.close()
+
+    def _build(self, sealed):
+        api, uid = sealed
+        return build_from_pool(_pool(api, uid), Format.LIMITED)
+
+    def test_it_builds_forty(self, sealed):
+        built = self._build(sealed)
+        assert built["target_size"] == 40
+        assert built["total_cards"] == 40
+        assert built["short_by"] == 0
+
+    def test_a_missing_legality_does_not_reject_the_whole_pool(self, sealed):
+        """There is no `limited` legality to read. Reading one anyway finds
+        it absent and builds a forty-card deck of nothing."""
+        built = self._build(sealed)
+        assert built["decklist"], "the pool was not thrown away"
+
+    def test_you_may_play_everything_you_opened(self, sealed):
+        # No four-copy rule in a pool format, and enforcing one would call a
+        # legal deck illegal.
+        built = self._build(sealed)
+        assert built["decklist"].get("White Soldier 0", 0) == 3
+
+    def test_seventeen_lands_and_twenty_three_spells(self, sealed):
+        """The land count is decided by the lands role. The filler used to
+        sort the whole pool by mana value, which put basics — costing nothing
+        — at the front of every remaining slot: forty cards came out as
+        twenty-four lands and sixteen spells."""
+        api, _uid = sealed
+        built = self._build(sealed)
+        lands = sum(q for name, q in built["decklist"].items()
+                    if name in ("Plains", "Swamp"))
+        assert 16 <= lands <= 18, f"{lands} lands in a 40-card deck"
+        assert built["total_cards"] - lands >= 22
+
+    def test_it_is_still_two_colours(self, sealed):
+        built = self._build(sealed)
+        assert len(built["colors"]) == 2
+        assert "Off Colour Drake" not in built["decklist"]
+
+    def test_creatures_carry_a_limited_deck(self, sealed):
+        # Threats is the biggest role in limited, not the smallest.
+        built = self._build(sealed)
+        threats = next(r for r in built["roles"] if r["role"] == "threats")
+        assert threats["filled"] >= 14
+
+    def test_commander_is_unaffected_by_the_filler_change(self, api):
+        # The non-lands-first filler applies to every format; a Commander
+        # deck must still reach 100 when the pool allows it.
+        uid = _stock(api, Forest=200, Green_Bear=1, Green_Ramp=1)
+        built = build_from_pool(_pool(api, uid), Format.COMMANDER)
+        assert built["total_cards"] == 100
+
+    def test_the_validator_knows_about_forty_card_decks(self):
+        from densa_deck.deck.validator import FORMAT_RULES
+        rules = FORMAT_RULES[Format.LIMITED]
+        assert rules["min_deck"] == 40
+        assert rules["max_copies"] > 4, "no four-copy limit in a pool format"
+        assert rules["requires_commander"] is False

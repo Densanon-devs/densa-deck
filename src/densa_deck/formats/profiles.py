@@ -172,6 +172,28 @@ BRAWL = FormatProfile(
     archetype_hints=COMMANDER.archetype_hints,
 )
 
+LIMITED = FormatProfile(
+    format=Format.LIMITED,
+    display_name="Limited (draft / sealed)",
+    targets=FormatTargets(
+        # Seventeen lands and twenty-three spells is the shape of nearly every
+        # forty-card deck ever built, and it is a far stronger convention than
+        # anything in constructed — the numbers below are that split, not a
+        # scaled-down sixty.
+        lands=(16, 18), ramp=(0, 2), draw=(0, 3), removal=(2, 5),
+        wipes=(0, 1), average_cmc=(2.8, 3.6), threats=(14, 17),
+        min_deck_size=40,
+        # No four-copy limit. You play what you opened, and someone who
+        # opened seven of a common may play all seven.
+        max_copies=99, singleton=False, starting_life=20,
+    ),
+    specific_recommendations=[
+        "Seventeen lands and twenty-three spells is the default for a reason.",
+        "Two colours. A third costs more games to mana than it wins.",
+        "Creatures win limited games; removal decides which creatures matter.",
+    ],
+)
+
 FORMAT_PROFILES: dict[Format, FormatProfile] = {
     Format.COMMANDER: COMMANDER,
     Format.MODERN: MODERN,
@@ -180,6 +202,7 @@ FORMAT_PROFILES: dict[Format, FormatProfile] = {
     Format.LEGACY: LEGACY,
     Format.PAUPER: PAUPER,
     Format.BRAWL: BRAWL,
+    Format.LIMITED: LIMITED,
 }
 
 

@@ -1102,7 +1102,10 @@ Mainboard:
         <div class="filter-group">
           <label class="filter-label" for="build-from-format">Format</label>
           <select id="build-from-format">
-            <option value="commander">Commander</option>
+            <!-- Limited first: draft and sealed ARE pool formats, so this is
+                 the one building-from-a-collection fits best. -->
+            <option value="limited">Limited (draft / sealed) - 40 cards</option>
+            <option value="commander" selected>Commander</option>
             <option value="modern">Modern</option>
             <option value="standard">Standard</option>
             <option value="pauper">Pauper</option>

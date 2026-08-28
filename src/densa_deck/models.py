@@ -25,6 +25,12 @@ class Format(str, enum.Enum):
     OATHBREAKER = "oathbreaker"
     DUEL = "duel"
     PREMODERN = "premodern"
+    # Draft and sealed. A card POOL format rather than a card-legality one:
+    # everything you opened is legal, there is no four-copy limit, and the
+    # deck is 40 cards. Scryfall publishes no "limited" legality because
+    # there is nothing to publish — which is why the checks that read
+    # `legalities` have to skip it rather than find it absent and refuse.
+    LIMITED = "limited"
 
 
 class Legality(str, enum.Enum):

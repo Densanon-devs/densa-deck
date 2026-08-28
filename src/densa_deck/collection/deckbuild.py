@@ -153,6 +153,12 @@ def _playable(entry: PoolCard, identity: set[str], format_: Format) -> bool:
         return False                      # not in the catalogue; cannot judge
     if not entry.colors.issubset(identity):
         return False
+    if format_ == Format.LIMITED:
+        # Limited is a POOL format, not a legality one: everything you opened
+        # is legal, and Scryfall publishes no "limited" key because there is
+        # nothing to publish. Reading one would find it absent and reject the
+        # entire pool — a 40-card deck of nothing.
+        return True
     legality = entry.card.legalities.get(
         format_.value if isinstance(format_, Format) else str(format_))
     return str(getattr(legality, "value", legality)) in ("legal", "restricted")
@@ -237,18 +243,32 @@ def build_from_pool(pool: list[PoolCard], format_: Format = Format.COMMANDER, *,
                 spent.add(entry.name)
         reports.append(RoleReport(role=role, wanted=wanted, filled=filled))
 
-    # Everything else, cheapest first, until the deck is the right size.
+    # Everything else, until the deck is the right size.
+    #
+    # NON-LANDS FIRST, and that ordering is the whole trick. The land count
+    # was decided deliberately by the lands role; the filler exists to make up
+    # the remaining slots with spells. Sorting the whole pool by mana value
+    # puts basics — which cost nothing — at the front of the queue, and they
+    # win every slot: a forty-card limited deck came out with twenty-four
+    # lands and sixteen spells, which is not a deck anyone would register.
+    #
+    # Lands are still the fallback rather than banned, because a pool with
+    # nothing else left in it should produce a legal deck rather than a short
+    # one, and saying so in the report is better than refusing.
     size = sum(chosen.values())
     if size < targets.min_deck_size:
-        for entry in sorted(playable, key=lambda p: (p.cmc, p.name)):
-            if size >= targets.min_deck_size:
-                break
-            spare = allowance(entry) - chosen.get(entry.name, 0)
-            if spare <= 0:
-                continue
-            take = min(spare, targets.min_deck_size - size)
-            chosen[entry.name] = chosen.get(entry.name, 0) + take
-            size += take
+        for prefer_spells in (True, False):
+            for entry in sorted(playable, key=lambda p: (p.cmc, p.name)):
+                if size >= targets.min_deck_size:
+                    break
+                if entry.is_land is prefer_spells:
+                    continue
+                spare = allowance(entry) - chosen.get(entry.name, 0)
+                if spare <= 0:
+                    continue
+                take = min(spare, targets.min_deck_size - size)
+                chosen[entry.name] = chosen.get(entry.name, 0) + take
+                size += take
 
     return {
         "format": format_.value if isinstance(format_, Format) else str(format_),

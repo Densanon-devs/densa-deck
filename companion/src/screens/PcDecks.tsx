@@ -53,7 +53,10 @@ interface Props {
   onOpenLocal: (deckId: string) => void;
 }
 
-const FORMATS = ['commander', 'modern', 'standard', 'pauper', 'legacy'];
+// Limited first, because it is the format this fits best: draft and sealed
+// ARE pool formats — you open cards and make a deck out of exactly those,
+// which is the whole shape of building from a collection.
+const FORMATS = ['limited', 'commander', 'modern', 'standard', 'pauper', 'legacy'];
 
 export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   const [rows, setRows] = useState<DesktopDeck[] | null>(null);
