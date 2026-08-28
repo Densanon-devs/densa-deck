@@ -139,3 +139,147 @@ class TestSeparateInstallsDoNotBlockEachOther:
         other = data_dir / "elsewhere"
         InstanceLock(data_dir).acquire()
         InstanceLock(other).acquire()             # no raise
+
+
+class TestAPidThatBelongsToSomethingElseNow:
+    """Process ids get reused, and a crashed app's number can end up on a
+    browser tab or Explorer.
+
+    Believing that is the worst outcome the lock has: the app refuses to
+    open, refuses again tomorrow, and the message tells the user to go and
+    end a process that has nothing to do with Densa Deck. So the lock records
+    what program it belonged to, and a live pid running something else counts
+    as gone.
+    """
+
+    def _write(self, data_dir, **fields):
+        (data_dir / "app.lock").write_text(json.dumps(fields), encoding="utf-8")
+
+    def test_a_live_pid_running_a_different_program_is_taken_over(self, data_dir):
+        # This process is certainly alive, and is certainly not that.
+        self._write(data_dir, pid=os.getpid(), program="not-densa-deck.exe")
+        lock = InstanceLock(data_dir)
+        lock.acquire()          # must not raise
+        assert lock.held
+
+    def test_a_live_pid_running_the_same_program_still_blocks(self, data_dir):
+        from densa_deck.app.single_instance import _program_name
+
+        self._write(data_dir, pid=os.getpid(), program=_program_name())
+        with pytest.raises(AlreadyRunning):
+            InstanceLock(data_dir).acquire()
+
+    def test_an_old_lock_with_no_program_recorded_is_still_believed(self, data_dir):
+        """Locks written before this check exist on disk right now. Without a
+        program to compare, the pid alone decides — the previous behaviour,
+        rather than a takeover of a lock that is probably genuine."""
+        self._write(data_dir, pid=os.getpid())
+        with pytest.raises(AlreadyRunning):
+            InstanceLock(data_dir).acquire()
+
+    def test_what_it_writes_can_be_read_back(self, data_dir):
+        lock = InstanceLock(data_dir)
+        lock.acquire()
+        stored = json.loads((data_dir / "app.lock").read_text(encoding="utf-8"))
+        assert stored["pid"] == os.getpid()
+        assert stored["program"], "a lock with no program is the old shape"
+
+
+class TestTwoCopiesStartingAtTheSameMoment:
+    """Look-then-write cannot decide a tie: both copies look, both see an
+    empty directory, both write, and both believe they hold it — the exact
+    situation the lock exists to prevent, reached through the lock. The file
+    therefore has to be created exclusively, so the operating system picks a
+    winner.
+    """
+
+    def test_creating_it_twice_does_not_succeed_twice(self, data_dir):
+        first, second = InstanceLock(data_dir), InstanceLock(data_dir)
+        assert first._create_exclusive() is True
+        assert second._create_exclusive() is False, "both copies took the lock"
+
+    def test_the_loser_does_not_overwrite_the_winners_stamp(self, data_dir):
+        first = InstanceLock(data_dir)
+        first.acquire()
+        with pytest.raises(AlreadyRunning):
+            InstanceLock(data_dir).acquire()
+        stored = json.loads((data_dir / "app.lock").read_text(encoding="utf-8"))
+        assert stored["pid"] == os.getpid()
+
+    def test_a_lock_caught_mid_write_is_not_mistaken_for_rubbish(self, data_dir):
+        """The other sliver: the file is created and the pid written a moment
+        later. A reader that lands in between sees an empty file, and must not
+        conclude the holder is dead and delete it."""
+        (data_dir / "app.lock").write_bytes(b"")      # created, not yet written
+
+        lock = InstanceLock(data_dir)
+        settled = lock._read_settled()
+        # It stays unreadable for the whole wait here, so the answer is None —
+        # but the point is that it WAITED rather than answering instantly.
+        assert settled is None
+        assert (data_dir / "app.lock").exists(), "it deleted a lock it never read"
+
+    def test_a_lock_that_becomes_readable_during_the_wait_is_believed(self, data_dir):
+        """Same sliver, with the writer finishing in time — which is what
+        actually happens, since the two steps are microseconds apart."""
+        path = data_dir / "app.lock"
+        path.write_bytes(b"")
+        lock = InstanceLock(data_dir)
+
+        real_read, calls = lock._read, {"n": 0}
+
+        def finishing_write():
+            calls["n"] += 1
+            if calls["n"] == 2:        # the writer lands between attempts
+                path.write_text(json.dumps({"pid": os.getpid(),
+                                            "program": "densa-deck.exe"}),
+                                encoding="utf-8")
+            return real_read()
+
+        lock._read = finishing_write
+        found = lock._read_settled()
+        assert found is not None and found["pid"] == os.getpid()
+
+    def test_a_stale_lock_is_still_cleared_under_the_new_scheme(self, data_dir):
+        # The exclusive create must not break takeover of a dead lock, which
+        # is the common case and the one people actually hit.
+        (data_dir / "app.lock").write_text(
+            json.dumps({"pid": 999_999_998, "program": "densa-deck.exe"}),
+            encoding="utf-8")
+        lock = InstanceLock(data_dir)
+        lock.acquire()
+        assert lock.held
+
+    def test_a_permanently_corrupt_lock_is_still_taken_over(self, data_dir):
+        """Waiting must not turn into refusing. A file that never becomes
+        readable is rubbish, and rubbish must not lock anyone out."""
+        (data_dir / "app.lock").write_text("{not json", encoding="utf-8")
+        lock = InstanceLock(data_dir)
+        lock.acquire()
+        assert lock.held
+
+    def test_acquiring_waits_for_a_lock_that_is_mid_write(self, data_dir):
+        """Through `acquire`, not around it — the waiting is only worth
+        anything if the path that decides to delete a lock is the one doing
+        it. A live holder caught between creating its lock and writing its
+        pid must not have that lock taken out from under it."""
+        path = data_dir / "app.lock"
+        path.write_bytes(b"")                      # created, pid not yet in it
+
+        from densa_deck.app.single_instance import _program_name
+
+        lock = InstanceLock(data_dir)
+        real_read, calls = lock._read, {"n": 0}
+
+        def finishing_write():
+            calls["n"] += 1
+            if calls["n"] == 2:                    # the holder finishes here
+                path.write_text(
+                    json.dumps({"pid": os.getpid(), "program": _program_name()}),
+                    encoding="utf-8")
+            return real_read()
+
+        lock._read = finishing_write
+        with pytest.raises(AlreadyRunning):
+            lock.acquire()
+        assert not lock.held, "it started beside a live copy"

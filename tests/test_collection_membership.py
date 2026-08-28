@@ -208,3 +208,74 @@ class TestUpgradingAnExistingDatabase:
         again = CollectionStore(db_path=store.db_path)
         after = {c["collection_id"] for c in again.collections_for_item(item.item_id)}
         assert after == before
+
+
+class TestDeletingAListLeavesNothingPointingAtIt:
+    """A collection is gone; the rows saying what was in it must go with it.
+
+    Membership rows outlive their collection harmlessly only because
+    `collection_id` is AUTOINCREMENT and a deleted id is never reissued. That
+    is a property of the sequence counter, not of the data — a restore, a
+    rebuild, or an export/import that renumbers would hand a new list the old
+    id, and it would open holding cards nobody put in it.
+
+    The phone already cleaned these up in `deleteCollection`; the desktop did
+    not, so the same action left the two sides describing different worlds.
+    """
+
+    def _orphans(self, store):
+        with store._connect() as conn:
+            return conn.execute(
+                """SELECT COUNT(*) FROM collection_membership m
+                   WHERE NOT EXISTS (SELECT 1 FROM collections c
+                                     WHERE c.collection_id = m.collection_id)"""
+            ).fetchone()[0]
+
+    def test_merging_a_list_away_leaves_no_orphan_rows(self, store):
+        item = _stack(store)
+        binder = _collection(store, "Trade binder")
+        store.add_to_collection(item.item_id, binder)
+        assert self._orphans(store) == 0
+
+        store.delete_collection(binder)
+        assert self._orphans(store) == 0, "the list is gone; its rows are not"
+
+    def test_and_the_cards_themselves_survive_it(self, store):
+        """The rule that outranks the rest: a filter cannot destroy what it
+        filters."""
+        item = _stack(store, quantity=3)
+        binder = _collection(store, "Trade binder")
+        store.add_to_collection(item.item_id, binder)
+
+        store.delete_collection(binder)
+        assert _owned(store) == 3
+
+    def test_discarding_the_cards_too_also_clears_them(self, store):
+        # The destructive branch is a different code path and forgot the same
+        # thing independently.
+        item = _stack(store, quantity=2)
+        box = _collection(store, "Sold in a lot")
+        store.add_to_collection(item.item_id, box)
+        store.move_to_collection(item.item_id, box)  # and physically filed there
+
+        store.delete_collection(box, discard_cards=True)
+        assert self._orphans(store) == 0
+        assert _owned(store) == 0, "this branch is meant to remove the cards"
+
+    def test_a_reused_id_cannot_inherit_the_old_lists_cards(self, store):
+        """The failure the cleanup exists to prevent, forced by hand."""
+        item = _stack(store)
+        old = _collection(store, "Old list")
+        store.add_to_collection(item.item_id, old)
+        store.delete_collection(old)
+
+        with store._connect() as conn:
+            conn.execute(
+                """INSERT INTO collections
+                       (collection_id, name, is_default,
+                        created_at, updated_at)
+                   VALUES (?, ?, 0, '2026-01-01', '2026-01-01')""", (old, "Brand new list"))
+            conn.commit()
+
+        lists = {c["collection_id"] for c in store.collections_for_item(item.item_id)}
+        assert old not in lists, "a new list opened holding someone else's cards"

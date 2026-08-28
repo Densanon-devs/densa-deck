@@ -381,7 +381,24 @@ def retire_group(store, card_db, collection_uid: str, *,
     against.
     """
     contents = group_contents(store, card_db, collection_uid)
+
+    # Everything, not the first page of it.
+    #
+    # `group_contents` caps what it returns, which is right for a review
+    # screen and catastrophic here: this is the destructive call, and it
+    # finishes by deleting the group. A bundle bigger than one page would
+    # have the cards past the cap left in the collection with the list that
+    # named them thrown away — no record of which they were, and a sale
+    # recorded for a lot that did not all leave.
+    #
+    # `stacks` is the full count regardless of how many rows came back, so
+    # the shortfall is visible rather than something to hope about.
+    if len(contents["cards"]) < int(contents.get("stacks") or 0):
+        contents = group_contents(store, card_db, collection_uid,
+                                  limit=int(contents["stacks"]))
+
     rows = contents["cards"]
+    short = len(rows) < int(contents.get("stacks") or 0)
     if not rows:
         return {"collection_uid": collection_uid, "copies_removed": 0,
                 "stacks_removed": 0, "value_usd": 0.0, "sale_recorded": False}
@@ -440,7 +457,10 @@ def retire_group(store, card_db, collection_uid: str, *,
         except Exception:
             pass
 
-    if delete_group:
+    # Only when the whole group actually left. Deleting a list that still
+    # describes cards sitting in the collection destroys the only record of
+    # which ones they were.
+    if delete_group and not short:
         try:
             collection = _resolve_collection(store, collection_uid)
             # The cards are already gone; this only removes the now-empty
@@ -460,5 +480,10 @@ def retire_group(store, card_db, collection_uid: str, *,
         "sale_recorded": recorded > 0,
         "sale_rows": recorded,
         "sale_price_usd": sale_price_usd,
-        "group_deleted": delete_group,
+        "group_deleted": delete_group and not short,
+        # True when the group held more than could be read back in one go and
+        # some of it is still there. The caller has to be able to say so
+        # rather than reporting a bundle gone that partly is not.
+        "incomplete": short,
+        "stacks_expected": int(contents.get("stacks") or 0),
     }

@@ -395,3 +395,54 @@ class TestRobustness:
                 conn.commit()
         sync_both(pc, phone)
         assert pc.owned_of("p1") == 5
+
+
+class TestTheKindRegistryMatchesWhatCanActuallyBeApplied:
+    """A list of event kinds that disagrees with the applier is a trap.
+
+    `KNOWN_KINDS` listed five of the seven, missing `stack-set` and
+    `membership` — the two the FIRST sync is made of. Nothing read it, so
+    nothing was broken; the next thing to read it as a filter would have
+    dropped the baseline on the floor and shipped a phone that syncs an empty
+    collection, with the registry looking authoritative the whole time.
+
+    So it is checked against the code that does the work, rather than trusted.
+    """
+
+    def _handled_kinds(self):
+        import re
+        from pathlib import Path
+
+        import densa_deck.sync.apply as apply_mod
+
+        source = Path(apply_mod.__file__).read_text(encoding="utf-8")
+        names = set(re.findall(r'KIND_(\w+)\s*:', source))
+        names |= set(re.findall(r'kind == KIND_(\w+)', source))
+        return {getattr(apply_mod, f"KIND_{n}", None) or
+                getattr(__import__("densa_deck.sync.log", fromlist=["x"]),
+                        f"KIND_{n}")
+                for n in names}
+
+    def test_every_applicable_kind_is_in_the_registry(self):
+        from densa_deck.sync.log import KNOWN_KINDS
+
+        missing = self._handled_kinds() - set(KNOWN_KINDS)
+        assert not missing, f"the applier handles {missing}, the registry omits them"
+
+    def test_the_registry_claims_nothing_the_applier_cannot_do(self):
+        from densa_deck.sync.log import KNOWN_KINDS
+
+        extra = set(KNOWN_KINDS) - self._handled_kinds()
+        assert not extra, f"the registry lists {extra}, which nothing applies"
+
+    def test_the_two_that_were_missing_are_the_baseline(self):
+        """Named outright, because these are the ones whose absence would
+        have been invisible until a first sync came back empty."""
+        from densa_deck.sync.log import (
+            KIND_MEMBERSHIP,
+            KIND_STACK_SET,
+            KNOWN_KINDS,
+        )
+
+        assert KIND_STACK_SET in KNOWN_KINDS
+        assert KIND_MEMBERSHIP in KNOWN_KINDS

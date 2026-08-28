@@ -323,9 +323,12 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
 
               {manifest ? (
                 <>
-                  <Text style={styles.muted}>
-                    {manifest.copies} cards — hold to copy and send it to
-                    whoever is buying.
+                  <Text style={manifest.truncated ? styles.groupWarn : styles.muted}>
+                    {manifest.truncated
+                      ? `Only ${manifest.copies} of ${manifest.stacks} stacks `
+                        + 'fit in this manifest — it is not the whole group.'
+                      : `${manifest.copies} cards — hold to copy and send it `
+                        + 'to whoever is buying.'}
                   </Text>
                   <Text style={styles.manifest} selectable>
                     {manifest.text}

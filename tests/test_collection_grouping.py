@@ -880,3 +880,81 @@ class TestBuildingOutOfOneCollection:
         reply = reply.get("data", reply)
         names = sorted(c["name"] for c in reply["cards"])
         assert names == ["Black Lotus", "Lightning Bolt"]
+
+
+class TestRetiringABundleBiggerThanOnePage:
+    """The size this feature exists for.
+
+    `group_contents` caps what it returns, which is right for a review screen
+    and wrong for the destructive call that reads through it. Retiring took
+    the first page, removed those, and then deleted the group — so on a
+    bundle past the cap the remaining cards stayed in the collection while
+    the only list naming them was thrown away, and the sale was recorded for
+    a lot that had not all left.
+
+    Nobody would notice at the time. The reported count looks like a page,
+    and a page looks like a lot of cards.
+    """
+
+    def test_every_stack_leaves_not_just_the_first_page(self, kit):
+        store, db, bundle = kit
+        for n in range(12):
+            item = store.add_copies(SOL, "Sol Ring", quantity=1,
+                                    location=f"box {n}")
+            store.add_to_collection(item.item_id, 
+                                    store.collection_by_uid(bundle)["collection_id"])
+
+        # Force the shortfall the cap would cause on a real bundle.
+        import densa_deck.collection.grouping as grouping
+        real = grouping.group_contents
+        calls = {"n": 0}
+
+        def capped(store_, db_, uid, *, limit=2000):
+            # Only the default page is small — an explicit limit is honoured,
+            # exactly as the real function behaves. If retiring never asks for
+            # more than the default, it never sees past the fifth stack.
+            calls["n"] += 1
+            return real(store_, db_, uid, limit=5 if limit == 2000 else limit)
+
+        grouping.group_contents = capped
+        try:
+            out = retire_group(store, db, bundle)
+        finally:
+            grouping.group_contents = real
+
+        assert calls["n"] >= 2, "it never went back for the rest"
+        items, _ = store.list_items(printing_id=SOL, limit=100)
+        assert sum(i.quantity for i in items) == 0, "cards were left behind"
+        assert out["copies_removed"] == 12
+
+    def test_a_group_it_could_not_fully_read_is_not_deleted(self, kit):
+        """If the whole thing genuinely cannot be read back, the list is the
+        only record of which cards were in it. Keep it."""
+        store, db, bundle = kit
+        cid = store.collection_by_uid(bundle)["collection_id"]
+        for n in range(6):
+            item = store.add_copies(SOL, "Sol Ring", quantity=1,
+                                    location=f"box {n}")
+            store.add_to_collection(item.item_id, cid)
+
+        import densa_deck.collection.grouping as grouping
+        real = grouping.group_contents
+        grouping.group_contents = (
+            lambda s, d, uid, *, limit=2000: real(s, d, uid, limit=3))
+        try:
+            out = retire_group(store, db, bundle)
+        finally:
+            grouping.group_contents = real
+
+        assert out["incomplete"] is True
+        assert out["group_deleted"] is False
+        assert store.collection_by_uid(bundle), "the only record of the lot"
+
+    def test_a_group_that_fits_is_still_deleted_as_before(self, kit):
+        store, db, bundle = kit
+        item = store.add_copies(SOL, "Sol Ring", quantity=1)
+        store.add_to_collection(item.item_id,
+                                store.collection_by_uid(bundle)["collection_id"])
+        out = retire_group(store, db, bundle)
+        assert out["incomplete"] is False
+        assert out["group_deleted"] is True

@@ -479,4 +479,7 @@ export interface GroupManifest {
   copies: number;
   stacks: number;
   value_usd: number;
+  // True when the group held more stacks than one manifest could carry. The
+  // buyer counts the box against this document, so a short one has to say so.
+  truncated?: boolean;
 }

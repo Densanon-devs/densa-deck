@@ -52,8 +52,19 @@ KIND_COLLECTION_DELETE = "collection-delete"
 KIND_DECK_UPSERT = "deck-upsert"
 KIND_DECK_DELETE = "deck-delete"
 
+# Every kind this build knows how to APPLY. Descriptive, never a gate: the
+# comment above is the rule, and an event of an unknown kind from a newer peer
+# has to be stored and forwarded rather than rejected, or an older device in
+# the middle of a chain silently becomes a place where events go to die.
+#
+# It listed five of the seven — `stack-set` and `membership` were missing,
+# which are precisely the two the FIRST sync is made of. Nothing read it, so
+# nothing broke; the next thing to read it would have rejected the baseline
+# and shipped a phone that syncs an empty collection.
 KNOWN_KINDS = frozenset({
     KIND_STACK_DELTA,
+    KIND_STACK_SET,
+    KIND_MEMBERSHIP,
     KIND_COLLECTION_UPSERT,
     KIND_COLLECTION_DELETE,
     KIND_DECK_UPSERT,
@@ -284,8 +295,23 @@ class SyncLog:
         events = [SyncEvent(
             event_uid=r[1], device=r[2], seq=r[3], kind=r[4],
             payload=json.loads(r[5]), created_at=r[6]) for r in rows]
-        next_cursor = int(scanned) if scanned is not None else int(cursor)
-        return events, next_cursor
+
+        # The FURTHER of the two, and it has to be both.
+        #
+        # `scanned` is the end of the window this pass looked at, which is
+        # what moves the cursor past a run of the peer's own events — without
+        # it, a window holding nothing but theirs returns no rows, leaves the
+        # cursor still, and the caller loops forever being told `more`.
+        #
+        # But the two LIMITs count different things: the filtered query limits
+        # MATCHING rows and the window limits SCANNED ones, so the matches can
+        # lie beyond the window. Taking the window alone then leaves the
+        # cursor behind rows already handed over, and they are sent again on
+        # the next round — harmless, because the receiver knows their uids,
+        # and wasteful in exactly the situation the paging exists for.
+        last_returned = rows[-1][0] if rows else 0
+        next_cursor = max(int(scanned or 0), int(last_returned), 0)
+        return events, next_cursor or int(cursor)
 
     def head(self) -> int:
         """The cursor meaning "everything currently known"."""

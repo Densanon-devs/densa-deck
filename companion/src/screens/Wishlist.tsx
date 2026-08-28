@@ -67,6 +67,11 @@ export function WishlistScreen({ state, decks }: Props) {
     }
   }, [search, state]);
 
+
+  const load = useCallback(async () => {
+    setRows(await state.wishlist(await decks.list()));
+  }, [state, decks]);
+
   const want = useCallback(
     async (name: string) => {
       await state.wishlistAdd(name, 1);
@@ -74,17 +79,29 @@ export function WishlistScreen({ state, decks }: Props) {
       setFound([]);
       await load();
     },
-    [state],
+    // Same reason as `bought`: `load` moves with the decks, and a row shows
+    // how many copies yours want. Pinned to [state] this redrew the list
+    // from the decks as they were when the screen opened.
+    [state, load],
   );
-
-
-  const load = useCallback(async () => {
-    setRows(await state.wishlist(await decks.list()));
-  }, [state, decks]);
 
   useEffect(() => {
     void load().catch(reporting('your wishlist', setProblem));
   }, [load]);
+
+  /** Pull from the PC, then redraw the rows. */
+  const refresh = useCallback(async () => {
+    setBusy(true);
+    setProblem('');
+    try {
+      await state.sync();
+      await load();
+    } catch (err) {
+      reporting('syncing', setProblem)(err);
+    } finally {
+      setBusy(false);
+    }
+  }, [state, load]);
 
   /**
    * You bought it.
@@ -134,24 +151,13 @@ export function WishlistScreen({ state, decks }: Props) {
         setBuying('');
       }
     },
-    // `refresh` is defined below and is stable; naming it here would be a
-    // use-before-define in the dependency array, which throws at render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state],
+    // `refresh` genuinely belongs here. It changes whenever the decks do —
+    // it reloads the rows, and a wishlist row carries how many copies your
+    // decks want. Pinned to [state] alone, filing a card would redraw the
+    // list from whichever decks existed when this screen first rendered.
+    [state, refresh],
   );
 
-  const refresh = useCallback(async () => {
-    setBusy(true);
-    setProblem('');
-    try {
-      await state.sync();
-      await load();
-    } catch (err) {
-      reporting('syncing', setProblem)(err);
-    } finally {
-      setBusy(false);
-    }
-  }, [state, load]);
 
   const total = rows.reduce((sum, r) => sum + r.quantity, 0);
 

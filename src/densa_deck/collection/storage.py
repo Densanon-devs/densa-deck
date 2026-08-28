@@ -1008,6 +1008,7 @@ class CollectionStore:
                     return {"deleted": False, "emptied": True,
                             "cards_removed": discarded["cards"],
                             "stacks_removed": discarded["stacks"]}
+                self._forget_memberships(conn, collection_id)
                 conn.execute("DELETE FROM collections WHERE collection_id = ?",
                              (collection_id,))
                 conn.commit()
@@ -1017,10 +1018,28 @@ class CollectionStore:
 
             target = move_to if move_to is not None else default_id
             moved = self._merge_into(conn, collection_id, target)
+            self._forget_memberships(conn, collection_id)
             conn.execute("DELETE FROM collections WHERE collection_id = ?",
                          (collection_id,))
             conn.commit()
             return {"deleted": True, "moved_to": target, "cards_moved": moved}
+
+    def _forget_memberships(self, conn, collection_id: int) -> None:
+        """Nothing is a member of a collection that no longer exists.
+
+        The rows are inert while `collections.collection_id` is AUTOINCREMENT,
+        because a deleted id is never handed out again — but that is a
+        property of the sequence counter, not of the data, and it does not
+        survive every way a database can be rebuilt or restored. If an id ever
+        WERE reused, a brand-new empty collection would silently inherit the
+        cards of the one it replaced.
+
+        The phone has always done this on the same event (`deleteCollection`
+        in `store.ts`); the desktop did not, which is the two sides disagreeing
+        about the same rule.
+        """
+        conn.execute("DELETE FROM collection_membership WHERE collection_id = ?",
+                     (int(collection_id),))
 
     def _discard_collection_cards(self, conn, collection_id: int,
                                   name: str) -> dict:

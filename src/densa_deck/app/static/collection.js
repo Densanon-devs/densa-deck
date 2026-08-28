@@ -563,14 +563,25 @@
       toast("Could not export: " + err.message, "error");
       return;
     }
+    // A manifest that does not list everything is the one document where
+    // that must never be a footnote — it is what the buyer counts the box
+    // against. The export still happens; it just does not get to call itself
+    // complete.
+    if (out.truncated) {
+      toast(`Only ${out.copies} of ${out.stacks} stacks fit in this manifest. `
+            + `Split the group and export it in parts.`, "error");
+    }
+
     // Straight to the clipboard AND offered as a download. A manifest is
     // something you paste into a message as often as you attach it, and
     // guessing which is a guess that is wrong half the time.
     try {
       await navigator.clipboard.writeText(out.text);
-      toast(`${out.copies} cards copied — ${out.filename}`, "success");
+      if (!out.truncated) {
+        toast(`${out.copies} cards copied — ${out.filename}`, "success");
+      }
     } catch (_e) {
-      toast(`Exported ${out.copies} cards.`, "success");
+      if (!out.truncated) toast(`Exported ${out.copies} cards.`, "success");
     }
     const blob = new Blob([out.text], { type: "text/plain;charset=utf-8" });
     const link = document.createElement("a");
@@ -629,8 +640,19 @@
       return;
     }
     hideRetire();
-    toast(`${out.copies_removed} cards left the collection` +
-          (out.sale_recorded ? " and were recorded as a sale." : "."), "success");
+    if (out.incomplete) {
+      // Some of the group did not leave, and the list was therefore kept.
+      // Reported as a warning rather than a success, because "1,400 cards
+      // left" beside a bundle that is still half there is the one message
+      // that must not read as done.
+      toast(`Only ${out.copies_removed} of ${out.stacks_expected} stacks could `
+            + `be retired. The group has been kept so you can finish it.`,
+            "error");
+    } else {
+      toast(`${out.copies_removed} cards left the collection` +
+            (out.sale_recorded ? " and were recorded as a sale." : "."),
+            "success");
+    }
     const picker = e("collection-filter-group");
     if (picker) picker.value = "";
     state.query.collection_id = null;

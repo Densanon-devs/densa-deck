@@ -217,3 +217,75 @@ class TestTheBaselineDeliversEveryStack:
         other = store.add_copies("p1", "Death Wind", quantity=1, location="b")
         members = [e for e in self._baseline(api) if e["kind"] == "membership"]
         assert len({e["event_uid"] for e in members}) == len(members)
+
+
+class TestThePageLimitCountsTwoDifferentThings:
+    """The other half of the cursor, and the bug the first fix introduced.
+
+    Two queries run per page and their LIMITs do not mean the same thing: the
+    one that returns rows limits MATCHES, the one that moves the cursor limits
+    rows SCANNED. So when the peer's own events crowd the front of a window,
+    the matches come from beyond it and the cursor is left behind rows that
+    were already handed over. Ask again and you are given them again.
+
+    Nothing corrupts — the receiver knows those uids and skips them — but the
+    paging burns rounds re-sending what it just sent, in exactly the case
+    paging exists to handle. The cursor has to be the FURTHER of the two.
+    """
+
+    def test_matches_beyond_the_window_are_not_sent_twice(self, log):
+        # Five of the phone's, then three of ours: at limit=3 the first
+        # window is all phone, and the matches all lie past its end.
+        for i in range(5):
+            log.accept(_event(i, "phone"))
+        for i in range(5, 8):
+            log.accept(_event(i, "pc"))
+
+        cursor, seen, rounds = 0, [], 0
+        while rounds < 30:
+            events, cursor = log.since(cursor, limit=3, exclude_device="phone")
+            seen.extend(e.event_uid for e in events)
+            rounds += 1
+            if cursor >= log.head():
+                break
+
+        assert seen == ["e5", "e6", "e7"], "delivered once, in order"
+        assert len(seen) == len(set(seen)), "and never delivered twice"
+
+    def test_a_long_tail_of_the_peers_own_after_the_matches(self, log):
+        """The real shape from the desktop's log: three of ours buried in a
+        long run of the phone's, with more of theirs after."""
+        for i in range(5):
+            log.accept(_event(i, "phone"))
+        for i in range(5, 8):
+            log.accept(_event(i, "pc"))
+        for i in range(8, 20):
+            log.accept(_event(i, "phone"))
+
+        cursor, seen, rounds = 0, [], 0
+        while rounds < 40:
+            events, cursor = log.since(cursor, limit=3, exclude_device="phone")
+            seen.extend(e.event_uid for e in events)
+            rounds += 1
+            if cursor >= log.head():
+                break
+
+        assert sorted(seen) == ["e5", "e6", "e7"]
+        assert rounds < 40, "and it terminated rather than being cut off"
+
+    def test_the_cursor_never_goes_backwards(self, log):
+        """Whatever the mix, each page reports a cursor at least as far as the
+        one before — the property everything else here depends on."""
+        for i in range(30):
+            log.accept(_event(i, "pc" if i % 7 == 0 else "phone"))
+        cursor, rounds = 0, 0
+        while rounds < 60:
+            _events, nxt = log.since(cursor, limit=4, exclude_device="phone")
+            assert nxt >= cursor, f"cursor went {cursor} -> {nxt}"
+            if nxt == cursor and cursor < log.head():
+                raise AssertionError("stalled below the head")
+            cursor = nxt
+            rounds += 1
+            if cursor >= log.head():
+                break
+        assert cursor == log.head()
