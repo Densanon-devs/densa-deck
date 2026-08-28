@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -56,7 +57,14 @@ CREATE TABLE IF NOT EXISTS deck_games (
     result TEXT NOT NULL,
     opponent TEXT DEFAULT '',
     notes TEXT DEFAULT '',
-    played_at TEXT NOT NULL
+    played_at TEXT NOT NULL,
+    -- An identity that means the same thing on both devices.
+    --
+    -- `game_id` is a local autoincrement and says nothing on the other
+    -- phone: two devices logging a game offline each mint id 7, and a sync
+    -- keyed on it would treat two different games as one. Same reason
+    -- membership travels by natural key and collections by uid.
+    game_uid TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_deck ON deck_games(deck_id, version_number);
@@ -167,9 +175,34 @@ class VersionStore:
             with self._schema_lock:
                 if not self._schema_ready:
                     conn.executescript(_VERSION_SCHEMA)
+                    self._migrate_game_uids(conn)
                     self._schema_ready = True
             self._local.conn = conn
         return conn
+
+    def _migrate_game_uids(self, conn) -> None:
+        """Give games already on disk an identity, and keep them unique.
+
+        Rows logged before sync existed have no uid. They are local history
+        and are perfectly real, so they get one minted here rather than being
+        left unsyncable — a device that has been recording results for a
+        month should not have to start again to sync them.
+
+        The index is what makes applying a game idempotent: the same event
+        arriving twice writes one row.
+        """
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(deck_games)").fetchall()}
+        if "game_uid" not in columns:
+            conn.execute("ALTER TABLE deck_games ADD COLUMN game_uid TEXT")
+        conn.execute(
+            """UPDATE deck_games
+               SET game_uid = 'local-' || game_id
+               WHERE game_uid IS NULL OR game_uid = ''""")
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_games_uid
+               ON deck_games(game_uid)""")
+        conn.commit()
 
     def close(self):
         conn = getattr(self._local, "conn", None)
@@ -342,6 +375,78 @@ class VersionStore:
         conn.execute("DELETE FROM deck_history_caps WHERE deck_id = ?", (deck_id,))
         conn.execute("DELETE FROM decks WHERE deck_id = ?", (deck_id,))
         conn.commit()
+
+    # ------------------------------------------------------------ from a peer
+
+    def deck_updated_at(self, deck_id: str) -> str:
+        """When this device last changed the deck. "" if it has never seen it."""
+        row = self.connect().execute(
+            "SELECT updated_at FROM decks WHERE deck_id = ?",
+            (deck_id,)).fetchone()
+        return (row[0] or "") if row else ""
+
+    def upsert_from_sync(self, *, deck_id: str, name: str, format_: str,
+                         decklist: dict, updated_at: str, notes: str = "",
+                         zones: dict | None = None,
+                         printings: list | None = None) -> dict:
+        """A deck as the other device has it.
+
+        LAST WRITE WINS, and it has to actually check. A deck is a document —
+        a half-merged decklist is worse than a lost edit — but "last" means
+        the newer TIMESTAMP, not "whichever event happened to arrive second".
+        Events can be replayed, delivered out of order, or handed over in a
+        baseline long after they were made; applying them blindly would let a
+        stale copy overwrite an edit made since, and the user would watch
+        their afternoon's work revert on a pull.
+
+        Older-or-equal is skipped rather than applied. Equal too: a deck that
+        matches what is already here has nothing to add, and writing it would
+        mint a version out of the sync itself.
+        """
+        incoming = (updated_at or "").strip()
+        mine = self.deck_updated_at(deck_id)
+        if mine and incoming and incoming <= mine:
+            return {"applied": False, "reason": "ours is newer or the same",
+                    "ours": mine, "theirs": incoming}
+
+        snapshot, created = self.save_version_if_changed(
+            deck_id=deck_id, name=name or "Untitled",
+            format=format_ or None,
+            decklist=decklist or {}, zones=zones or {},
+            notes=notes, printings=printings or [])
+
+        # The deck row carries THEIR timestamp, not now(). Stamping it with
+        # the local clock would make every deck look freshly edited on the
+        # device that received it, and the next comparison would go the wrong
+        # way — the receiver would start winning every tie and pushing the
+        # sender's own deck back at it.
+        if incoming:
+            conn = self.connect()
+            conn.execute("UPDATE decks SET updated_at = ? WHERE deck_id = ?",
+                         (incoming, deck_id))
+            conn.commit()
+        return {"applied": True, "created_version": created,
+                "version_number": snapshot.version_number}
+
+    def decks_for_sync(self) -> list[dict]:
+        """Every deck as its latest version — for a device starting fresh."""
+        out = []
+        for row in self.list_decks():
+            deck_id = row.get("deck_id", "")
+            latest = self.get_latest(deck_id)
+            if latest is None:
+                continue
+            out.append({
+                "deck_id": deck_id,
+                "name": row.get("name", "") or latest.name,
+                "format": row.get("format", "") or latest.format,
+                "notes": latest.notes,
+                "decklist": latest.decklist,
+                "zones": latest.zones,
+                "printings": latest.printings,
+                "updated_at": row.get("updated_at", "") or latest.saved_at,
+            })
+        return out
 
     # ------------------------------------------------- versions worth saving
 
@@ -520,7 +625,8 @@ class VersionStore:
 
     def record_game(self, deck_id: str, result: str, *,
                     version_number: int | None = None,
-                    opponent: str = "", notes: str = "") -> dict:
+                    opponent: str = "", notes: str = "",
+                    game_uid: str = "", played_at: str = "") -> dict:
         """Log one game. Returns the deck's record after it.
 
         `version_number` omitted means the version currently on top, which is
@@ -537,12 +643,17 @@ class VersionStore:
             version_number = latest.version_number if latest else 0
 
         conn = self.connect()
+        # OR IGNORE, not OR REPLACE: the uid is the identity, so a game that
+        # is already here is already here. Replacing would rewrite a row the
+        # user may have since edited on this device for no gain.
         conn.execute(
-            """INSERT INTO deck_games
-                   (deck_id, version_number, result, opponent, notes, played_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO deck_games
+                   (deck_id, version_number, result, opponent, notes,
+                    played_at, game_uid)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (deck_id, int(version_number), outcome, opponent, notes,
-             datetime.now().isoformat()))
+             played_at or datetime.now().isoformat(),
+             game_uid or str(uuid.uuid4())))
         conn.commit()
         return self.deck_record(deck_id)
 
@@ -553,6 +664,38 @@ class VersionStore:
                               (int(game_id),))
         conn.commit()
         return cursor.rowcount > 0
+
+    def game_uid_of(self, game_id: int) -> str:
+        """The travelling identity of a local row, for telling the peer."""
+        row = self.connect().execute(
+            "SELECT game_uid FROM deck_games WHERE game_id = ?",
+            (int(game_id),)).fetchone()
+        return (row[0] or "") if row else ""
+
+    def forget_game_by_uid(self, game_uid: str) -> bool:
+        """Remove a game the OTHER device took back."""
+        if not (game_uid or "").strip():
+            return False
+        conn = self.connect()
+        cursor = conn.execute("DELETE FROM deck_games WHERE game_uid = ?",
+                              (game_uid.strip(),))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def games_for_sync(self, deck_id: str = "") -> list[dict]:
+        """Every game, with the identity that travels — for the baseline."""
+        conn = self.connect()
+        sql = ("SELECT deck_id, game_uid, version_number, result, opponent, "
+               "notes, played_at FROM deck_games")
+        params: list = []
+        if deck_id:
+            sql += " WHERE deck_id = ?"
+            params.append(deck_id)
+        return [
+            {"deck_id": r[0], "game_uid": r[1], "version_number": r[2],
+             "result": r[3], "opponent": r[4], "notes": r[5], "played_at": r[6]}
+            for r in conn.execute(sql, params).fetchall()
+        ]
 
     def deck_record(self, deck_id: str) -> dict:
         """Wins, losses, draws and win rate across every version ever."""

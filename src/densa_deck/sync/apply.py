@@ -23,6 +23,7 @@ from densa_deck.sync.log import (
     KIND_COLLECTION_DELETE,
     KIND_COLLECTION_UPSERT,
     KIND_DECK_DELETE,
+    KIND_DECK_GAME,
     KIND_DECK_UPSERT,
     KIND_STACK_DELTA,
     KIND_MEMBERSHIP,
@@ -100,6 +101,7 @@ class SyncApplier:
             KIND_COLLECTION_UPSERT: self._apply_collection_upsert,
             KIND_COLLECTION_DELETE: self._apply_collection_delete,
             KIND_DECK_UPSERT: self._apply_deck_upsert,
+            KIND_DECK_GAME: self._apply_deck_game,
             KIND_DECK_DELETE: self._apply_deck_delete,
         }.get(event.kind)
 
@@ -269,12 +271,58 @@ class SyncApplier:
         deck_id = p.get("deck_id", "")
         if not deck_id:
             return {"applied": False, "reason": "no deck id"}
+
+        # `updated_at` off the PAYLOAD, falling back to when the event was
+        # written. They are not the same thing and the difference decides
+        # who wins: the payload says when the DECK was edited, the event says
+        # when it was put on the wire. A deck edited on a phone at noon and
+        # synced at six must not beat a desktop edit made at three.
+        updated_at = str(p.get("updated_at") or "").strip() or event.created_at
+
         # A deck is a document: last write wins, because a half-merged
-        # decklist is worse than a lost edit.
-        self.deck_store.upsert_from_sync(
+        # decklist is worse than a lost edit. The store does the comparing —
+        # it is the only side that knows what it already has.
+        result = self.deck_store.upsert_from_sync(
             deck_id=deck_id, name=p.get("name", "Untitled"),
             format_=p.get("format", ""), decklist=p.get("decklist", {}),
-            updated_at=event.created_at, notes=p.get("notes", ""))
+            updated_at=updated_at, notes=p.get("notes", ""),
+            zones=p.get("zones") or {},
+            printings=p.get("printings") or [])
+        return {"kind": event.kind, **result}
+
+    def _apply_deck_game(self, event: SyncEvent) -> dict:
+        """One game the other device logged, or took back.
+
+        Idempotent both ways: adding is keyed on `game_uid` so a replay
+        writes one row, and removing a game that is already gone is a no-op
+        rather than an error. That matters because this kind travels in the
+        baseline as well as the log, so it WILL arrive twice.
+        """
+        if self.deck_store is None:
+            return {"applied": False, "reason": "no deck store"}
+        p = event.payload
+        deck_id = p.get("deck_id", "")
+        game_uid = str(p.get("game_uid") or "").strip()
+        if not deck_id or not game_uid:
+            return {"applied": False, "reason": "no deck id or game uid"}
+
+        if p.get("removed"):
+            self.deck_store.forget_game_by_uid(game_uid)
+            return {"applied": True, "kind": event.kind, "removed": True}
+
+        try:
+            self.deck_store.record_game(
+                deck_id, str(p.get("result", "")),
+                version_number=int(p.get("version_number") or 0),
+                opponent=str(p.get("opponent") or ""),
+                notes=str(p.get("notes") or ""),
+                game_uid=game_uid,
+                played_at=str(p.get("played_at") or event.created_at))
+        except ValueError as exc:
+            # A result this build does not understand. Storing it as a game
+            # would corrupt the record; dropping it loudly is the honest
+            # answer for an event from a newer peer.
+            return {"applied": False, "reason": str(exc)}
         return {"applied": True, "kind": event.kind}
 
     def _apply_deck_delete(self, event: SyncEvent) -> dict:
@@ -322,13 +370,39 @@ class SyncApplier:
         })
 
     def record_deck_upsert(self, deck: dict) -> SyncEvent:
+        """Tell the peer about a deck.
+
+        Carries the ZONES and the PRINTINGS as well as the name-keyed
+        decklist. The map alone cannot say which printing a slot meant or
+        which zone a card is in, so a deck round-tripping through sync would
+        come back flattened — the commander in the maindeck and every chosen
+        printing gone. Additive, so an older peer that reads only `decklist`
+        still understands the event.
+        """
         return self.log.record(KIND_DECK_UPSERT, {
             "deck_id": deck.get("deck_id", ""),
             "name": deck.get("name", ""),
             "format": deck.get("format", ""),
             "notes": deck.get("notes", ""),
             "decklist": deck.get("decklist", {}),
+            "zones": deck.get("zones", {}),
+            "printings": deck.get("printings", []),
+            # When the DECK changed, which is not when this was sent.
+            "updated_at": deck.get("updated_at", ""),
         })
 
     def record_deck_delete(self, deck_id: str) -> SyncEvent:
         return self.log.record(KIND_DECK_DELETE, {"deck_id": deck_id})
+
+    def record_deck_game(self, deck_id: str, game: dict) -> SyncEvent:
+        """Tell the peer about a game played, or one taken back."""
+        return self.log.record(KIND_DECK_GAME, {
+            "deck_id": deck_id,
+            "game_uid": game.get("game_uid", ""),
+            "result": game.get("result", ""),
+            "version_number": int(game.get("version_number") or 0),
+            "opponent": game.get("opponent", ""),
+            "notes": game.get("notes", ""),
+            "played_at": game.get("played_at", ""),
+            "removed": bool(game.get("removed")),
+        })

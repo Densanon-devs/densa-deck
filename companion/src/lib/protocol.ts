@@ -20,7 +20,12 @@ export type EventKind =
   | 'collection-upsert'
   | 'collection-delete'
   | 'deck-upsert'
-  | 'deck-delete';
+  | 'deck-delete'
+  // One game, and which version was on the table. Carries its own uid: a
+  // local row id means nothing on the other device. A `removed` flag rides
+  // the same kind rather than needing a second one — taking a game back is
+  // a fact about that game.
+  | 'deck-game';
 
 /**
  * One thing that happened, addressed so any device can apply it.

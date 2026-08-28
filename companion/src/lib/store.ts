@@ -95,6 +95,26 @@ export const SCHEMA: string[] = [
      notes TEXT NOT NULL DEFAULT '',
      updated_at TEXT NOT NULL
    )`,
+  // Games played, and which version of the deck was on the table.
+  //
+  // `game_uid` is the primary key rather than a rowid, because this is the
+  // identity that has to mean the same thing on the desktop: two devices
+  // logging a game offline would each mint row 7, and a sync keyed on that
+  // would treat two different games as one. Same reason a stack travels by
+  // natural key and a collection by uid.
+  //
+  // Being the primary key is also what makes applying idempotent — a game
+  // arriving twice, which it will, writes one row.
+  `CREATE TABLE IF NOT EXISTS deck_games (
+     game_uid TEXT PRIMARY KEY,
+     deck_id TEXT NOT NULL,
+     version_number INTEGER NOT NULL DEFAULT 0,
+     result TEXT NOT NULL,
+     opponent TEXT NOT NULL DEFAULT '',
+     notes TEXT NOT NULL DEFAULT '',
+     played_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_games_deck ON deck_games(deck_id)`,
 ];
 
 /** A stack as it comes back from the mirror. */

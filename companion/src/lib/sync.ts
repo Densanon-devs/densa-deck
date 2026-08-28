@@ -23,6 +23,48 @@ import type {
   SyncEvent,
 } from './protocol.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
+import { DeckStore } from './decks.ts';
+import type { DeckEntry } from './decks.ts';
+
+/**
+ * Deck entries off the wire, in whichever shape the sender speaks.
+ *
+ * A newer peer sends `entries` — a list, with the printing each slot named.
+ * An older one sends only `decklist`, a `{name: count}` map that cannot say
+ * which printing or hold the same card twice. Both are accepted, because a
+ * deck arriving in the older shape is still a deck and refusing it would
+ * make an upgrade on one device silently break sync with the other.
+ */
+export function entriesFromSync(raw: unknown): DeckEntry[] {
+  if (Array.isArray(raw)) {
+    const out: DeckEntry[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const entry = item as Partial<DeckEntry>;
+      const name = String(entry.name ?? '').trim();
+      const qty = Number(entry.qty);
+      if (!name || !Number.isFinite(qty) || qty <= 0) continue;
+      out.push({
+        name,
+        qty,
+        printing_id: entry.printing_id,
+        set_code: entry.set_code,
+        collector_number: entry.collector_number,
+      });
+    }
+    return out;
+  }
+  if (raw && typeof raw === 'object') {
+    const out: DeckEntry[] = [];
+    for (const [name, qty] of Object.entries(raw as Record<string, unknown>)) {
+      const count = Number(qty);
+      if (!name || !Number.isFinite(count) || count <= 0) continue;
+      out.push({ name, qty: count });
+    }
+    return out;
+  }
+  return [];
+}
 
 const CURSOR_KEY = 'sync.cursor';
 const DESKTOP_KEY = 'sync.desktop_device';
@@ -53,17 +95,44 @@ export class SyncEngine {
     return this.device;
   }
   private uuid: UuidSource;
+  /**
+   * Where decks and results land.
+   *
+   * Optional so every existing caller keeps working and a build without one
+   * degrades to collection-only sync rather than failing — deck events are
+   * then remembered but not applied, which is recoverable, instead of being
+   * requested forever.
+   */
+  private decks?: DeckStore;
 
   constructor(
     store: LocalStore,
     client: DesktopClient,
     device: string,
     uuid: UuidSource,
+    decks?: DeckStore,
   ) {
     this.store = store;
     this.client = client;
     this.device = device;
     this.uuid = uuid;
+    this.decks = decks;
+  }
+
+  /** Attach a deck store after construction, for callers that build later. */
+  useDeckStore(decks: DeckStore): void {
+    this.decks = decks;
+  }
+
+  /**
+   * A fresh id from the same source the engine uses for events.
+   *
+   * Shared rather than each caller reaching for its own: the tests replace
+   * this to make ids predictable, and a second generator would escape that
+   * and make one id in the pair unrepeatable.
+   */
+  mintUuid(): string {
+    return this.uuid();
   }
 
   // ------------------------------------------------------- local editing
@@ -305,6 +374,74 @@ export class SyncEngine {
         );
         await remember();
         return true;
+      case 'deck-upsert': {
+        // Applied before it is remembered, like every other idempotent kind:
+        // a crash in the gap costs a repeat rather than a deck that is
+        // marked known and was never written.
+        const decks = this.decks;
+        if (!decks) {
+          // No deck store wired in. Remembered anyway so it is not requested
+          // forever, and so a build that gains one later is not stuck.
+          await remember();
+          return false;
+        }
+        const payload = event.payload as Record<string, unknown>;
+        const deckId = String(payload.deck_id ?? '').trim();
+        if (!deckId) {
+          await remember();
+          return false;
+        }
+        await decks.upsertFromSync({
+          deck_id: deckId,
+          name: String(payload.name ?? 'Untitled'),
+          format: String(payload.format ?? ''),
+          decklist: entriesFromSync(payload.entries ?? payload.decklist),
+          sideboard: entriesFromSync(payload.sideboard),
+          notes: String(payload.notes ?? ''),
+          // When the DECK was edited, not when the event was written. They
+          // are different, and the difference decides who wins.
+          updated_at: String(payload.updated_at ?? event.created_at),
+        });
+        await remember();
+        return true;
+      }
+      case 'deck-delete': {
+        const decks = this.decks;
+        if (decks) {
+          await decks.remove(String(event.payload.deck_id ?? ''));
+        }
+        await remember();
+        return Boolean(decks);
+      }
+      case 'deck-game': {
+        const decks = this.decks;
+        if (!decks) {
+          await remember();
+          return false;
+        }
+        const payload = event.payload as Record<string, unknown>;
+        const gameUid = String(payload.game_uid ?? '').trim();
+        const deckId = String(payload.deck_id ?? '').trim();
+        if (!gameUid) {
+          await remember();
+          return false;
+        }
+        if (payload.removed) {
+          await decks.forgetGame(gameUid);
+        } else {
+          await decks.recordGame({
+            game_uid: gameUid,
+            deck_id: deckId,
+            version_number: Number(payload.version_number ?? 0) || 0,
+            result: String(payload.result ?? ''),
+            opponent: String(payload.opponent ?? ''),
+            notes: String(payload.notes ?? ''),
+            played_at: String(payload.played_at ?? event.created_at),
+          });
+        }
+        await remember();
+        return true;
+      }
       default:
         // Stored but not acted on. A kind from a newer desktop must not break
         // this one, and dropping it would lose it permanently.
@@ -340,6 +477,66 @@ export class SyncEngine {
       location: stack.location,
       collection_uid: collectionUid,
       member,
+    });
+  }
+
+  /**
+   * Note a deck edit for the desktop.
+   *
+   * Carries the entries, so the printings a slot named survive the crossing.
+   * `decklist` goes too, as the name-keyed map an older desktop reads — the
+   * two are the same deck said twice, and dropping the map would make this
+   * event unreadable to a build that predates entries.
+   */
+  async recordDeckUpsert(deck: {
+    deck_id: string;
+    name: string;
+    format: string;
+    decklist: DeckEntry[];
+    sideboard?: DeckEntry[];
+    notes: string;
+    updated_at: string;
+  }): Promise<void> {
+    const asMap: Record<string, number> = {};
+    for (const entry of deck.decklist ?? []) {
+      asMap[entry.name] = (asMap[entry.name] ?? 0) + entry.qty;
+    }
+    await this.log('deck-upsert', {
+      deck_id: deck.deck_id,
+      name: deck.name,
+      format: deck.format,
+      notes: deck.notes,
+      decklist: asMap,
+      entries: deck.decklist ?? [],
+      sideboard: deck.sideboard ?? [],
+      updated_at: deck.updated_at,
+    });
+  }
+
+  async recordDeckDelete(deckId: string): Promise<void> {
+    await this.log('deck-delete', { deck_id: deckId });
+  }
+
+  /** A game played here, or one taken back here. */
+  async recordDeckGame(game: {
+    deck_id: string;
+    game_uid: string;
+    result?: string;
+    version_number?: number;
+    opponent?: string;
+    notes?: string;
+    played_at?: string;
+    removed?: boolean;
+  }): Promise<void> {
+    await this.log('deck-game', {
+      deck_id: game.deck_id,
+      game_uid: game.game_uid,
+      result: game.result ?? '',
+      version_number: game.version_number ?? 0,
+      opponent: game.opponent ?? '',
+      notes: game.notes ?? '',
+      played_at: game.played_at ?? '',
+      removed: Boolean(game.removed),
     });
   }
 

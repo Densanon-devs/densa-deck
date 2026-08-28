@@ -106,9 +106,13 @@ function Shell() {
     [],
   );
 
-  const connect = useCallback(async (local: LocalStore, pairing: Pairing) => {
+  const connect = useCallback(async (local: LocalStore, pairing: Pairing,
+                                     decks?: DeckStore) => {
     const device = await deviceId(local, uuid);
-    const state = buildAppState(local, pairing, device, uuid);
+    // The deck store goes in HERE rather than only to the screens, so decks
+    // and results arriving from the PC are applied rather than remembered
+    // and ignored.
+    const state = buildAppState(local, pairing, device, uuid, undefined, decks);
     state.subscribe((next) => {
       setSnapshot(next);
       if (next.connection === 'unpaired') {
@@ -139,10 +143,14 @@ function Shell() {
           setPhase({ kind: 'pairing' });
           return;
         }
+        // One store, shared by the sync engine and the screens. Two would
+        // be two views of the same table, which works, but the engine has
+        // to have one at all or deck events land nowhere.
+        const deckStore = new DeckStore(database);
         setPhase({
           kind: 'ready',
-          state: await connect(local, pairing),
-          decks: new DeckStore(database),
+          state: await connect(local, pairing, deckStore),
+          decks: deckStore,
         });
       } catch (err) {
         // Rejecting here used to leave "Opening your collection…" on screen
@@ -230,10 +238,15 @@ function Shell() {
               }
               await savePairing(store, pairing);
               const database = await openDeviceDatabase();
+              // Built BEFORE connecting, and handed to it. Built after, the
+              // engine would have no deck store on the one run that matters
+              // most — a phone's first sync is when the PC's whole deck
+              // history arrives, and it would have gone nowhere.
+              const deckStore = new DeckStore(database);
               setPhase({
                 kind: 'ready',
-                state: await connect(store, pairing),
-                decks: new DeckStore(database),
+                state: await connect(store, pairing, deckStore),
+                decks: deckStore,
               });
             }}
           />

@@ -31,6 +31,7 @@ import { CardBrowser } from './CardBrowser.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
+  type DeckRecord,
   addToDeck,
   carryPrintings,
   copiesOf,
@@ -286,6 +287,16 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * is the entire reason a slot can name a printing.
    */
   const [slots, setSlots] = useState<Record<string, SlotFacts>>({});
+  /**
+   * How this deck has done, and whether a result is mid-write.
+   *
+   * On the phone rather than only on the PC because this is where you are
+   * when the game ends — standing at a table with the deck in your hand,
+   * which is the moment the result is known and the only moment anyone will
+   * reliably record it.
+   */
+  const [record, setRecord] = useState<DeckRecord | null>(null);
+  const [logging, setLogging] = useState('');
 
   useEffect(() => {
     void (async () => {
@@ -293,8 +304,35 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       if (!found) return;
       setDeck(found);
       setText(formatDecklist(found.decklist, found.sideboard));
+      setRecord(await decks.recordFor(deckId));
     })().catch(reporting('opening the deck', setProblem));
   }, [decks, deckId]);
+
+  /**
+   * Log a result.
+   *
+   * Written HERE first and queued for the desktop second, so the record is
+   * right with no signal at all — which is the normal case in a game shop.
+   * The event waits in the outbox until something is reachable.
+   */
+  const logGame = useCallback(
+    async (result: 'win' | 'loss' | 'draw') => {
+      setLogging(result);
+      setProblem('');
+      try {
+        await state.logGame(deckId, result);
+        setRecord(await decks.recordFor(deckId));
+      } catch (err) {
+        setProblem(
+          `${(err as Error).message}. The result is only saved on this phone ` +
+            'until your PC is reachable.',
+        );
+      } finally {
+        setLogging('');
+      }
+    },
+    [state, decks, deckId],
+  );
 
   /** What you still need, from the phone's own mirror. Works with no signal. */
   const recheck = useCallback(
@@ -549,6 +587,34 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             : ''}
         </Text>
       ) : null}
+
+      {/*
+        The record, and the three buttons that change it. Directly under the
+        deck's name because that is the question someone has about a deck
+        they are holding: has it been any good.
+      */}
+      <View style={styles.recordRow}>
+        <Text style={styles.recordText}>
+          {record && record.games
+            ? `${record.record}` +
+              (record.win_rate !== null
+                ? `  ·  ${Math.round(record.win_rate * 100)}%`
+                : '')
+            : 'no games yet'}
+        </Text>
+        {(['win', 'loss', 'draw'] as const).map((result) => (
+          <Pressable
+            key={result}
+            style={[styles.logBtn, logging === result && styles.logBtnBusy]}
+            disabled={logging !== ''}
+            onPress={() => void logGame(result)}
+          >
+            <Text style={styles.logBtnText}>
+              {result === 'win' ? 'Win' : result === 'loss' ? 'Loss' : 'Draw'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
       {/* Over the line, not blocked at it. Half of deckbuilding is holding
           a pile that is not legal yet. */}
@@ -853,6 +919,31 @@ const styles = StyleSheet.create({
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { marginBottom: 8 },
+  recordRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+  },
+  recordText: {
+    color: '#68d391',
+    fontSize: 14,
+    fontVariant: ['tabular-nums'],
+    marginRight: 4,
+  },
+  logBtn: {
+    borderColor: '#4a5568',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  // Pressed state matters more here than anywhere else in the app: this is
+  // used one-handed, standing up, and a button that gives no sign it was hit
+  // gets hit twice.
+  logBtnBusy: { borderColor: '#68d391', opacity: 0.6 },
+  logBtnText: { color: '#e4e6eb', fontSize: 14 },
   overLimit: { color: '#ecc94b', fontSize: 12, lineHeight: 18 },
   deckActions: {
     gap: 8,

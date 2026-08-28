@@ -34,7 +34,7 @@ import type {
   CollectionPage,
   CollectionsReply,
 } from './protocol.ts';
-import { resolveSlots, wishlistFromDecks } from './decks.ts';
+import { DeckStore, resolveSlots, wishlistFromDecks } from './decks.ts';
 import type { Deck, DeckEntry, SlotFacts, WishlistRow } from './decks.ts';
 import type { Via } from './reach.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
@@ -70,10 +70,88 @@ export class AppState {
     pendingEdits: 0,
   };
 
-  constructor(store: LocalStore, engine: SyncEngine, client: DesktopClient) {
+  /** This phone's own decks, when one has been wired in. */
+  private decks?: DeckStore;
+
+  constructor(store: LocalStore, engine: SyncEngine, client: DesktopClient,
+              decks?: DeckStore) {
     this.store = store;
     this.engine = engine;
     this.client = client;
+    this.decks = decks;
+  }
+
+  /**
+   * Note a deck edit made HERE, so the desktop learns about it.
+   *
+   * Separate from `DeckStore.save`, which is the local write. Saving and
+   * broadcasting are kept apart deliberately: the applier writes decks too,
+   * and if saving broadcast, applying a deck from the PC would immediately
+   * send it back and the two would hand it to each other forever.
+   */
+  async deckChanged(deck: {
+    deck_id: string;
+    name: string;
+    format: string;
+    decklist: DeckEntry[];
+    sideboard?: DeckEntry[];
+    notes: string;
+    updated_at: string;
+  }): Promise<void> {
+    await this.engine.recordDeckUpsert(deck);
+  }
+
+  async deckDeleted(deckId: string): Promise<void> {
+    await this.engine.recordDeckDelete(deckId);
+  }
+
+  /**
+   * Log a game here, at the table, and tell the PC.
+   *
+   * Written locally FIRST so the record is right even with no desktop in
+   * range — which is the whole point of logging on a phone. The event waits
+   * in the outbox until something is reachable.
+   */
+  async logGame(deckId: string, result: string, options: {
+    versionNumber?: number;
+    opponent?: string;
+    notes?: string;
+  } = {}): Promise<string> {
+    const gameUid = this.newUuid();
+    const playedAt = new Date().toISOString();
+    if (this.decks) {
+      await this.decks.recordGame({
+        game_uid: gameUid,
+        deck_id: deckId,
+        version_number: options.versionNumber ?? 0,
+        result,
+        opponent: options.opponent ?? '',
+        notes: options.notes ?? '',
+        played_at: playedAt,
+      });
+    }
+    await this.engine.recordDeckGame({
+      deck_id: deckId,
+      game_uid: gameUid,
+      result,
+      version_number: options.versionNumber ?? 0,
+      opponent: options.opponent ?? '',
+      notes: options.notes ?? '',
+      played_at: playedAt,
+    });
+    return gameUid;
+  }
+
+  async forgetGame(deckId: string, gameUid: string): Promise<void> {
+    if (this.decks) await this.decks.forgetGame(gameUid);
+    await this.engine.recordDeckGame({
+      deck_id: deckId, game_uid: gameUid, removed: true,
+    });
+  }
+
+  /** The uuid source the engine was built with, so ids look the same. */
+  private newUuid(): string {
+    return this.engine.mintUuid();
   }
 
   subscribe(listener: (s: AppSnapshot) => void): () => void {
@@ -663,8 +741,12 @@ export function buildAppState(
   device: string,
   uuid: () => string,
   fetchImpl?: typeof fetch,
+  decks?: DeckStore,
 ): AppState {
   const client = new DesktopClient(pairing, fetchImpl ? { fetchImpl } : {});
-  const engine = new SyncEngine(store, client, device, uuid);
-  return new AppState(store, engine, client);
+  // The engine needs the deck store to APPLY deck events; without one it
+  // remembers them and does nothing, which is recoverable but means a deck
+  // built on the PC never appears here.
+  const engine = new SyncEngine(store, client, device, uuid, decks);
+  return new AppState(store, engine, client, decks);
 }

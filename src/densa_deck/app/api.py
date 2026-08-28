@@ -696,6 +696,11 @@ class AppApi:
         out = _snapshot_to_dict(snap)
         out["created"] = created
         out["history_limit"] = self._get_vstore().history_limit(deck_id)
+        # Only when something actually changed. Broadcasting an unchanged
+        # deck would put an event on the wire for every press of Save, and
+        # the peer would do the work of deciding it already had it.
+        if created:
+            self._log_deck_upsert(deck_id)
         # Attach combos_broken so the frontend can show a warning toast
         # right after save. Empty list when nothing broke (or when the
         # combo cache is empty / no prior version exists).
@@ -720,6 +725,7 @@ class AppApi:
         """Delete a saved deck + all its versions. Destructive — the frontend
         should confirm before calling."""
         self._get_vstore().delete_deck(deck_id)
+        self._log_deck_delete(deck_id)
         # And forget what it wanted. A deleted deck leaving cards on the
         # wishlist would have someone shopping for a deck that no longer
         # exists, with nothing on the list to say why it is there.
@@ -1155,19 +1161,38 @@ class AppApi:
         """
         if not (deck_id or "").strip():
             return {"ok": False, "error": "Which deck?"}
+        import uuid as _uuid
+
+        # Minted here rather than in the store, so the same identity can be
+        # put on the wire. A game the peer receives has to be recognisably
+        # the same game when it comes back.
+        game_uid = str(_uuid.uuid4())
+        store = self._get_vstore()
         try:
-            record = self._get_vstore().record_game(
+            record = store.record_game(
                 deck_id, result, version_number=version_number,
-                opponent=opponent, notes=notes)
+                opponent=opponent, notes=notes, game_uid=game_uid)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"deck_id": deck_id, "record": record,
-                "by_version": self._get_vstore().records_by_version(deck_id)}
+
+        logged = next((g for g in store.games_for_sync(deck_id)
+                       if g["game_uid"] == game_uid), None)
+        if logged:
+            self._log_deck_game(deck_id, logged)
+        return {"deck_id": deck_id, "record": record, "game_uid": game_uid,
+                "by_version": store.records_by_version(deck_id)}
 
     @_safe
     def forget_deck_game(self, game_id: int, deck_id: str = "") -> dict:
         """Take back a logged game — a misclick on a phone at a table."""
-        removed = self._get_vstore().forget_game(int(game_id))
+        store = self._get_vstore()
+        # Read the travelling identity BEFORE the row goes, or there is
+        # nothing left to tell the peer which game to forget.
+        game_uid = store.game_uid_of(int(game_id))
+        removed = store.forget_game(int(game_id))
+        if removed and game_uid and deck_id:
+            self._log_deck_game(deck_id, {"game_uid": game_uid,
+                                          "removed": True})
         out = {"removed": bool(removed)}
         if deck_id:
             out["record"] = self._get_vstore().deck_record(deck_id)
@@ -3937,8 +3962,55 @@ class AppApi:
             from densa_deck.sync.log import SyncLog
             store = self._get_collection_store()
             log = SyncLog(store.db_path)
-            self._sync_applier = SyncApplier(store, log)
+            # The deck store, which it has always expected and never been
+            # given — so every deck event arriving from a peer answered
+            # "no deck store" and was dropped on the floor, silently, on both
+            # sides of every sync.
+            self._sync_applier = SyncApplier(store, log,
+                                             deck_store=self._get_vstore())
         return self._sync_applier
+
+    def _log_deck_upsert(self, deck_id: str) -> None:
+        """Tell the other device this deck changed.
+
+        Reads the deck back out of the store rather than taking what the
+        caller happened to have, so what goes on the wire is what was
+        actually saved — including the zones and printings, which the
+        name-keyed decklist cannot carry.
+
+        Never fatal. A deck that saved and did not broadcast is a deck that
+        syncs on the next edit; a save that failed because a phone was not
+        paired would be lost work.
+        """
+        try:
+            store = self._get_vstore()
+            latest = store.get_latest(deck_id)
+            if latest is None:
+                return
+            self._get_sync().record_deck_upsert({
+                "deck_id": deck_id,
+                "name": latest.name,
+                "format": latest.format,
+                "notes": latest.notes,
+                "decklist": latest.decklist,
+                "zones": latest.zones,
+                "printings": latest.printings,
+                "updated_at": store.deck_updated_at(deck_id) or latest.saved_at,
+            })
+        except Exception:
+            pass
+
+    def _log_deck_delete(self, deck_id: str) -> None:
+        try:
+            self._get_sync().record_deck_delete(deck_id)
+        except Exception:
+            pass
+
+    def _log_deck_game(self, deck_id: str, game: dict) -> None:
+        try:
+            self._get_sync().record_deck_game(deck_id, game)
+        except Exception:
+            pass
 
     def _log_stack_delta(self, printing_id: str, card_name: str, delta: int,
                          *, collection_id=None, collection_uid: str = "",
@@ -4064,6 +4136,8 @@ class AppApi:
         from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
         from densa_deck.sync.log import (
             KIND_COLLECTION_UPSERT,
+            KIND_DECK_GAME,
+            KIND_DECK_UPSERT,
             KIND_MEMBERSHIP,
             KIND_STACK_SET,
             SyncEvent,
@@ -4158,6 +4232,44 @@ class AppApi:
                         "member": True,
                     },
                 ).to_dict())
+
+        # Decks and their results, for the same reason the stacks are here:
+        # the log only holds what has happened since logging existed, so a
+        # phone replaying from zero would learn about a deck built last month
+        # only if it had been edited since. Uids are derived from the deck and
+        # the head, so asking twice produces byte-identical events and the
+        # second set is recognised as duplicates rather than re-applied.
+        vstore = self._get_vstore()
+        try:
+            for deck in vstore.decks_for_sync():
+                deck_id = deck.get("deck_id", "")
+                if not deck_id:
+                    continue
+                events.append(SyncEvent(
+                    event_uid=f"baseline-{head}-deck-{deck_id}",
+                    device=device,
+                    kind=KIND_DECK_UPSERT,
+                    payload=deck,
+                ).to_dict())
+
+            for game in vstore.games_for_sync():
+                uid = game.get("game_uid") or ""
+                if not uid or not game.get("deck_id"):
+                    continue
+                # Keyed on the GAME's own uid rather than on the head: a
+                # game is the same game whenever it is sent, and letting the
+                # head into the id would make every baseline look like a new
+                # set of games and double the record on each first sync.
+                events.append(SyncEvent(
+                    event_uid=f"baseline-game-{uid}",
+                    device=device,
+                    kind=KIND_DECK_GAME,
+                    payload=game,
+                ).to_dict())
+        except Exception:
+            # A deck store that cannot be read must not cost the collection
+            # its baseline — the cards are the part someone notices missing.
+            pass
 
         return events, head
 

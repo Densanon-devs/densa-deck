@@ -114,6 +114,10 @@ export class MemoryDatabase {
       sync_events: 'event_uid',
       meta: 'key',
       decks: 'deck_id',
+      // Without this, INSERT OR IGNORE never finds the existing row and the
+      // fake happily stores the same game twice — so a test for "syncing
+      // twice does not double the record" would pass against a real bug.
+      deck_games: 'game_uid',
     };
     const key = keys[table];
     return key && columns.includes(key) ? key : undefined;
@@ -196,11 +200,44 @@ export class MemoryDatabase {
     }
     if (/FROM sync_events/i.test(text)) return this._selectEvents(text, params);
     if (/FROM decks/i.test(text)) {
-      return [...this._table('decks')].sort((a, b) =>
+      let rows = [...this._table('decks')];
+      // The WHERE was ignored, so `SELECT updated_at FROM decks WHERE
+      // deck_id = ?` answered with the FIRST deck in the table rather than
+      // the one asked about — and last-write-wins would then compare a deck
+      // against some other deck's timestamp.
+      const where = text.match(/WHERE deck_id = \?/i);
+      if (where) rows = rows.filter((r) => r.deck_id === params[0]);
+      return rows.sort((a, b) =>
         String(b.updated_at).localeCompare(String(a.updated_at)),
       );
     }
+    if (/FROM deck_games/i.test(text)) return this._selectGames(text, params);
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
+  }
+
+  /**
+   * Games, either as rows or as the grouped count behind a W/L record.
+   *
+   * The GROUP BY is answered here rather than left to the caller because the
+   * record arithmetic is the thing under test — a fake that returned raw
+   * rows would have the test compute the record itself and prove nothing
+   * about the code that does it in the app.
+   */
+  _selectGames(text, params) {
+    let rows = [...this._table('deck_games')];
+    if (/WHERE deck_id = \?/i.test(text)) {
+      rows = rows.filter((r) => r.deck_id === params[0]);
+    }
+    if (/GROUP BY result/i.test(text)) {
+      const counts = new Map();
+      for (const row of rows) {
+        counts.set(row.result, (counts.get(row.result) ?? 0) + 1);
+      }
+      return [...counts].map(([result, n]) => ({ result, n }));
+    }
+    return rows.sort((a, b) =>
+      String(b.played_at).localeCompare(String(a.played_at)),
+    );
   }
 
   _selectStacks(text, params) {

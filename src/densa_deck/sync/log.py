@@ -51,6 +51,12 @@ KIND_COLLECTION_UPSERT = "collection-upsert"
 KIND_COLLECTION_DELETE = "collection-delete"
 KIND_DECK_UPSERT = "deck-upsert"
 KIND_DECK_DELETE = "deck-delete"
+# One game played, and which version was on the table. Carries its own uid
+# because a local row id means nothing on the other device — two phones
+# logging offline both mint row 7. A `removed` flag rides the same kind
+# rather than needing a second one: taking a game back is a fact about that
+# game, and one idempotent kind is easier to get right than two.
+KIND_DECK_GAME = "deck-game"
 
 # Every kind this build knows how to APPLY. Descriptive, never a gate: the
 # comment above is the rule, and an event of an unknown kind from a newer peer
@@ -69,6 +75,7 @@ KNOWN_KINDS = frozenset({
     KIND_COLLECTION_DELETE,
     KIND_DECK_UPSERT,
     KIND_DECK_DELETE,
+    KIND_DECK_GAME,
 })
 
 
