@@ -16,10 +16,13 @@ import { DesktopClient } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import type {
+  BuiltDeck,
   CardDetail,
   CataloguePrinting,
   CatalogueSet,
   DeckResolveReply,
+  DesktopDeck,
+  DesktopDeckDetail,
   OverlapsReply,
   TagResult,
   ResolvedSlot,
@@ -491,6 +494,47 @@ export class AppState {
     return this.client.call('analyst/analyze', {
       decklist_text: decklistText,
       name,
+    });
+  }
+
+  /**
+   * Make a deck out of one collection, using only cards in it.
+   *
+   * Needs the desktop: the pool has to be judged against the whole catalogue
+   * for colour identity and legality, which is not something a phone carries.
+   * The DECK is arithmetic though, not a model — so this answers the same way
+   * twice and works whether or not an analyst is loaded.
+   */
+  async buildFromCollection(
+    collectionUid: string,
+    format = 'commander',
+    commander = '',
+  ): Promise<BuiltDeck> {
+    return this.client.call<BuiltDeck>('group/build-deck', {
+      collection_uid: collectionUid,
+      format,
+      commander,
+    });
+  }
+
+  /**
+   * The decks saved on the PC.
+   *
+   * Separate from `DeckStore`, which is this phone's own decks. The two are
+   * genuinely different sets — the desktop's are versioned and analysed, the
+   * phone's are built in a shop — and the bridge has been able to list these
+   * all along with nothing on the phone asking.
+   */
+  async desktopDecks(): Promise<DesktopDeck[]> {
+    const reply = await this.client.call<{ decks: DesktopDeck[] }>(
+      'decks/list', {},
+    );
+    return reply.decks ?? [];
+  }
+
+  async desktopDeck(deckId: string): Promise<DesktopDeckDetail> {
+    return this.client.call<DesktopDeckDetail>('decks/get', {
+      deck_id: deckId,
     });
   }
 

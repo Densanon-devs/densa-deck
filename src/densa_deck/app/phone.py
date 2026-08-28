@@ -569,6 +569,18 @@ class PhoneBridge:
                 payload.get("deck_id", ""),
                 payload.get("collection_uid", ""),
                 payload.get("decklist_text", "")))
+        # Make a deck out of a collection, using only cards in it. Reachable
+        # from the phone because that is where the box is — "build me
+        # something out of this shelf" is asked standing over it, not sitting
+        # at a desk.
+        if route == "group/build-deck":
+            return _unwrap(api.build_deck_from_collection(
+                payload.get("collection_uid", ""),
+                payload.get("format", "commander"),
+                payload.get("commander", ""),
+                payload.get("colors") or None,
+                bool(payload.get("explain"))))
+
         if route == "group/export":
             return _unwrap(api.export_group_manifest(
                 payload.get("collection_uid", ""),

@@ -388,3 +388,46 @@ export interface TagResult {
   candidates: TagCandidate[];
   collection_uid: string;
 }
+
+/** A deck saved on the PC, as the sidebar there lists them. */
+export interface DesktopDeck {
+  deck_id: string;
+  name?: string;
+  format?: string;
+  versions?: number;
+  updated_at?: string;
+}
+
+/** One version of a PC deck, with the text that can be edited or analysed. */
+export interface DesktopDeckDetail {
+  deck_id: string;
+  name?: string;
+  format?: string;
+  decklist?: Record<string, number>;
+  decklist_text?: string;
+  version_number?: number;
+  saved_at?: string;
+}
+
+/**
+ * A deck built out of a collection.
+ *
+ * `roles` is as much the point as `decklist` is: a real collection usually
+ * cannot fill a format's targets, and a build that quietly handed back sixty
+ * cards with four lands would have told you nothing.
+ */
+export interface BuiltDeck {
+  format: string;
+  commander: string;
+  colors: string[];
+  decklist: Record<string, number>;
+  decklist_text: string;
+  total_cards: number;
+  target_size: number;
+  short_by: number;
+  pool_size: number;
+  playable_in_colors: number;
+  roles: Array<{ role: string; wanted: number; filled: number; short: number }>;
+  analysis?: unknown;
+  analysis_error?: string;
+}

@@ -43,6 +43,7 @@ import { CollectionScreen } from './src/screens/Collection.tsx';
 import { OverlapsScreen } from './src/screens/Overlaps.tsx';
 import { ConnectionScreen } from './src/screens/Connection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
+import { PcDecksScreen } from './src/screens/PcDecks.tsx';
 import { PairScreen } from './src/screens/Pair.tsx';
 import { ScanScreen } from './src/screens/Scan.tsx';
 import { WishlistScreen } from './src/screens/Wishlist.tsx';
@@ -51,7 +52,7 @@ import { WishlistScreen } from './src/screens/Wishlist.tsx';
 // taking the process down with it.
 installGlobalErrorTrap();
 
-type Tab = 'collection' | 'decks' | 'overlaps' | 'wishlist' | 'scan';
+type Tab = 'collection' | 'decks' | 'pc' | 'overlaps' | 'wishlist' | 'scan';
 
 type Phase =
   | { kind: 'starting' }
@@ -61,6 +62,10 @@ type Phase =
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'collection', label: 'Cards' },
   { id: 'decks', label: 'Decks' },
+  // The PC's decks are a different set from this phone's — versioned,
+  // analysed, built at a desk — so they get their own tab rather than being
+  // mixed into a list where you cannot tell which machine one lives on.
+  { id: 'pc', label: 'PC' },
   { id: 'overlaps', label: 'Shared' },
   { id: 'wishlist', label: 'Wishlist' },
   { id: 'scan', label: 'Scan' },
@@ -257,6 +262,20 @@ function Shell() {
           ) : (
             <DeckListScreen decks={phase.decks} onOpen={setOpenDeck} />
           )
+        ) : null}
+
+        {phase.kind === 'ready' && !showConnection && tab === 'pc' ? (
+          <PcDecksScreen
+            state={phase.state}
+            decks={phase.decks}
+            onOpenLocal={(deckId) => {
+              // A deck copied down or built is a deck on THIS phone, so it
+              // opens where this phone's decks live rather than leaving you
+              // to go and find it.
+              setOpenDeck(deckId);
+              setTab('decks');
+            }}
+          />
         ) : null}
 
         {phase.kind === 'ready' && !showConnection && tab === 'overlaps' ? (

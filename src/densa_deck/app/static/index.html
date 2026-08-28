@@ -454,6 +454,11 @@ Mainboard:
               <p id="group-summary" class="panel-hint subtle"></p>
               <p id="group-warning" class="panel-hint hidden"></p>
               <div class="group-actions hidden" id="group-actions">
+                <!-- Make a deck out of this shelf. Every other suggestion
+                     path here reaches for the whole catalogue, which answers
+                     "what should I buy"; this answers "make me something out
+                     of THIS". -->
+                <button id="group-build-btn" class="btn btn-outline btn-slim">Build a deck from this</button>
                 <select id="group-export-format">
                   <option value="csv">CSV</option>
                   <option value="decklist">Decklist</option>
@@ -1084,6 +1089,40 @@ Mainboard:
        records the object they actually have rather than a card name. -->
   <!-- Which lists a card belongs to. Collections are filters: ticking one
        never unticks another, and unticking one never removes the card. -->
+  <div id="build-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="build-modal-title">Build a deck</h2>
+        <button id="build-close-btn" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="panel-hint">Uses only the cards in this collection — nothing
+          you don't own, and never more copies than you have. It says what it
+          could not fill rather than handing you a deck with no lands in it.</p>
+        <div class="filter-group">
+          <label class="filter-label" for="build-from-format">Format</label>
+          <select id="build-from-format">
+            <option value="commander">Commander</option>
+            <option value="modern">Modern</option>
+            <option value="standard">Standard</option>
+            <option value="pauper">Pauper</option>
+            <option value="legacy">Legacy</option>
+          </select>
+          <label class="filter-label" for="build-from-commander">Commander (optional)</label>
+          <input type="text" id="build-from-commander"
+                 placeholder="Sets the colours. Leave empty to infer them.">
+        </div>
+        <div id="build-result"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="build-cancel-btn" class="btn btn-outline">Close</button>
+        <button id="build-analyse-btn" class="btn btn-outline hidden">Analyse it</button>
+        <button id="build-copy-btn" class="btn btn-outline hidden">Copy decklist</button>
+        <button id="build-go-btn" class="btn btn-primary">Build</button>
+      </div>
+    </div>
+  </div>
+
   <div id="clear-all-modal" class="modal-overlay hidden" role="dialog" aria-hidden="true">
     <div class="modal">
       <div class="modal-header">

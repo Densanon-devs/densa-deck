@@ -1462,6 +1462,74 @@ class AppApi:
             return {"ok": False, "error": str(exc)}
 
     @_safe
+    def build_deck_from_collection(self, collection_uid: str = "",
+                                   format_: str = "commander",
+                                   commander: str = "",
+                                   colors: list[str] | None = None,
+                                   explain: bool = False) -> dict:
+        """Make a deck out of a collection, using only cards that are in it.
+
+        Every other suggestion path here reaches for the whole catalogue,
+        which answers "what should I buy". This answers the question someone
+        asks standing over a box: make me a deck out of THIS.
+
+        The deck is arithmetic against the pool, not a model — it has to come
+        out the same twice and it has to work with nothing loaded. `explain`
+        adds the analyst's prose on top when a model IS available, because
+        "why these cards" is a genuinely different question from "which
+        cards" and only one of them needs a language model.
+
+        The role report is the point of the reply as much as the decklist is.
+        A collection usually cannot fill a format's targets, and handing back
+        sixty cards with four lands while saying nothing would be worse than
+        refusing.
+        """
+        from densa_deck.collection.deckbuild import (
+            build_from_pool,
+            decklist_text,
+            pool_from_collection,
+        )
+
+        db = self._get_db()
+        if db.card_count() == 0:
+            return {"ok": False,
+                    "error": "Card database not ingested. Open Settings and run Setup.",
+                    "error_type": "IngestRequired"}
+        try:
+            pool = pool_from_collection(self._get_collection_store(), db,
+                                        collection_uid or None)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not pool:
+            return {"ok": False,
+                    "error": "There are no cards in that collection to build from."}
+
+        try:
+            fmt = Format(format_) if format_ else Format.COMMANDER
+        except ValueError:
+            fmt = Format.COMMANDER
+        try:
+            built = build_from_pool(pool, fmt, commander_name=commander,
+                                    colors=set(colors) if colors else None)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        built["decklist_text"] = decklist_text(built)
+
+        if explain:
+            # Never fatal. A deck that built fine and could not be talked
+            # about is still a deck; failing the whole call because a model
+            # is missing would make the useful half depend on the optional
+            # one.
+            try:
+                said = self.analyze_deck(built["decklist_text"], fmt.value,
+                                         "Built from your collection")
+                built["analysis"] = said.get("data", said)
+            except Exception as exc:
+                built["analysis_error"] = str(exc)
+        return built
+
+    @_safe
     def review_group(self, collection_uid: str, limit: int = 2000) -> dict:
         """What is in a group, what it is worth, and what you would regret.
 

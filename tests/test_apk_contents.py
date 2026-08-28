@@ -100,6 +100,12 @@ SCREENS = {
     # Building a deck out of ONE collection rather than everything owned —
     # a grouping you made is usually the shape of the deck you are making.
     "building from one collection": "Anywhere",
+    # The PC's decks, and making a new one out of a shelf. Both needed the
+    # desktop and neither was reachable from the phone.
+    "decks that live on the PC": "Decks saved on your PC",
+    "build a deck from a shelf": "Build one from a shelf",
+    "a built deck says what it could not fill": "short of a legal deck",
+    "taking a PC deck to the phone": "Copy to phone",
 }
 
 # Behaviour that has to survive into the shipped app, not merely exist in src.
@@ -128,6 +134,8 @@ BEHAVIOUR = {
     # Tagging goes over the wire; a phone that shipped the toggle without the
     # route would offer a mode that silently does nothing.
     "tag-into-group route": "group/tag-scanned",
+    "build-from-collection route": "group/build-deck",
+    "PC deck list route": "decks/list",
     # The zoomed card is a real overlay, not a panel at the bottom of the
     # page. Inline it sat below a grid that keeps growing — tap a card,
     # scroll on, sixty more results load, and the thing you opened is further

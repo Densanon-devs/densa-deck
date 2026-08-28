@@ -31,7 +31,8 @@
     dismissedSetup: false,
     pendingCard: null,     // card whose printings the modal is showing
     collections: [],       // for turning a picker's id into the uid the API wants
-    retiring: null,        // the group the retire dialog is about
+    retiring: null,        // the group the retire/build dialogs are about
+    built: null,           // the last deck built out of a collection
   };
 
   function e(id) { return document.getElementById(id); }
@@ -317,6 +318,104 @@
       await loadItems(false);
       invalidateBuilderBadges();
     };
+  }
+
+  // ------------------------------------------- build a deck from a shelf
+
+  function openBuild() {
+    if (!state.retiring) return;                 // nothing selected
+    const modal = e("build-modal");
+    if (!modal) return;
+    e("build-modal-title").textContent = `Build from ${state.retiring.name}`;
+    e("build-result").innerHTML = "";
+    ["build-copy-btn", "build-analyse-btn"].forEach(id =>
+      e(id)?.classList.add("hidden"));
+    state.built = null;
+    modal.classList.remove("hidden");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function hideBuild() {
+    const modal = e("build-modal");
+    if (!modal) return;
+    modal.classList.add("hidden");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  async function doBuild() {
+    if (!state.retiring) return;
+    const go = e("build-go-btn");
+    const out = e("build-result");
+    if (go) { go.disabled = true; go.textContent = "Building..."; }
+    out.innerHTML = "<p class=\"panel-hint\">Working through the pool...</p>";
+
+    let built;
+    try {
+      built = await callApi("build_deck_from_collection",
+                            state.retiring.uid,
+                            e("build-from-format")?.value || "commander",
+                            e("build-from-commander")?.value || "",
+                            null, false);
+    } catch (err) {
+      out.innerHTML = `<p class="panel-hint">${escape(err.message)}</p>`;
+      return;
+    } finally {
+      if (go) { go.disabled = false; go.textContent = "Build"; }
+    }
+
+    state.built = built;
+    // The role report is as much the answer as the decklist. A collection
+    // usually cannot fill a format's targets, and showing the list without
+    // saying what is missing would be the deck lying about itself.
+    const roles = (built.roles || []).map(r => {
+      const cls = r.short ? "build-over-limit-line" : "";
+      const tail = r.short ? ` — ${r.short} short` : "";
+      return `<p class="${cls}">${escape(r.role)}: ${r.filled} of ${r.wanted}${tail}</p>`;
+    }).join("");
+
+    out.innerHTML = `
+      <p><strong>${built.total_cards}</strong> of ${built.target_size} cards`
+      + (built.colors?.length ? ` · ${escape(built.colors.join(""))}` : "")
+      + (built.commander ? ` · ${escape(built.commander)}` : "") + `</p>
+      <p class="panel-hint">${built.playable_in_colors} of ${built.pool_size}
+        cards in this collection are legal in these colours.</p>
+      ${roles}
+      ${built.short_by
+        ? `<p class="build-over-limit-line">${built.short_by} short of a legal
+             deck — this collection does not hold enough to finish it.</p>`
+        : ""}
+      <textarea class="build-decklist" rows="10" readonly>`
+      + escape(built.decklist_text || "") + `</textarea>`;
+
+    ["build-copy-btn", "build-analyse-btn"].forEach(id =>
+      e(id)?.classList.remove("hidden"));
+  }
+
+  async function copyBuilt() {
+    if (!state.built) return;
+    try {
+      await navigator.clipboard.writeText(state.built.decklist_text || "");
+      toast("Decklist copied — paste it into the Build tab.", "success");
+    } catch (_e) {
+      toast("Select the text and copy it.", "info");
+    }
+  }
+
+  async function analyseBuilt() {
+    if (!state.built) return;
+    const btn = e("build-analyse-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Thinking..."; }
+    try {
+      const said = await callApi("analyze_deck", state.built.decklist_text,
+                                 state.built.format, "Built from a collection");
+      const out = e("build-result");
+      out.insertAdjacentHTML("beforeend",
+        `<pre class="build-analysis">${escape(JSON.stringify(said, null, 2))}</pre>`);
+    } catch (err) {
+      toast("Could not analyse: " + err.message, "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Analyse it"; }
+    }
   }
 
   // --------------------------------------------------------- start over
@@ -877,6 +976,19 @@
       await loadItems(false);
       await refreshGroupSummary();
     });
+
+    const buildBtn = e("group-build-btn");
+    if (buildBtn) buildBtn.addEventListener("click", openBuild);
+    ["build-close-btn", "build-cancel-btn"].forEach(id => {
+      const btn = e(id);
+      if (btn) btn.addEventListener("click", hideBuild);
+    });
+    const buildGo = e("build-go-btn");
+    if (buildGo) buildGo.addEventListener("click", doBuild);
+    const buildCopy = e("build-copy-btn");
+    if (buildCopy) buildCopy.addEventListener("click", copyBuilt);
+    const buildAnalyse = e("build-analyse-btn");
+    if (buildAnalyse) buildAnalyse.addEventListener("click", analyseBuilt);
 
     const exportBtn = e("group-export-btn");
     if (exportBtn) exportBtn.addEventListener("click", exportGroup);
