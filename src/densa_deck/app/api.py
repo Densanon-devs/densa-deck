@@ -1110,8 +1110,14 @@ class AppApi:
                     detect_near_miss_combos,
                 )
                 names = [e.card.name for e in deck.entries if e.card]
-                identity = [c.value if hasattr(c, "value") else str(c)
-                            for c in (deck.color_identity or [])]
+                # Unioned off the CARDS. `Deck` carries no `color_identity`
+                # of its own, and reaching for one raised an AttributeError
+                # that the except below swallowed whole — so this block
+                # silently did nothing on every call while the panel looked
+                # merely combo-less. Same derivation the analyze path uses.
+                identity = sorted({
+                    c.value for e in deck.entries if e.card
+                    for c in e.card.color_identity})
                 matched = detect_combos(
                     store=cstore, deck_card_names=names,
                     deck_color_identity=identity or None, limit=200)
@@ -1124,10 +1130,13 @@ class AppApi:
                 for miss in near:
                     for missing in (getattr(miss, "missing_cards", None) or []):
                         completers.add(str(missing))
-        except Exception:
-            # Combo data is optional and separately downloaded. Its absence
-            # makes this panel smaller, never broken.
-            pass
+        except Exception as exc:
+            # Combo data is optional and separately downloaded, so its absence
+            # makes this panel smaller rather than broken. But a bare `pass`
+            # here also swallowed an AttributeError for months of nothing —
+            # the section stayed empty and looked like a deck with no combos.
+            # Reported in the payload so a fault is visible as a fault.
+            out["combo_error"] = str(exc)
 
         out["suggestions"] = card_synergy.suggestions_for_card(
             card, deck, db, combo_completers=completers)

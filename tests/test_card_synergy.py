@@ -317,3 +317,124 @@ class TestThroughTheDesktopApi:
         assert out["combo_lines"] == []
         assert out["combo_completions"] == []
         assert out["in_deck"], "the rest of the panel still answered"
+
+
+class TestItWorksOnCardsThatArriveWithNoTags:
+    """How every card actually arrives.
+
+    Tags are NOT stored in the card database and the resolver does not fill
+    them in. `analyze_deck` classifies its entries in place as a side effect,
+    which covers the cards in a deck and covers nothing else — the subject
+    card comes from a separate `lookup_by_name` and has an empty tag list.
+
+    Reading the attribute and trusting it produced an empty panel for every
+    card on real data, while every fixture here passed because it set tags by
+    hand. So these build cards the way the database does: text, no tags.
+    """
+
+    @pytest.fixture
+    def untagged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = CardDatabase(db_path=Path(tmp) / "cards.db")
+            db.upsert_cards([
+                Card(scryfall_id="u1", oracle_id="ou1", name="Viscera Seer",
+                     layout=CardLayout.NORMAL, cmc=1, mana_cost="{B}",
+                     type_line="Creature — Vampire Wizard",
+                     legalities={"commander": Legality.LEGAL},
+                     oracle_text="Sacrifice a creature: Scry 1."),
+                Card(scryfall_id="u2", oracle_id="ou2", name="Blood Artist",
+                     layout=CardLayout.NORMAL, cmc=2, mana_cost="{1}{B}",
+                     type_line="Creature — Vampire",
+                     legalities={"commander": Legality.LEGAL},
+                     oracle_text=("Whenever Blood Artist or another creature "
+                                  "dies, target player loses 1 life and you "
+                                  "gain 1 life.")),
+            ])
+            yield db
+            db.close()
+
+    def test_the_subject_card_is_classified_on_demand(self, untagged):
+        card = untagged.lookup_by_name("Blood Artist")
+        assert not card.tags, "the fixture is not reproducing the real shape"
+        fit = card_synergy.role_fit(card, None, None)
+        assert fit["tags"], "an untagged card described itself as nothing"
+
+    def test_and_so_it_still_finds_its_partners(self, untagged):
+        text = "Mainboard:\n1 Viscera Seer\n1 Blood Artist\n"
+        deck = resolve_deck(parse_decklist(text), untagged, name="t",
+                            format=Format.COMMANDER)
+        found = card_synergy.synergies_in_deck(
+            untagged.lookup_by_name("Blood Artist"), deck)
+        assert "Viscera Seer" in _by_name(found)
+
+    def test_deck_entries_are_classified_too(self, untagged):
+        """Both sides of the comparison arrive empty, not just one."""
+        text = "Mainboard:\n1 Viscera Seer\n1 Blood Artist\n"
+        deck = resolve_deck(parse_decklist(text), untagged, name="t",
+                            format=Format.COMMANDER)
+        assert all(not e.card.tags for e in deck.entries), "not the real shape"
+        found = card_synergy.synergies_in_deck(
+            untagged.lookup_by_name("Viscera Seer"), deck)
+        assert found, "nothing matched because the deck had no tags either"
+
+
+class TestTheComboBlockActuallyRuns:
+    """It reached for `deck.color_identity`, which does not exist, and the
+    surrounding `except Exception: pass` swallowed the AttributeError — so
+    the block did nothing on every call and the panel looked like a deck with
+    no combos rather than like a fault.
+    """
+
+    @pytest.fixture
+    def api(self):
+        """With a combo store that is NOT empty.
+
+        An empty one short-circuits before the identity is ever derived, so a
+        fixture without combos cannot see this bug at all — which is exactly
+        how it survived.
+        """
+        from densa_deck.app.api import AppApi
+        from densa_deck.combos.data import ComboStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = CardDatabase(db_path=root / "cards.db")
+            db.upsert_cards(CARDS)
+            db.close()
+            made = AppApi(db_path=root / "cards.db",
+                          version_db_path=root / "versions.db")
+            store = ComboStore(db_path=root / "combos.db")
+            store.upsert_combos([Combo(
+                combo_id="1-1",
+                cards=["Viscera Seer", "Blood Artist"],
+                produces=["Drain the table"],
+                color_identity="B",
+                spellbook_url="https://commanderspellbook.com/combo/1-1/")])
+            made._combo_store = store
+            yield made
+            made.close()
+
+    DECK = "Mainboard:\n1 Viscera Seer\n1 Blood Artist\n1 Sol Ring\n20 Forest\n"
+
+    def test_the_store_is_actually_populated(self, api):
+        assert api._get_combo_store().combo_count() == 1, (
+            "an empty store short-circuits and the test proves nothing")
+
+    def test_a_real_line_is_found_and_reported(self, api):
+        out = api.card_synergy_report("Viscera Seer", self.DECK, "commander")["data"]
+        assert out.get("combo_error") is None, out.get("combo_error")
+        assert out["combo_lines"], "the combo block did not run"
+        assert out["combo_lines"][0]["with"] == ["Blood Artist"]
+
+    def test_no_error_is_recorded_from_the_combo_block(self, api):
+        """An empty combo section is only honest when nothing threw."""
+        out = api.card_synergy_report("Viscera Seer", self.DECK, "commander")["data"]
+        assert "combo_error" not in out, out.get("combo_error")
+
+    def test_a_deck_has_a_colour_identity_derived_from_its_cards(self, api):
+        """`Deck` carries none of its own; it is unioned off the cards. If
+        that derivation breaks again the report says so instead of going
+        quiet."""
+        out = api.card_synergy_report("Blood Artist", self.DECK, "commander")["data"]
+        assert out["has_deck"] is True
+        assert "combo_error" not in out

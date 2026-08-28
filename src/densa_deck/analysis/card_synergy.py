@@ -61,8 +61,29 @@ _ROLE_COUNT_FIELD = {
 
 
 def _tags_of(card) -> set[str]:
-    return {t.value if hasattr(t, "value") else str(t)
-            for t in (getattr(card, "tags", None) or [])}
+    """This card's roles, classifying it if nobody has yet.
+
+    Tags are NOT stored in the card database and the resolver does not fill
+    them in — `analyze_deck` classifies its entries in place as a side effect,
+    which covers the cards in a deck and covers nothing else. The subject card
+    here comes from a separate `lookup_by_name` and arrives with an empty tag
+    list, so reading the attribute and trusting it produced an empty panel for
+    every card on real data while every fixture with hand-set tags passed.
+
+    Classified on demand instead, so the answer does not depend on whether
+    something else happened to run first.
+    """
+    stored = getattr(card, "tags", None) or []
+    if stored:
+        return {t.value if hasattr(t, "value") else str(t) for t in stored}
+    if card is None:
+        return set()
+    try:
+        from densa_deck.classification.tagger import classify_card
+        return {t.value if hasattr(t, "value") else str(t)
+                for t in classify_card(card)}
+    except Exception:
+        return set()
 
 
 def _active_entries(deck):
