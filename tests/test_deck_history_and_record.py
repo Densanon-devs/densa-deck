@@ -461,3 +461,94 @@ class TestThroughTheDesktopApi:
         assert out["record"]["games"] == 5, "the cap ate the record"
         history = api.get_deck_history("d1")
         assert len(history.get("data", history)) == 2
+
+
+class TestUpgradingADatabaseThatAlreadyHasGames:
+    """Games logged before sync existed have no travelling identity.
+
+    They are local history and perfectly real — someone may have been
+    recording results for a month — so they get a uid minted rather than
+    being left unsyncable or, worse, dropped. And the uid has to be UNIQUE,
+    because that index is what makes applying a game from a peer idempotent.
+    """
+
+    def _legacy_db(self, path):
+        """A `deck_games` table in the shape that shipped before sync."""
+        import sqlite3
+
+        conn = sqlite3.connect(str(path))
+        conn.executescript("""
+            CREATE TABLE decks (
+                deck_id TEXT PRIMARY KEY, name TEXT NOT NULL, format TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE deck_versions (
+                version_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id TEXT NOT NULL, version_number INTEGER NOT NULL,
+                saved_at TEXT NOT NULL, notes TEXT DEFAULT '',
+                decklist_json TEXT NOT NULL, scores_json TEXT DEFAULT '{}',
+                metrics_json TEXT DEFAULT '{}');
+            CREATE TABLE deck_games (
+                game_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                deck_id TEXT NOT NULL, version_number INTEGER NOT NULL DEFAULT 0,
+                result TEXT NOT NULL, opponent TEXT DEFAULT '',
+                notes TEXT DEFAULT '', played_at TEXT NOT NULL);
+        """)
+        conn.executemany(
+            """INSERT INTO deck_games (deck_id, version_number, result, played_at)
+               VALUES (?, ?, ?, ?)""",
+            [("old", 1, "win", "2026-01-01"), ("old", 1, "loss", "2026-01-02"),
+             ("old", 2, "win", "2026-01-03")])
+        conn.commit()
+        conn.close()
+
+    def test_the_old_games_survive_the_upgrade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "versions.db"
+            self._legacy_db(path)
+            store = VersionStore(db_path=path)
+            try:
+                assert store.deck_record("old")["record"] == "2-1"
+            finally:
+                store.close()
+
+    def test_and_every_one_gains_an_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "versions.db"
+            self._legacy_db(path)
+            store = VersionStore(db_path=path)
+            try:
+                games = store.games_for_sync("old")
+                assert len(games) == 3
+                assert all(g["game_uid"] for g in games), "unsyncable forever"
+                assert len({g["game_uid"] for g in games}) == 3
+            finally:
+                store.close()
+
+    def test_the_uid_index_is_unique_so_applying_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "versions.db"
+            self._legacy_db(path)
+            store = VersionStore(db_path=path)
+            try:
+                store.record_game("old", "win", game_uid="from-peer")
+                store.record_game("old", "win", game_uid="from-peer")
+                assert store.deck_record("old")["games"] == 4, (
+                    "the same game was counted twice")
+            finally:
+                store.close()
+
+    def test_reopening_does_not_re_mint_the_uids(self):
+        """The backfill must not run again and renumber history — a uid that
+        changed would look like a brand-new game to the other device."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "versions.db"
+            self._legacy_db(path)
+            first = VersionStore(db_path=path)
+            before = {g["game_uid"] for g in first.games_for_sync("old")}
+            first.close()
+
+            again = VersionStore(db_path=path)
+            try:
+                assert {g["game_uid"] for g in again.games_for_sync("old")} == before
+            finally:
+                again.close()
