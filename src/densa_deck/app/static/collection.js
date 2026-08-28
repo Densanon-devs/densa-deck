@@ -506,6 +506,127 @@
    * DECKS still want, and the alternative to saying so here is finding out at
    * the table.
    */
+  /**
+   * Colours, curve, types, rarity, sets, value — and how far through a set
+   * you are.
+   *
+   * Scoped to whatever the Group picker says, so it answers for a shelf as
+   * readily as for everything owned. Set completion is only shown for the
+   * whole collection: "how much of Commander Masters have I got" is a
+   * question about what you OWN, and asking it of a twelve-card trade bundle
+   * produces a number that reads as a broken one.
+   */
+  async function renderBreakdown() {
+    const host = e("breakdown-panel");
+    if (!host) return;
+    const uid = groupUidFor(e("collection-filter-group")?.value) || "";
+    host.innerHTML = "<p class=\"panel-hint\">Counting…</p>";
+
+    let b;
+    try {
+      b = await callApi("get_collection_breakdown", uid);
+    } catch (err) {
+      host.innerHTML = `<p class="panel-hint">${escape(err.message)}</p>`;
+      return;
+    }
+    if (!b || b.ok === false) {
+      host.innerHTML = "<p class=\"panel-hint\">Could not read that group.</p>";
+      return;
+    }
+    if (!b.total_cards) {
+      host.innerHTML = "<p class=\"panel-hint\">Nothing here to break down yet.</p>";
+      return;
+    }
+
+    // Bars are drawn against the biggest value in their own section rather
+    // than against the collection total: a curve where every bar is 2% of
+    // the collection is a flat grey block and says nothing.
+    const bars = (rows, label, count) => {
+      const top = Math.max(...rows.map(count), 1);
+      return rows.map(r => `
+        <div class="breakdown-row">
+          <span class="breakdown-label">${escape(String(label(r)))}</span>
+          <span class="breakdown-bar"><i style="width:${
+            Math.round(100 * count(r) / top)}%"></i></span>
+          <span class="breakdown-count">${count(r)}</span>
+        </div>`).join("");
+    };
+
+    const section = (title, body) =>
+      body ? `<div class="breakdown-section"><h4>${title}</h4>${body}</div>` : "";
+
+    host.innerHTML = `
+      <p class="breakdown-total">
+        <strong>${b.total_cards}</strong> cards
+        · ${b.distinct_cards} distinct
+        · ${money(b.value_usd)}
+        ${b.unpriced_cards
+          ? `<span class="subtle">(${b.unpriced_cards} unpriced, not in that total)</span>`
+          : ""}
+      </p>
+      ${section("Colours", bars(b.colors || [], r => r.name, r => r.cards))}
+      ${section("Mana value", bars(b.curve || [], r => r.label, r => r.cards)
+        + "<p class=\"panel-hint subtle\">Lands left out — they all cost "
+        + "nothing and would be one bar at zero.</p>")}
+      ${section("Types", bars(b.types || [], r => r.type, r => r.cards))}
+      ${section("Rarity", bars(b.rarities || [], r => r.rarity, r => r.cards))}
+      ${section("Sets", bars((b.sets || []).slice(0, 12),
+                             r => `${r.set_code} — ${r.set_name}`, r => r.cards))}
+      <div id="set-completion"></div>`;
+
+    if (!uid) void renderSetCompletion();
+  }
+
+  /** How far through each set the whole collection is. */
+  async function renderSetCompletion() {
+    const host = e("set-completion");
+    if (!host) return;
+    let out;
+    try {
+      out = await callApi("get_set_completion", "", 20, 2);
+    } catch (err) {
+      return;
+    }
+    if (!out || out.ok === false) return;
+    if (!out.catalogue_ready) {
+      // Zeroes here would read as an empty collection rather than as a file
+      // that was never downloaded.
+      host.innerHTML =
+        "<div class=\"breakdown-section\"><h4>Set completion</h4>" +
+        "<p class=\"panel-hint\">Needs the printing catalogue. " +
+        "<a href=\"#\" id=\"breakdown-sync\">Download it</a> to see how far " +
+        "through each set you are.</p></div>";
+      const link = e("breakdown-sync");
+      if (link) link.addEventListener("click", (ev) => {
+        ev.preventDefault(); startSync(false);
+      });
+      return;
+    }
+    if (!(out.sets || []).length) return;
+
+    host.innerHTML = `
+      <div class="breakdown-section">
+        <h4>Set completion</h4>
+        ${out.sets.map(s => `
+          <div class="breakdown-row">
+            <span class="breakdown-label" title="${escape(s.set_name)}">${escape(s.set_code)}</span>
+            <span class="breakdown-bar ${s.complete ? "is-complete" : ""}">
+              <i style="width:${s.percent || 0}%"></i></span>
+            <span class="breakdown-count">${s.owned}/${s.in_set}</span>
+          </div>`).join("")}
+        <p class="panel-hint subtle">Counted by collector number, so extra
+          copies and alternate printings are the same slot.</p>
+      </div>`;
+  }
+
+  function toggleBreakdown() {
+    const panel = e("breakdown-panel");
+    if (!panel) return;
+    const showing = !panel.classList.contains("hidden");
+    panel.classList.toggle("hidden", showing);
+    if (!showing) void renderBreakdown();
+  }
+
   async function refreshGroupSummary() {
     const picker = e("collection-filter-group");
     const summary = e("group-summary");
@@ -515,6 +636,10 @@
 
     const uid = groupUidFor(picker.value);
     actions?.classList.toggle("hidden", !uid);
+    // A breakdown left up after the selection changes is a set of numbers
+    // about a different pile.
+    const panel = e("breakdown-panel");
+    if (panel && !panel.classList.contains("hidden")) void renderBreakdown();
     if (!uid) {
       summary.textContent = "";
       warning?.classList.add("hidden");
@@ -1109,6 +1234,9 @@
     if (buildCopy) buildCopy.addEventListener("click", copyBuilt);
     const buildAnalyse = e("build-analyse-btn");
     if (buildAnalyse) buildAnalyse.addEventListener("click", analyseBuilt);
+
+    const breakdownBtn = e("breakdown-toggle");
+    if (breakdownBtn) breakdownBtn.addEventListener("click", toggleBreakdown);
 
     const exportBtn = e("group-export-btn");
     if (exportBtn) exportBtn.addEventListener("click", exportGroup);

@@ -452,6 +452,13 @@ Mainboard:
                 <option value="">(everything I own)</option>
               </select>
               <p id="group-summary" class="panel-hint subtle"></p>
+              <!-- What this pile is made of. Follows the Group picker, so it
+                   describes a shelf as readily as the whole collection —
+                   which is the version that matters while assembling a
+                   bundle. -->
+              <button id="breakdown-toggle" class="btn btn-slim btn-outline">
+                Breakdown</button>
+              <div id="breakdown-panel" class="breakdown-panel hidden"></div>
               <p id="group-warning" class="panel-hint hidden"></p>
               <div class="group-actions hidden" id="group-actions">
                 <!-- Make a deck out of this shelf. Every other suggestion

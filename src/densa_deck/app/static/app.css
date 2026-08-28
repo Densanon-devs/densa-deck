@@ -2710,3 +2710,67 @@ code {
 }
 
 .synergy-fit { font-size: 0.88rem; margin: 0 0 6px; }
+
+/* ---- collection breakdown ---------------------------------------------- */
+
+.breakdown-panel {
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+
+.breakdown-total { font-size: 0.95rem; margin: 0 0 10px; }
+
+.breakdown-section { margin-top: 12px; }
+
+.breakdown-section h4 {
+  color: #a0aec0;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+/* Label, bar, count — a fixed label column so the bars share a baseline and
+   can actually be compared to one another. */
+.breakdown-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 128px 1fr 52px;
+  padding: 2px 0;
+}
+
+.breakdown-label {
+  color: #e4e6eb;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown-bar {
+  background: #2d3748;
+  border-radius: 3px;
+  display: block;
+  height: 10px;
+  overflow: hidden;
+}
+
+.breakdown-bar i {
+  background: #4a90e2;
+  display: block;
+  height: 100%;
+}
+
+/* A finished set is the one row worth spotting at a glance. */
+.breakdown-bar.is-complete i { background: #68d391; }
+
+.breakdown-count {
+  color: #a0aec0;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

@@ -993,6 +993,49 @@ class AppApi:
         }
 
     @_safe
+    def get_collection_breakdown(self, collection_uid: str = "") -> dict:
+        """What a collection is made of — colours, curve, types, rarity, sets.
+
+        `collection_uid` empty means everything owned; passed, it scopes to
+        one group, which is what makes this useful while assembling a bundle
+        rather than only as a vanity page about the whole box.
+        """
+        store = self._get_collection_store()
+        collection_id = None
+        if (collection_uid or "").strip():
+            found = store.collection_by_uid(collection_uid.strip())
+            if not found:
+                return {"ok": False, "error": "No such collection."}
+            collection_id = found["collection_id"]
+
+        from densa_deck.collection.breakdown import breakdown
+        out = breakdown(store, self._get_db(), collection_id=collection_id)
+        out["collection_uid"] = collection_uid or ""
+        return out
+
+    @_safe
+    def get_set_completion(self, collection_uid: str = "",
+                           limit: int = 60, min_owned: int = 1) -> dict:
+        """How far through each set you are.
+
+        Needs the printing catalogue, which is a separate opt-in download —
+        `catalogue_ready` is False without it so the caller can say so rather
+        than showing zeroes that read as an empty collection.
+        """
+        store = self._get_collection_store()
+        collection_id = None
+        if (collection_uid or "").strip():
+            found = store.collection_by_uid(collection_uid.strip())
+            if not found:
+                return {"ok": False, "error": "No such collection."}
+            collection_id = found["collection_id"]
+
+        from densa_deck.collection.breakdown import set_completion
+        return set_completion(store, self._get_db(),
+                              collection_id=collection_id,
+                              limit=int(limit), min_owned=int(min_owned))
+
+    @_safe
     def card_synergy_report(self, card_name: str, decklist_text: str = "",
                             format_: str | None = None) -> dict:
         """Everything worth saying about one card, in the context of a deck.
