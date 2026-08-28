@@ -37,7 +37,60 @@ CREATE TABLE IF NOT EXISTS deck_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_versions_deck ON deck_versions(deck_id, version_number);
+
+-- Games played, and which version was on the table.
+--
+-- Deliberately NOT a foreign key to `deck_versions`. A record follows the
+-- version in part and the DECK as a whole, and history is capped — so the
+-- day a cap prunes v1..v9 is the day a FK would take nine versions' worth of
+-- games with it and quietly restate a deck's lifetime record. Storing the
+-- version NUMBER keeps every game attributable forever; the snapshot is what
+-- expires, not the fact that you played it and won.
+--
+-- `version_number` 0 means a game logged against a deck with no saved
+-- version yet, which is a real thing to do and must not be refused.
+CREATE TABLE IF NOT EXISTS deck_games (
+    game_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id TEXT NOT NULL,
+    version_number INTEGER NOT NULL DEFAULT 0,
+    result TEXT NOT NULL,
+    opponent TEXT DEFAULT '',
+    notes TEXT DEFAULT '',
+    played_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_games_deck ON deck_games(deck_id, version_number);
+
+-- How much history to keep, per deck. A row only exists for a deck that was
+-- given its own answer; everything else follows the default.
+CREATE TABLE IF NOT EXISTS deck_history_caps (
+    deck_id TEXT PRIMARY KEY,
+    max_versions INTEGER NOT NULL
+);
+
+-- One row, id 1. The default cap and anything else that is a preference
+-- rather than a fact about a deck.
+CREATE TABLE IF NOT EXISTS versioning_settings (
+    settings_id INTEGER PRIMARY KEY CHECK (settings_id = 1),
+    default_max_versions INTEGER NOT NULL
+);
 """
+
+# Keep this many versions per deck unless told otherwise.
+#
+# Not unlimited by default: a deck edited over a season accumulates hundreds
+# of snapshots of a hundred cards each, and the history screen is the thing
+# that gets slower. Not small either — the point of history is being able to
+# look back at a deck two months ago, and a cap of five cannot do that.
+DEFAULT_MAX_VERSIONS = 50
+
+# What `max_versions` means when it says "keep everything".
+UNCAPPED = 0
+
+# The three outcomes a game can have. Draws are counted and are NOT half a
+# win: a win rate that silently folds draws into losses tells you a deck is
+# worse than it is, and one that folds them into wins tells you the opposite.
+GAME_RESULTS = ("win", "loss", "draw")
 
 
 @dataclass
@@ -276,11 +329,304 @@ class VersionStore:
         ]
 
     def delete_deck(self, deck_id: str):
-        """Delete a deck and all its versions."""
+        """Delete a deck, its versions, its games and its history setting.
+
+        All four, because a deck id can be reused — someone deletes "Atraxa"
+        and builds another — and a surviving game row would credit the new
+        deck with the old one's record. Rows that outlive the thing they
+        describe are the same bug wherever they appear.
+        """
         conn = self.connect()
         conn.execute("DELETE FROM deck_versions WHERE deck_id = ?", (deck_id,))
+        conn.execute("DELETE FROM deck_games WHERE deck_id = ?", (deck_id,))
+        conn.execute("DELETE FROM deck_history_caps WHERE deck_id = ?", (deck_id,))
         conn.execute("DELETE FROM decks WHERE deck_id = ?", (deck_id,))
         conn.commit()
+
+    # ------------------------------------------------- versions worth saving
+
+    def save_version_if_changed(
+        self,
+        deck_id: str,
+        name: str,
+        format: str | None,
+        decklist: dict[str, int],
+        zones: dict[str, list[str]],
+        scores: dict[str, float] | None = None,
+        metrics: dict[str, float] | None = None,
+        notes: str = "",
+        printings: list[dict] | None = None,
+    ) -> tuple[DeckSnapshot, bool]:
+        """Save a version, but only if this deck actually differs.
+
+        Returns `(snapshot, created)`. When nothing changed the LATEST
+        version comes back with `created=False` and no row is written.
+
+        This is what makes automatic versioning bearable. Saving on every
+        edit produces forty snapshots of an afternoon's tinkering and buries
+        the three that meant something; saving only on a real difference
+        means the history reads as the deck's actual development, which is
+        the entire reason to keep one.
+
+        "Differs" means the cards, the zones, or the printings — not just the
+        card list. A commander moved to the maindeck and a swap to a
+        different printing of the same card are both edits a save persists,
+        and a version that ignored them would read back as something the user
+        never had.
+
+        Scores and metrics are deliberately NOT part of the comparison. They
+        are derived from the decklist, so they cannot differ on their own —
+        and they move when the card database is updated, which would
+        otherwise mint a version for every deck the day after an ingest.
+        """
+        latest = self.get_latest(deck_id)
+        if latest is not None and self._same_content(
+                latest, decklist, zones, printings or []):
+            # Same deck — but possibly a new note about it. Writing the note
+            # onto the version already there is the only way to keep it: a
+            # note is not a card, so it must not mint a version, and dropping
+            # it would mean someone typed something and watched it vanish.
+            if notes and notes != latest.notes:
+                conn = self.connect()
+                conn.execute(
+                    """UPDATE deck_versions SET notes = ?
+                       WHERE deck_id = ? AND version_number = ?""",
+                    (notes, deck_id, latest.version_number))
+                conn.commit()
+                latest.notes = notes
+            return latest, False
+
+        snapshot = self.save_version(
+            deck_id, name, format, decklist, zones,
+            scores=scores, metrics=metrics, notes=notes, printings=printings)
+        self.prune_history(deck_id)
+        return snapshot, True
+
+    @staticmethod
+    def _same_content(snapshot: DeckSnapshot, decklist: dict[str, int],
+                      zones: dict[str, list[str]],
+                      printings: list[dict]) -> bool:
+        """Is this the same deck as that snapshot?
+
+        Compared as normalised data rather than as text: dict ordering and
+        the order cards arrive in a zone are artefacts of parsing, not
+        decisions the user made, and treating them as differences would mint
+        a version every time someone re-saved without touching anything.
+        """
+        def zone_key(z):
+            return {k: sorted(v or []) for k, v in sorted((z or {}).items())}
+
+        def printing_key(rows):
+            # Only the fields that say WHICH card. A printing row carries
+            # display extras that vary between the parser and a reload.
+            #
+            # `card_name` OR `name`: the desktop save path writes the former
+            # and callers that build rows by hand tend to write the latter.
+            # Reading only one would compare every row's name as "" and let a
+            # genuine card swap past as "no change".
+            return sorted(
+                (str(r.get("card_name") or r.get("name") or "").strip().lower(),
+                 str(r.get("printing_id", "")).strip().lower(),
+                 str(r.get("set_code", "")).strip().lower(),
+                 str(r.get("collector_number", "")).strip().lower())
+                for r in (rows or []))
+
+        return (
+            {k: int(v) for k, v in (snapshot.decklist or {}).items()}
+            == {k: int(v) for k, v in (decklist or {}).items()}
+            and zone_key(snapshot.zones) == zone_key(zones)
+            and printing_key(snapshot.printings) == printing_key(printings)
+        )
+
+    # ------------------------------------------------------- how much to keep
+
+    def default_history_limit(self) -> int:
+        """Versions kept per deck when a deck has no answer of its own."""
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT default_max_versions FROM versioning_settings WHERE settings_id = 1"
+        ).fetchone()
+        return int(row[0]) if row else DEFAULT_MAX_VERSIONS
+
+    def set_default_history_limit(self, max_versions: int) -> int:
+        """Set the default. 0 means keep everything."""
+        value = max(0, int(max_versions))
+        conn = self.connect()
+        conn.execute(
+            """INSERT INTO versioning_settings (settings_id, default_max_versions)
+               VALUES (1, ?)
+               ON CONFLICT(settings_id) DO UPDATE SET default_max_versions = ?""",
+            (value, value))
+        conn.commit()
+        return value
+
+    def history_limit(self, deck_id: str) -> int:
+        """This deck's cap: its own if it has one, otherwise the default."""
+        conn = self.connect()
+        row = conn.execute(
+            "SELECT max_versions FROM deck_history_caps WHERE deck_id = ?",
+            (deck_id,)).fetchone()
+        return int(row[0]) if row else self.default_history_limit()
+
+    def set_history_limit(self, deck_id: str, max_versions: int | None) -> int:
+        """Give one deck its own cap, or `None` to put it back on the default.
+
+        Setting a cap does NOT prune on the spot. Pruning is destructive and
+        belongs to the moment a version is added, where it is the direct
+        consequence of an action the user just took — not to the moment they
+        change a number in settings and watch history disappear behind them.
+        """
+        conn = self.connect()
+        if max_versions is None:
+            conn.execute("DELETE FROM deck_history_caps WHERE deck_id = ?",
+                         (deck_id,))
+            conn.commit()
+            return self.default_history_limit()
+        value = max(0, int(max_versions))
+        conn.execute(
+            """INSERT INTO deck_history_caps (deck_id, max_versions)
+               VALUES (?, ?)
+               ON CONFLICT(deck_id) DO UPDATE SET max_versions = ?""",
+            (deck_id, value, value))
+        conn.commit()
+        return value
+
+    def prune_history(self, deck_id: str) -> int:
+        """Drop the oldest snapshots past the cap. Returns how many went.
+
+        The GAMES are not touched, and that is the whole point of storing
+        them against a version number rather than a version row: a deck's
+        lifetime record has to survive its history being trimmed, or the cap
+        silently rewrites how good the deck has been.
+        """
+        cap = self.history_limit(deck_id)
+        if cap <= UNCAPPED:
+            return 0
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT version_number FROM deck_versions
+               WHERE deck_id = ? ORDER BY version_number DESC""",
+            (deck_id,)).fetchall()
+        if len(rows) <= cap:
+            return 0
+        doomed = [r[0] for r in rows[cap:]]
+        conn.executemany(
+            "DELETE FROM deck_versions WHERE deck_id = ? AND version_number = ?",
+            [(deck_id, n) for n in doomed])
+        conn.commit()
+        return len(doomed)
+
+    # -------------------------------------------------------------- the record
+
+    def record_game(self, deck_id: str, result: str, *,
+                    version_number: int | None = None,
+                    opponent: str = "", notes: str = "") -> dict:
+        """Log one game. Returns the deck's record after it.
+
+        `version_number` omitted means the version currently on top, which is
+        what "I just played this deck" means. Passing one explicitly is for
+        entering results after the fact.
+        """
+        outcome = (result or "").strip().lower()
+        if outcome not in GAME_RESULTS:
+            raise ValueError(
+                f"A game is a {', '.join(GAME_RESULTS)} — not {result!r}.")
+
+        if version_number is None:
+            latest = self.get_latest(deck_id)
+            version_number = latest.version_number if latest else 0
+
+        conn = self.connect()
+        conn.execute(
+            """INSERT INTO deck_games
+                   (deck_id, version_number, result, opponent, notes, played_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (deck_id, int(version_number), outcome, opponent, notes,
+             datetime.now().isoformat()))
+        conn.commit()
+        return self.deck_record(deck_id)
+
+    def forget_game(self, game_id: int) -> bool:
+        """Remove one logged game. Returns False if it was not there."""
+        conn = self.connect()
+        cursor = conn.execute("DELETE FROM deck_games WHERE game_id = ?",
+                              (int(game_id),))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def deck_record(self, deck_id: str) -> dict:
+        """Wins, losses, draws and win rate across every version ever."""
+        conn = self.connect()
+        rows = conn.execute(
+            "SELECT result, COUNT(*) FROM deck_games WHERE deck_id = ? GROUP BY result",
+            (deck_id,)).fetchall()
+        return _record_from_counts({r[0]: r[1] for r in rows})
+
+    def version_record(self, deck_id: str, version_number: int) -> dict:
+        """The same, for the games played on one version of the deck."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT result, COUNT(*) FROM deck_games
+               WHERE deck_id = ? AND version_number = ? GROUP BY result""",
+            (deck_id, int(version_number))).fetchall()
+        return _record_from_counts({r[0]: r[1] for r in rows})
+
+    def records_by_version(self, deck_id: str) -> dict[int, dict]:
+        """Every version that has games, and how it did.
+
+        Includes version numbers whose snapshot has been pruned. That is not
+        a leak — it is the honest answer to "how has this deck done", and
+        hiding those games would make a capped history look like a better
+        deck than an uncapped one.
+        """
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT version_number, result, COUNT(*) FROM deck_games
+               WHERE deck_id = ? GROUP BY version_number, result""",
+            (deck_id,)).fetchall()
+        counts: dict[int, dict] = {}
+        for version_number, result, count in rows:
+            counts.setdefault(int(version_number), {})[result] = count
+        return {v: _record_from_counts(c) for v, c in sorted(counts.items())}
+
+    def games_for_deck(self, deck_id: str, limit: int = 200) -> list[dict]:
+        """The individual games, newest first."""
+        conn = self.connect()
+        rows = conn.execute(
+            """SELECT game_id, version_number, result, opponent, notes, played_at
+               FROM deck_games WHERE deck_id = ?
+               ORDER BY game_id DESC LIMIT ?""",
+            (deck_id, int(limit))).fetchall()
+        return [
+            {"game_id": r[0], "version_number": r[1], "result": r[2],
+             "opponent": r[3], "notes": r[4], "played_at": r[5]}
+            for r in rows
+        ]
+
+
+def _record_from_counts(counts: dict) -> dict:
+    """Turn {result: n} into a record, with the rate spelled out.
+
+    `win_rate` counts draws in the denominator, because they were games. A
+    deck that draws half its matches has not won half of them, and a rate
+    that says so would be flattering rather than useful. `decisive_win_rate`
+    is offered beside it for the people who think in wins-per-decision.
+    """
+    wins = int(counts.get("win", 0) or 0)
+    losses = int(counts.get("loss", 0) or 0)
+    draws = int(counts.get("draw", 0) or 0)
+    played = wins + losses + draws
+    decisive = wins + losses
+    return {
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "games": played,
+        "win_rate": round(wins / played, 4) if played else None,
+        "decisive_win_rate": round(wins / decisive, 4) if decisive else None,
+        # "3-1-1" reads faster than five fields and is how people say it.
+        "record": f"{wins}-{losses}" + (f"-{draws}" if draws else ""),
+    }
 
 
 def diff_versions(a: DeckSnapshot, b: DeckSnapshot) -> DeckDiff:

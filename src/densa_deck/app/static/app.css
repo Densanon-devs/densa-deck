@@ -2632,3 +2632,41 @@ code {
   line-height: 1.5;
   color: var(--color-text-dim, #8a8f9c);
 }
+
+/* ---- deck record ------------------------------------------------------- */
+
+/* The record sits in the editor meta line beside the version and card
+   count, because it is the same kind of fact about the deck. */
+.editor-record {
+  color: #68d391;
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-record-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+/* Win and loss are the two things scanned for in a list of games, so they
+   get colour and the draw does not — a third colour would make the column
+   a decoration rather than a signal. */
+.game-win { color: #68d391; font-weight: 600; }
+.game-loss { color: #fc8181; font-weight: 600; }
+.game-draw { color: #a0aec0; }
+
+#games-table { width: 100%; }
+#games-table td, #games-table th { padding: 6px 8px; text-align: left; }
+
+/* The retention control. `history-limit-hint` spells out what the number
+   means in words, because "0" meaning "keep everything" is not guessable. */
+.history-limit-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-limit-row input[type="number"] { width: 96px; }

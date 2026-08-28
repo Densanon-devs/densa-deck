@@ -597,6 +597,41 @@ Mainboard:
               <span id="editor-version-number"></span>
               <span id="editor-saved-at"></span>
               <span id="editor-card-count"></span>
+              <!-- The deck's whole record, and this version's share of it.
+                   Both, because they answer different questions: "is this
+                   deck any good" and "did the change help". -->
+              <span id="editor-record" class="editor-record"></span>
+            </div>
+
+            <div class="editor-record-bar">
+              <span class="filter-label">Log a game</span>
+              <button id="log-win-btn" class="btn btn-slim btn-outline"
+                      title="Record a win on the version currently loaded">Win</button>
+              <button id="log-loss-btn" class="btn btn-slim btn-outline">Loss</button>
+              <button id="log-draw-btn" class="btn btn-slim btn-outline">Draw</button>
+              <button id="editor-games-btn" class="btn btn-slim btn-outline"
+                      title="Every game logged for this deck">Game log</button>
+            </div>
+
+            <div id="editor-games" class="editor-history hidden">
+              <h3>Game log</h3>
+              <p class="panel-hint">Newest first. Removing a game takes it out
+                of the deck's record and its version's.</p>
+              <table id="games-table">
+                <thead>
+                  <tr>
+                    <th>Result</th>
+                    <th>Version</th>
+                    <th>Opponent</th>
+                    <th>Played</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="games-tbody"></tbody>
+              </table>
+              <p id="games-empty" class="panel-hint hidden">
+                No games logged yet. The buttons above add them.
+              </p>
             </div>
 
             <textarea id="editor-textarea" class="editor-textarea"></textarea>
@@ -621,6 +656,7 @@ Mainboard:
                 <thead>
                   <tr>
                     <th>Version</th>
+                    <th>Record</th>
                     <th>Saved</th>
                     <th>Cards</th>
                     <th>Notes</th>
@@ -759,6 +795,24 @@ Mainboard:
             </label>
             <p class="panel-hint subtle">Both off by default. Auto-download requires auto-check.</p>
           </div>
+        </div>
+
+        <div class="settings-row">
+          <h3>Deck history</h3>
+          <p class="panel-hint">A new version is saved whenever a deck's cards
+            change — not on every save, so the history reads as the deck's
+            actual development rather than every time you pressed a button.</p>
+          <div class="history-limit-row">
+            <label class="filter-label" for="history-limit-input">Keep at most</label>
+            <input type="number" id="history-limit-input" min="0" step="1" value="50">
+            <span class="filter-label">versions per deck</span>
+            <button id="history-limit-save" class="btn btn-slim btn-outline">Save</button>
+          </div>
+          <p id="history-limit-hint" class="panel-hint subtle">
+            Set 0 to keep everything. Older versions are trimmed the next time
+            a deck is saved — never when you change this number. Games you
+            logged are always kept, even for versions that have been trimmed.
+          </p>
         </div>
 
         <div class="settings-row">

@@ -433,10 +433,25 @@ class TestDeckLab:
         assert "Commander" in snap["decklist_text"] or "commander" in snap["decklist_text"].lower()
 
     def test_save_second_version_increments(self, api_with_cards):
+        """A CHANGED deck increments. Saving is what the editor does when you
+        are done editing, so the version number tracks EDITS rather than
+        saves — see the identical-save test below for the other half."""
+        v1 = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
+        v2 = "Commander:\n1 Sol Ring\n\nMainboard:\n1 Arcane Signet\n29 Forest\n"
+        api_with_cards.save_deck_version("d1", "D1", v1, "commander", "v1")
+        r2 = api_with_cards.save_deck_version("d1", "D1", v2, "commander", "v2")
+        assert r2["data"]["version_number"] == 2
+        assert r2["data"]["created"] is True
+
+    def test_saving_an_unchanged_deck_does_not_increment(self, api_with_cards):
+        """Forty snapshots of an afternoon's tinkering bury the three that
+        meant something. `created` is False so the UI can say so, rather than
+        leaving someone wondering why no new version appeared."""
         text = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
         api_with_cards.save_deck_version("d1", "D1", text, "commander", "v1")
-        r2 = api_with_cards.save_deck_version("d1", "D1", text, "commander", "v2")
-        assert r2["data"]["version_number"] == 2
+        r2 = api_with_cards.save_deck_version("d1", "D1", text, "commander", "v1")
+        assert r2["data"]["version_number"] == 1
+        assert r2["data"]["created"] is False
 
     def test_diff_two_versions(self, api_with_cards):
         v1 = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"

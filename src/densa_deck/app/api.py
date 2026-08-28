@@ -678,7 +678,15 @@ class AppApi:
             "average_cmc": float(result.average_cmc),
             "total_cards": float(result.total_cards),
         }
-        snap = self._get_vstore().save_version(
+        # A version only when the deck actually differs.
+        #
+        # Saving is what the editor does when you are done editing, and doing
+        # it on every save produced forty snapshots of an afternoon and buried
+        # the three that meant something. `created` is returned so the UI can
+        # say "saved" versus "saved as v7" — the difference matters, because a
+        # user who sees no new version needs to know that is the correct
+        # answer and not a failure.
+        snap, created = self._get_vstore().save_version_if_changed(
             deck_id=deck_id, name=name,
             format=deck.format.value if deck.format else None,
             decklist=decklist, zones=zones,
@@ -686,6 +694,8 @@ class AppApi:
             printings=printings,
         )
         out = _snapshot_to_dict(snap)
+        out["created"] = created
+        out["history_limit"] = self._get_vstore().history_limit(deck_id)
         # Attach combos_broken so the frontend can show a warning toast
         # right after save. Empty list when nothing broke (or when the
         # combo cache is empty / no prior version exists).
@@ -981,6 +991,97 @@ class AppApi:
             "frozen": bool(getattr(sys, "frozen", False)),
             "data_dir": str(Path(self._get_db().db_path).parent),
         }
+
+    @_safe
+    def record_deck_game(self, deck_id: str, result: str,
+                         version_number: int | None = None,
+                         opponent: str = "", notes: str = "") -> dict:
+        """Log a game and return the deck's record after it.
+
+        `version_number` omitted means whichever version is current, which is
+        what "I just played this" means. Passing one is for entering results
+        after the fact, or for a game played on a version you have since
+        edited past.
+        """
+        if not (deck_id or "").strip():
+            return {"ok": False, "error": "Which deck?"}
+        try:
+            record = self._get_vstore().record_game(
+                deck_id, result, version_number=version_number,
+                opponent=opponent, notes=notes)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"deck_id": deck_id, "record": record,
+                "by_version": self._get_vstore().records_by_version(deck_id)}
+
+    @_safe
+    def forget_deck_game(self, game_id: int, deck_id: str = "") -> dict:
+        """Take back a logged game — a misclick on a phone at a table."""
+        removed = self._get_vstore().forget_game(int(game_id))
+        out = {"removed": bool(removed)}
+        if deck_id:
+            out["record"] = self._get_vstore().deck_record(deck_id)
+        return out
+
+    @_safe
+    def get_deck_record(self, deck_id: str) -> dict:
+        """How this deck has done: overall, per version, and game by game.
+
+        `by_version` can name versions whose snapshot has been pruned by the
+        history cap. That is deliberate and is the honest answer — hiding
+        those games would make a capped deck look better than an uncapped one
+        that played exactly the same matches.
+        """
+        store = self._get_vstore()
+        return {
+            "deck_id": deck_id,
+            "record": store.deck_record(deck_id),
+            "by_version": store.records_by_version(deck_id),
+            "games": store.games_for_deck(deck_id),
+            "history_limit": store.history_limit(deck_id),
+            "default_history_limit": store.default_history_limit(),
+        }
+
+    @_safe
+    def get_history_limits(self, deck_id: str = "") -> dict:
+        """The default cap, and this deck's own if it has one."""
+        store = self._get_vstore()
+        own = None
+        if deck_id:
+            conn = store.connect()
+            row = conn.execute(
+                "SELECT max_versions FROM deck_history_caps WHERE deck_id = ?",
+                (deck_id,)).fetchone()
+            own = int(row[0]) if row else None
+        return {
+            "default_history_limit": store.default_history_limit(),
+            "deck_history_limit": own,
+            "effective": store.history_limit(deck_id) if deck_id
+            else store.default_history_limit(),
+        }
+
+    @_safe
+    def set_history_limit(self, max_versions: int | None,
+                          deck_id: str = "") -> dict:
+        """Cap how many versions are kept. 0 keeps everything.
+
+        With `deck_id` this sets one deck's own limit; `None` there puts that
+        deck back on the default. Without one it moves the default itself.
+
+        Nothing is pruned here. Trimming happens on the next save, where it
+        follows an action the user just took — rather than history vanishing
+        behind them because they changed a number in settings.
+        """
+        store = self._get_vstore()
+        if deck_id:
+            value = store.set_history_limit(deck_id, max_versions)
+            return {"deck_id": deck_id, "effective": value,
+                    "default_history_limit": store.default_history_limit()}
+        if max_versions is None:
+            return {"ok": False,
+                    "error": "The default needs a number. Use 0 to keep everything."}
+        value = store.set_default_history_limit(max_versions)
+        return {"default_history_limit": value, "effective": value}
 
     @_safe
     def check_for_updates(self, url: str = "https://toolkit.densanon.com/densa-deck-version.json") -> dict:

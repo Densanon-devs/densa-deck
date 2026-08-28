@@ -14,6 +14,10 @@ const state = {
   tier: null,
   currentDeckId: null,
   currentSnapshot: null,
+  // Which version is open, and the deck's record — read by the history
+  // table as it paints, so both are loaded before it renders.
+  currentVersion: null,
+  deckRecord: null,
   decks: [],
   history: [],
   // Coach tab state
@@ -48,6 +52,7 @@ function cacheElements() {
     "update-banner-body", "setup-banner-body",
     // About panel
     "about-version",
+    "history-limit-input", "history-limit-save", "history-limit-hint",
     // Coach tab
     "coach-deck-select", "coach-start-btn", "coach-sessions-list",
     "coach-empty", "coach-active", "coach-deck-name", "coach-deck-meta",
@@ -61,6 +66,8 @@ function cacheElements() {
     "refresh-decks-btn", "deck-list",
     "deck-editor-empty", "deck-editor-open",
     "editor-deck-name", "editor-version-number", "editor-saved-at", "editor-card-count",
+    "editor-record", "log-win-btn", "log-loss-btn", "log-draw-btn",
+    "editor-games-btn", "editor-games", "games-tbody", "games-empty",
     "editor-textarea", "editor-notes-input",
     "editor-save-version-btn", "editor-analyze-btn", "editor-history-btn", "editor-delete-btn",
     "editor-duel-btn", "editor-duel", "duel-opponent-select", "duel-sims-select",
@@ -249,6 +256,15 @@ async function bootstrap() {
   // My Decks tab
   els.refresh_decks_btn.addEventListener("click", refreshDeckList);
   els.editor_save_version_btn.addEventListener("click", saveEditorAsNewVersion);
+  if (els.history_limit_save) {
+    els.history_limit_save.addEventListener("click", saveHistoryLimit);
+  }
+  // A game is three clicks away from the deck it was played with, which is
+  // the only place anyone would think to look for it.
+  if (els.log_win_btn) els.log_win_btn.addEventListener("click", () => logGame("win"));
+  if (els.log_loss_btn) els.log_loss_btn.addEventListener("click", () => logGame("loss"));
+  if (els.log_draw_btn) els.log_draw_btn.addEventListener("click", () => logGame("draw"));
+  if (els.editor_games_btn) els.editor_games_btn.addEventListener("click", toggleGameLog);
   els.editor_analyze_btn.addEventListener("click", () => loadIntoAnalyzeTab());
   els.editor_history_btn.addEventListener("click", toggleHistory);
   els.editor_delete_btn.addEventListener("click", deleteCurrentDeck);
@@ -1396,6 +1412,11 @@ async function openDeck(deckId) {
     els.editor_textarea.value = snap.decklist_text;
     els.editor_notes_input.value = "";
     els.editor_history.classList.add("hidden");
+    if (els.editor_games) els.editor_games.classList.add("hidden");
+    // Which version is loaded, so the record can show this version's share
+    // of it beside the deck's total.
+    state.currentVersion = snap.version_number;
+    await refreshDeckRecord();
     await refreshDeckList(); // re-highlight the active deck
   } catch (e) {
     toast("Failed to load deck: " + e.message, "error");
@@ -1411,7 +1432,13 @@ async function saveEditorAsNewVersion() {
     const snap = await callApi("save_deck_version",
       state.currentDeckId, state.currentSnapshot.deck_id,
       text, state.currentSnapshot.format || "commander", notes);
-    toast(`Saved as v${snap.version_number}.`, "success");
+    // Saying which of the two things happened. A user who edited nothing
+    // and sees no new version needs to know that is the right answer rather
+    // than a failed save — and one who edited a card needs the number.
+    toast(snap.created
+      ? `Saved as v${snap.version_number}.`
+      : "No card changes, so this is still v" + snap.version_number + ".",
+      snap.created ? "success" : "info");
     notifyCombosBroken(snap);
     await openDeck(state.currentDeckId);
   } catch (e) {
@@ -1428,6 +1455,9 @@ async function toggleHistory() {
   try {
     const versions = await callApi("get_deck_history", state.currentDeckId);
     state.history = versions;
+    // Loaded first: the table reads `state.deckRecord` as it paints, and a
+    // history that renders before the record shows every version as blank.
+    await refreshDeckRecord();
     els.history_body.innerHTML = "";
     versions.forEach((v, idx) => {
       const tr = document.createElement("tr");
@@ -1436,8 +1466,17 @@ async function toggleHistory() {
       const diffButton = idx < versions.length - 1
         ? `<button class="btn btn-outline" style="padding:4px 10px;font-size:0.82rem" data-a="${versions[idx + 1].version_number}" data-b="${v.version_number}">Diff vs v${versions[idx + 1].version_number}</button>`
         : "";
+      // What that version actually did on the table. The reason to keep a
+      // history at all is to answer "did that change help", and a history
+      // without results cannot.
+      const rec = (state.deckRecord && state.deckRecord.by_version
+                   && state.deckRecord.by_version[v.version_number]) || null;
+      const recCell = rec && rec.games
+        ? `<span title="${rec.games} game${rec.games === 1 ? "" : "s"}">${escape(rec.record)}</span>`
+        : "<span class='status-text'>&mdash;</span>";
       tr.innerHTML = `
         <td>v${v.version_number}</td>
+        <td>${recCell}</td>
         <td>${(v.saved_at || "").slice(0, 19).replace("T", " ")}</td>
         <td>${v.card_count}</td>
         <td>${notes}</td>
@@ -1452,6 +1491,104 @@ async function toggleHistory() {
   } catch (e) {
     toast("Failed to load history: " + e.message, "error");
   }
+}
+
+/**
+ * How this deck has done, and how the loaded version has.
+ *
+ * Two numbers rather than one because they answer different questions: the
+ * deck's record says whether the deck is any good, and the version's says
+ * whether the last change helped. A single figure cannot do both, and the
+ * one people quote is always the deck's.
+ */
+async function refreshDeckRecord() {
+  if (!state.currentDeckId || !els.editor_record) return;
+  let out;
+  try {
+    out = await callApi("get_deck_record", state.currentDeckId);
+  } catch (e) {
+    els.editor_record.textContent = "";
+    return;
+  }
+  state.deckRecord = out;
+  const overall = out.record || {};
+  if (!overall.games) {
+    // "Never played" and "0%" are different things, and a deck showing 0%
+    // reads as bad rather than new.
+    els.editor_record.textContent = "no games logged";
+    els.editor_record.title = "Log one with the buttons below.";
+    return;
+  }
+  const loaded = state.currentVersion;
+  const mine = loaded ? (out.by_version || {})[loaded] : null;
+  const rate = overall.win_rate === null || overall.win_rate === undefined
+    ? "" : `  ·  ${Math.round(overall.win_rate * 100)}%`;
+  els.editor_record.textContent =
+    `${overall.record}${rate}` +
+    (mine && mine.games ? `  ·  v${loaded}: ${mine.record}` : "");
+  els.editor_record.title =
+    `${overall.wins} won, ${overall.losses} lost` +
+    (overall.draws ? `, ${overall.draws} drawn` : "") +
+    ` across ${overall.games} game${overall.games === 1 ? "" : "s"}.`;
+}
+
+async function logGame(result) {
+  if (!state.currentDeckId) {
+    toast("Open a deck first — a game belongs to one.", "info");
+    return;
+  }
+  try {
+    await callApi("record_deck_game", state.currentDeckId, result);
+  } catch (e) {
+    toast("Could not log that: " + e.message, "error");
+    return;
+  }
+  await refreshDeckRecord();
+  if (els.editor_games && !els.editor_games.classList.contains("hidden")) {
+    await renderGameLog();
+  }
+  toast(`Logged a ${result}.`, "success");
+}
+
+async function toggleGameLog() {
+  if (!els.editor_games) return;
+  if (!els.editor_games.classList.contains("hidden")) {
+    els.editor_games.classList.add("hidden");
+    return;
+  }
+  await renderGameLog();
+  els.editor_games.classList.remove("hidden");
+}
+
+async function renderGameLog() {
+  if (!state.currentDeckId || !els.games_tbody) return;
+  let out;
+  try {
+    out = await callApi("get_deck_record", state.currentDeckId);
+  } catch (e) {
+    toast("Could not load the game log: " + e.message, "error");
+    return;
+  }
+  const games = out.games || [];
+  els.games_tbody.innerHTML = "";
+  games.forEach(g => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="game-${escape(g.result)}">${escape(g.result)}</td>
+      <td>${g.version_number ? "v" + g.version_number : "\u2014"}</td>
+      <td>${escape(g.opponent || "")}</td>
+      <td>${escape((g.played_at || "").slice(0, 16).replace("T", " "))}</td>
+      <td><button class="btn btn-outline btn-slim" data-game="${g.game_id}">Remove</button></td>
+    `;
+    els.games_tbody.appendChild(tr);
+  });
+  els.games_tbody.querySelectorAll("button[data-game]").forEach(btn =>
+    btn.addEventListener("click", async () => {
+      await callApi("forget_deck_game", +btn.dataset.game, state.currentDeckId);
+      await renderGameLog();
+      await refreshDeckRecord();
+    }));
+  if (els.games_empty) els.games_empty.classList.toggle("hidden", games.length > 0);
 }
 
 async function showDiff(vA, vB) {
@@ -1735,6 +1872,22 @@ function renderDuelResult(r) {
 
 // ------------------------------ Settings view ------------------------------
 
+/** Save the default number of versions kept per deck. */
+async function saveHistoryLimit() {
+  const raw = (els.history_limit_input && els.history_limit_input.value) || "";
+  const value = Math.max(0, parseInt(raw, 10) || 0);
+  try {
+    const out = await callApi("set_history_limit", value);
+    els.history_limit_input.value = out.default_history_limit;
+    toast(value === 0
+      ? "Keeping every version of every deck."
+      : `Keeping the newest ${out.default_history_limit} versions per deck.`,
+      "success");
+  } catch (e) {
+    toast("Could not save that: " + e.message, "error");
+  }
+}
+
 async function refreshSettings() {
   try {
     const tier = await callApi("get_tier");
@@ -1760,6 +1913,15 @@ async function refreshSettings() {
         const paths = v.data_dir ? ` · data in ${v.data_dir}` : "";
         detail.textContent = (v.frozen ? "packaged build" : "running from source")
           + paths;
+      }
+    } catch (e) { /* non-fatal */ }
+
+    // How much deck history to keep. Non-fatal: a settings panel that fails
+    // to render because one number would not load is a worse settings panel.
+    try {
+      const limits = await callApi("get_history_limits");
+      if (els.history_limit_input) {
+        els.history_limit_input.value = limits.default_history_limit;
       }
     } catch (e) { /* non-fatal */ }
 
