@@ -1573,3 +1573,51 @@ class TestBuilder:
         # Version 1 saved; visible via list_saved_decks
         listing = api_with_cards.list_saved_decks()
         assert any(d["deck_id"] == "test-pro" for d in listing["data"])
+
+
+class TestAFormatTheEngineDoesNotKnow:
+    """`Format(value)` raises a ValueError reading "'zzz' is not a valid
+    Format", @_safe returned that verbatim, and the PHONE shows it to the
+    user. It names no valid option and reads like a stack trace.
+
+    The same parser also normalises, because the sites that caught the error
+    fell back to Commander — so "MODERN" was not an error, it was silently
+    the wrong format.
+    """
+
+    DECK = "1 Sol Ring\n30 Island"
+
+    def test_an_unknown_format_is_refused_in_words(self, api_with_cards):
+        reply = api_with_cards.analyze_deck(self.DECK, "not-a-format", "X")
+        body = reply.get("data", reply)
+        assert body["ok"] is False
+        assert body["error_type"] == "UnknownFormat"
+        assert "commander" in body["error"], "it must name the valid options"
+        assert "not a valid Format" not in body["error"], "raw ValueError text"
+
+    def test_the_case_you_typed_does_not_matter(self, api_with_cards):
+        for spelling in ("MODERN", "Modern", " modern "):
+            body = api_with_cards.analyze_deck(self.DECK, spelling, "X")
+            body = body.get("data", body)
+            assert body.get("ok") is not False, spelling
+            assert body["format"] == "modern", spelling
+
+    def test_no_format_still_means_commander(self, api_with_cards):
+        body = api_with_cards.analyze_deck(self.DECK, "", "X")
+        body = body.get("data", body)
+        assert body["format"] == "commander"
+
+    def test_saving_refuses_it_too(self, api_with_cards, monkeypatch):
+        monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
+        reply = api_with_cards.save_deck_version("d", "D", self.DECK, "zzz", "")
+        body = reply.get("data", reply)
+        assert body["error_type"] == "UnknownFormat"
+
+    def test_the_card_panel_normalises_rather_than_falling_back(self, api_with_cards):
+        """It catches the error and returns the card half, so an unknown
+        format is survivable there — but a KNOWN format in the wrong case
+        must not quietly become Commander."""
+        reply = api_with_cards.card_synergy_report("Sol Ring", self.DECK, "MODERN")
+        body = reply.get("data", reply)
+        assert body["has_deck"] is True
+        assert "deck_error" not in body

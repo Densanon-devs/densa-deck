@@ -527,7 +527,9 @@ class AppApi:
         entries = parse_auto(decklist_text)
         if not entries:
             return {"ok": False, "error": "No cards parsed from the decklist."}
-        fmt = Format(format_) if format_ else Format.COMMANDER
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
+            return fmt
         deck = resolve_deck(entries, db, name=name, format=fmt)
 
         static_result = run_static_analysis(deck)
@@ -766,7 +768,9 @@ class AppApi:
         entries = parse_auto(decklist_text)
         if not entries:
             return {"ok": False, "error": "No cards parsed from the decklist."}
-        fmt = Format(format_) if format_ else Format.COMMANDER
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
+            return fmt
         deck = resolve_deck(entries, db, name=name, format=fmt)
 
         result = run_static_analysis(deck)
@@ -1174,6 +1178,32 @@ class AppApi:
             out["locked_feature"] = "collection_analytics"
         return out
 
+    @staticmethod
+    def _as_format(value, default=None):
+        """A Format, or a sentence somebody can act on.
+
+        `Format(value)` raises a ValueError whose text is
+        "'not-a-format' is not a valid Format" — which @_safe dutifully
+        returned to the caller, and which the PHONE shows to the user
+        verbatim. It names no valid option and reads like a stack trace.
+
+        Returns the format, or a dict the caller returns as-is.
+        """
+        from densa_deck.models import Format as _Format
+
+        if not value:
+            return default if default is not None else _Format.COMMANDER
+        if isinstance(value, _Format):
+            return value
+        try:
+            return _Format(str(value).strip().lower())
+        except ValueError:
+            known = ", ".join(f.value for f in _Format)
+            return {"ok": False,
+                    "error": f"{value!r} is not a format this engine knows. "
+                             f"Try one of: {known}.",
+                    "error_type": "UnknownFormat"}
+
     def _tier_allows(self, feature: str) -> bool:
         """One place the tier is asked, so the next gate reads like the rest.
 
@@ -1264,7 +1294,12 @@ class AppApi:
 
         try:
             entries = parse_auto(decklist_text)
-            fmt = Format(format_) if format_ else Format.COMMANDER
+            # Normalised, so "MODERN" and " Modern " are Modern rather than
+            # silently falling back to Commander and answering about the
+            # wrong format.
+            fmt = self._as_format(format_)
+            if isinstance(fmt, dict):
+                fmt = Format.COMMANDER
             deck = resolve_deck(entries, db, name="Deck", format=fmt)
         except Exception as exc:
             # The card half is still worth returning. A decklist that will
@@ -1966,9 +2001,8 @@ class AppApi:
             return {"ok": False,
                     "error": "There are no cards in that collection to build from."}
 
-        try:
-            fmt = Format(format_) if format_ else Format.COMMANDER
-        except ValueError:
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
             fmt = Format.COMMANDER
         try:
             built = build_from_pool(pool, fmt, commander_name=commander,
@@ -2478,9 +2512,8 @@ class AppApi:
             c.value for e in deck.entries if e.card for c in e.card.color_identity
         }
         deck_names = {e.card.name for e in deck.entries if e.card}
-        try:
-            fmt = Format(format_) if format_ else (deck.format or Format.COMMANDER)
-        except ValueError:
+        fmt = self._as_format(format_, deck.format or Format.COMMANDER)
+        if isinstance(fmt, dict):
             fmt = Format.COMMANDER
 
         suggestions: list[dict] = []
@@ -2724,10 +2757,8 @@ class AppApi:
                 pass
 
         from densa_deck.models import Format
-        fmt = None
-        try:
-            fmt = Format(format_) if format_ else None
-        except ValueError:
+        fmt = self._as_format(format_, None) if format_ else None
+        if isinstance(fmt, dict):
             fmt = None
 
         db = self._get_db()
@@ -5935,7 +5966,9 @@ class AppApi:
         entries = parse_auto(decklist_text)
         if not entries:
             return {"ok": False, "error": "No cards parsed from the decklist."}
-        fmt = Format(format_) if format_ else Format.COMMANDER
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
+            return fmt
         deck = resolve_deck(entries, db, name=name, format=fmt)
 
         # Detect combos against the local cache (when populated). The
@@ -6695,7 +6728,9 @@ class AppApi:
         entries = parse_auto(decklist_text)
         if not entries:
             return {"ok": False, "error": "No cards parsed from the decklist."}
-        fmt = Format(format_) if format_ else Format.COMMANDER
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
+            return fmt
         return resolve_deck(entries, db, name=name, format=fmt)
 
 
