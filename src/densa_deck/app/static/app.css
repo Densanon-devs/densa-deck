@@ -2794,3 +2794,84 @@ code {
 }
 
 .pro-gate-reason:empty { display: none; }
+
+/* ---- price history ----------------------------------------------------- */
+
+.spark {
+  display: block;
+  height: 40px;
+  margin: 4px 0 6px;
+  width: 100%;
+}
+
+.spark-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The direction is the reading, so it carries the colour rather than the
+   chart being decorative blue whichever way the money went. */
+.spark-up { stroke: #68d391; }
+.spark-down { stroke: #fc8181; }
+.spark-flat { stroke: #a0aec0; }
+
+.price-move {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 4px;
+}
+
+.price-up { color: #68d391; font-weight: 600; }
+.price-down { color: #fc8181; font-weight: 600; }
+.price-flat { color: #a0aec0; }
+
+/* ---- playgroups -------------------------------------------------------- */
+
+.pod-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pod {
+  background: #1a202c;
+  border: 1px solid #2d3748;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+}
+
+.pod-head,
+.pod-member,
+.pod-member-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pod-head { margin-bottom: 6px; }
+
+/* Members sit under their pod and read as a list rather than as more pods. */
+.pod-member {
+  border-top: 1px solid #2d3748;
+  font-size: 0.9rem;
+  padding: 5px 0;
+}
+
+.pod-member-form { margin-top: 8px; }
+.pod-member-form .pod-commander { flex: 1 1 12rem; }
+.pod-member-form .pod-power { width: 7rem; }
+
+.pod-default {
+  background: var(--accent-sunk, #1a2634);
+  border-radius: 4px;
+  color: #4a90e2;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  text-transform: uppercase;
+}

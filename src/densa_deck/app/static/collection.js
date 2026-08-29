@@ -948,13 +948,80 @@
       ${d.scryfall_url ? `<p><a href="${escape(d.scryfall_url)}" target="_blank" rel="noreferrer">Rulings and printings on Scryfall</a></p>` : ""}
       <p class="subtle card-detail-credit">Card images and data from Scryfall.
         Not affiliated with Wizards of the Coast.</p>
+      <div id="card-price-history"></div>
       <div id="card-synergy" class="card-synergy"></div>`;
+
+    // Prices have been captured every time the collection was valued and
+    // shown nowhere. Drawn before the synergy panel because it is about the
+    // printing on screen rather than about the deck.
+    void renderPriceHistory(printingId);
 
     // Loaded AFTER the card text is on screen, and never awaited by it. The
     // synergy report parses a decklist and walks the combo cache; making the
     // art and the rules text wait on that would turn a fast panel into a
     // slow one for the sake of a section further down.
     void renderSynergy(cardName || d.name || "");
+  }
+
+  /**
+   * What this printing has been worth.
+   *
+   * Local history, not a backfill — Scryfall does not serve past prices, so
+   * this is only what has been captured since you started valuing the
+   * collection. Drawn only from TWO points upward: one point is a price, not
+   * a history, and a chart of it would be a flat line implying stability
+   * nobody measured.
+   */
+  async function renderPriceHistory(printingId) {
+    const host = e("card-price-history");
+    if (!host || !printingId) return;
+    host.innerHTML = "";
+
+    let out;
+    try {
+      out = await callApi("get_price_history", printingId, "nonfoil", 365);
+    } catch (err) {
+      return;                      // a card view is not worth breaking over
+    }
+    const points = (out && out.points) || [];
+    if (points.length < 2) return;
+
+    const values = points.map(p => Number(p.price_usd) || 0);
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    const first = values[0];
+    const last = values[values.length - 1];
+    const move = last - first;
+
+    // A flat series still has to draw something, so a zero range becomes a
+    // line through the middle rather than a division by zero.
+    const span = high - low || 1;
+    const W = 240;
+    const H = 40;
+    const coords = values.map((v, i) => {
+      const x = values.length === 1 ? W : (i / (values.length - 1)) * W;
+      const y = H - ((v - low) / span) * H;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+
+    const dir = move > 0 ? "up" : move < 0 ? "down" : "flat";
+    const sign = move > 0 ? "+" : "";
+    host.innerHTML = `
+      <div class="synergy-block">
+        <h4>What it has been worth</h4>
+        <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+             role="img" aria-label="Price over ${points.length} readings">
+          <polyline class="spark-line spark-${dir}" points="${coords}"></polyline>
+        </svg>
+        <p class="price-move">
+          ${money(last)}
+          <span class="price-${dir}">${sign}${money(move)}</span>
+          <span class="subtle">over ${points.length} readings ·
+            low ${money(low)} · high ${money(high)}</span>
+        </p>
+        <p class="panel-hint subtle">Recorded on this machine when your
+          collection was valued. It does not go back further than that.</p>
+      </div>`;
   }
 
   /**

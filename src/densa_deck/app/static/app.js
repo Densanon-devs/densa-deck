@@ -53,6 +53,7 @@ function cacheElements() {
     // About panel
     "about-version",
     "history-limit-input", "history-limit-save", "history-limit-hint",
+    "pod-new-name", "pod-create-btn", "pod-list", "pod-member-form",
     // Coach tab
     "coach-deck-select", "coach-start-btn", "coach-sessions-list",
     "coach-empty", "coach-active", "coach-deck-name", "coach-deck-meta",
@@ -260,6 +261,9 @@ async function bootstrap() {
   if (els.history_limit_save) {
     els.history_limit_save.addEventListener("click", saveHistoryLimit);
   }
+  if (els.pod_create_btn) {
+    els.pod_create_btn.addEventListener("click", createPod);
+  }
   // A game is three clicks away from the deck it was played with, which is
   // the only place anyone would think to look for it.
   if (els.log_win_btn) els.log_win_btn.addEventListener("click", () => logGame("win"));
@@ -345,7 +349,12 @@ async function bootstrap() {
     els.pref_auto_download.addEventListener("change", onPrefChange);
   }
   if (els.rulings_download_btn) {
-    els.rulings_download_btn.addEventListener("click", startRulingsDownload);
+    // Routed by what the button currently offers to do. Installed rulings
+    // get a real check first; a fresh install goes straight to the download.
+    els.rulings_download_btn.addEventListener("click", () =>
+      els.rulings_download_btn.dataset.mode === "check"
+        ? checkRulingsUpdate()
+        : startRulingsDownload());
   }
   if (els.rulings_remove_btn) {
     els.rulings_remove_btn.addEventListener("click", removeRulings);
@@ -777,16 +786,59 @@ async function loadRulingsStatus() {
     if (!s.installed) {
       els.rulings_status.innerHTML = `<div class="card missing"><strong>Rulings</strong><br>Not installed &mdash; optional ~${s.approx_size_mb} MB download. Card analysis works fully without them.</div>`;
       els.rulings_download_btn.textContent = "Download rulings";
+      els.rulings_download_btn.dataset.mode = "download";
       els.rulings_remove_btn.classList.add("hidden");
       return;
     }
     const when = s.last_download_at ? escape(s.last_download_at.slice(0, 10)) : "unknown";
     els.rulings_status.innerHTML = `<div class="card ready"><strong>Rulings</strong><br>${(s.ruling_count || 0).toLocaleString()} rulings installed &middot; downloaded ${when}</div>`;
     els.rulings_download_btn.textContent = "Check for updates";
+    els.rulings_download_btn.dataset.mode = "check";
     els.rulings_remove_btn.classList.remove("hidden");
   } catch (e) {
     // Non-fatal — never block Settings on an optional dataset.
   }
+}
+
+/**
+ * The button when rulings are already installed.
+ *
+ * It has always SAID "Check for updates" and always re-downloaded the whole
+ * five megabytes without checking anything — `rulings_check_update` existed
+ * for exactly this and nothing called it. Asking first costs one small
+ * request and usually saves the download entirely.
+ *
+ * A check that cannot reach Scryfall offers the download anyway rather than
+ * refusing: being unable to confirm there is a newer file is not a reason to
+ * stop somebody fetching one.
+ */
+async function checkRulingsUpdate() {
+  if (!els.rulings_download_btn) return;
+  els.rulings_download_btn.disabled = true;
+  els.rulings_status_text.textContent = "Checking\u2026";
+  let answer;
+  try {
+    answer = await callApi("rulings_check_update");
+  } catch (e) {
+    els.rulings_download_btn.disabled = false;
+    els.rulings_status_text.textContent = "";
+    toast("Could not reach Scryfall: " + e.message, "error");
+    return;
+  }
+  els.rulings_download_btn.disabled = false;
+  els.rulings_status_text.textContent = "";
+
+  if (answer && answer.error) {
+    toast("Could not check for updates (" + answer.error +
+          "). Downloading anyway will still get the newest file.", "info");
+    return;
+  }
+  if (answer && answer.available) {
+    els.rulings_status_text.textContent = "A newer file is available.";
+    await startRulingsDownload();
+    return;
+  }
+  toast("Your rulings are up to date \u2014 nothing to download.", "success");
 }
 
 async function startRulingsDownload() {
@@ -1951,6 +2003,140 @@ function renderDuelResult(r) {
 
 // ------------------------------ Settings view ------------------------------
 
+// ------------------------------------------------ playgroups (Settings) ---
+
+/**
+ * The pods you play against.
+ *
+ * Every one of these endpoints has existed since the playgroup feature
+ * landed and none of them was reachable from the app — pods could only be
+ * made on the command line, which is not where anybody was going to make
+ * them. `delete_playgroup` in particular had no caller anywhere.
+ */
+async function refreshPods() {
+  if (!els.pod_list) return;
+  let reply;
+  try {
+    reply = await callApi("list_playgroups");
+  } catch (e) {
+    els.pod_list.innerHTML =
+      `<p class="panel-hint">Could not read your playgroups: ${escape(e.message)}</p>`;
+    return;
+  }
+  const pods = (reply && reply.pods) || [];
+  if (!pods.length) {
+    els.pod_list.innerHTML =
+      "<p class=\"panel-hint\">No pods yet. Name one above and add the " +
+      "commanders people bring.</p>";
+    return;
+  }
+
+  els.pod_list.innerHTML = pods.map(pod => `
+    <div class="pod" data-pod="${escape(pod.name)}">
+      <div class="pod-head">
+        <strong>${escape(pod.name)}</strong>
+        ${pod.is_default ? "<span class=\"pod-default\">default</span>" : ""}
+        <span class="subtle">${pod.member_count} deck${
+          pod.member_count === 1 ? "" : "s"}</span>
+        <span class="grow"></span>
+        ${pod.is_default ? "" :
+          `<button class="btn btn-outline btn-slim pod-make-default">Make default</button>`}
+        <button class="btn btn-outline btn-slim pod-delete group-danger">Delete</button>
+      </div>
+      ${(pod.members || []).map(m => `
+        <div class="pod-member">
+          <span class="grow">${escape(m.commander_name)}</span>
+          <span class="subtle">${escape(m.archetype || "unknown")}${
+            m.power_level ? ` · power ${m.power_level}` : ""}</span>
+          <button class="btn btn-outline btn-slim pod-drop-member"
+                  data-commander="${escape(m.commander_name)}">Remove</button>
+        </div>`).join("")}
+      <div class="pod-form-slot"></div>
+    </div>`).join("");
+
+  // The member form is cloned per pod so each one edits its own.
+  els.pod_list.querySelectorAll(".pod").forEach(node => {
+    const name = node.dataset.pod;
+    const slot = node.querySelector(".pod-form-slot");
+    if (slot && els.pod_member_form) {
+      slot.appendChild(els.pod_member_form.content.cloneNode(true));
+      slot.querySelector(".pod-add-member")
+          .addEventListener("click", () => addPodMember(name, slot));
+    }
+    const del = node.querySelector(".pod-delete");
+    if (del) del.addEventListener("click", () => deletePod(name));
+    const mk = node.querySelector(".pod-make-default");
+    if (mk) mk.addEventListener("click", () => makePodDefault(name));
+    node.querySelectorAll(".pod-drop-member").forEach(btn =>
+      btn.addEventListener("click", () =>
+        dropPodMember(name, btn.dataset.commander)));
+  });
+}
+
+async function createPod() {
+  const name = (els.pod_new_name.value || "").trim();
+  if (!name) {
+    toast("Give the pod a name first.", "error");
+    return;
+  }
+  try {
+    await callApi("create_playgroup", name, false);
+    els.pod_new_name.value = "";
+    await refreshPods();
+    toast(`Added "${name}".`, "success");
+  } catch (e) {
+    toast("Could not add that pod: " + e.message, "error");
+  }
+}
+
+async function deletePod(name) {
+  // Typing nothing to confirm, because a pod is a handful of names rather
+  // than hours of work — and it can be made again in seconds.
+  try {
+    await callApi("delete_playgroup", name);
+    await refreshPods();
+    toast(`Removed "${name}".`, "info");
+  } catch (e) {
+    toast("Could not remove that pod: " + e.message, "error");
+  }
+}
+
+async function makePodDefault(name) {
+  try {
+    await callApi("set_default_playgroup", name);
+    await refreshPods();
+    toast(`"${name}" is the pod decks are judged against.`, "success");
+  } catch (e) {
+    toast("Could not set that: " + e.message, "error");
+  }
+}
+
+async function addPodMember(podName, slot) {
+  const commander = (slot.querySelector(".pod-commander").value || "").trim();
+  if (!commander) {
+    toast("Which commander do they play?", "error");
+    return;
+  }
+  const archetype = slot.querySelector(".pod-archetype").value || "unknown";
+  const raw = slot.querySelector(".pod-power").value;
+  const power = raw === "" ? null : Number(raw);
+  try {
+    await callApi("add_pod_member", podName, commander, archetype, power, "");
+    await refreshPods();
+  } catch (e) {
+    toast("Could not add them: " + e.message, "error");
+  }
+}
+
+async function dropPodMember(podName, commander) {
+  try {
+    await callApi("remove_pod_member", podName, commander);
+    await refreshPods();
+  } catch (e) {
+    toast("Could not remove them: " + e.message, "error");
+  }
+}
+
 /** Save the default number of versions kept per deck. */
 async function saveHistoryLimit() {
   const raw = (els.history_limit_input && els.history_limit_input.value) || "";
@@ -1993,6 +2179,12 @@ async function refreshSettings() {
         detail.textContent = (v.frozen ? "packaged build" : "running from source")
           + paths;
       }
+    } catch (e) { /* non-fatal */ }
+
+    // Non-fatal for the same reason as the history limit below: one panel
+    // that cannot load must not take the whole Settings tab with it.
+    try {
+      await refreshPods();
     } catch (e) { /* non-fatal */ }
 
     // How much deck history to keep. Non-fatal: a settings panel that fails
