@@ -560,3 +560,77 @@ describe('what this phone is allowed', () => {
     assert.equal((await state.tier()).is_pro, true);
   });
 });
+
+describe('format and duplicate on the phone', () => {
+  async function makeState(desktop) {
+    const { buildAppState } = await import('../src/lib/app-state.ts');
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const decks = new DeckStore(db);
+    const state = buildAppState(
+      store,
+      { baseUrl: 'https://100.64.0.1:8791', token: desktop.token },
+      'phone-1',
+      testUuid,
+      desktop.fetchImpl,
+      decks,
+    );
+    return { state, decks };
+  }
+
+  const DECK = {
+    deck_id: 'd',
+    name: 'Burn',
+    format: 'modern',
+    decklist: [{ name: 'Lightning Bolt', qty: 4 }],
+    sideboard: [],
+    commander: [],
+    notes: '',
+    updated_at: '2026-05-01T00:00:00Z',
+  };
+
+  test('changing the format is stored and broadcast', async () => {
+    const desktop = new FakeDesktop();
+    const { state, decks } = await makeState(desktop);
+    await state.saveDeck(DECK);
+
+    await state.saveDeck({ ...DECK, format: 'pauper',
+                           updated_at: '2026-05-02T00:00:00Z' });
+    await state.engine.sync();
+
+    assert.equal((await decks.get('d')).format, 'pauper');
+    const sent = desktop.events.filter(
+      (e) => e.device === 'phone-1' && e.kind === 'deck-upsert');
+    assert.equal(sent[sent.length - 1].payload.format, 'pauper');
+  });
+
+  test('a duplicate is its own deck', async () => {
+    const desktop = new FakeDesktop();
+    const { state, decks } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    await state.saveDeck({ ...DECK, deck_id: 'd-copy', name: 'Burn (copy)' });
+
+    const all = await decks.list();
+    assert.equal(all.length, 2);
+    const copy = await decks.get('d-copy');
+    assert.deepEqual(copy.decklist, DECK.decklist);
+    assert.equal(copy.format, 'modern', 'the copy kept the format');
+  });
+
+  test('and does not inherit the original record', async () => {
+    // Games are keyed by deck_id, so a copy starts empty by construction —
+    // asserted because a future "copy everything" would break it silently.
+    const desktop = new FakeDesktop();
+    const { state, decks } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    await decks.recordGame({
+      game_uid: 'g1', deck_id: 'd', result: 'win',
+      played_at: '2026-05-01T00:00:00Z',
+    });
+    await state.saveDeck({ ...DECK, deck_id: 'd-copy', name: 'Burn (copy)' });
+
+    assert.equal((await decks.recordFor('d')).games, 1);
+    assert.equal((await decks.recordFor('d-copy')).games, 0);
+  });
+});

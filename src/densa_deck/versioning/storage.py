@@ -428,6 +428,46 @@ class VersionStore:
         return {"applied": True, "created_version": created,
                 "version_number": snapshot.version_number}
 
+    def set_format(self, deck_id: str, format_: str) -> bool:
+        """Change what rules this deck is judged by. False if no such deck.
+
+        Its own method because changing the format is not an edit to the
+        deck: the cards are untouched, so there is no version to mint and no
+        diff worth showing. What changes is which size limit, copy limit and
+        colour rule the same ninety-nine are measured against.
+        """
+        conn = self.connect()
+        cursor = conn.execute(
+            "UPDATE decks SET format = ?, updated_at = ? WHERE deck_id = ?",
+            (str(format_ or ""), datetime.now().isoformat(), deck_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+    def duplicate(self, deck_id: str, new_deck_id: str, new_name: str) -> dict:
+        """Copy a deck's LATEST version into a new deck.
+
+        The copy starts at v1 with no history and no games, which is the
+        honest reading of "duplicate": you wanted these hundred cards as a
+        starting point, not somebody else's record of playing them. The
+        original is untouched.
+        """
+        latest = self.get_latest(deck_id)
+        if latest is None:
+            return {"copied": False, "reason": "That deck has no saved version."}
+        if self.get_latest(new_deck_id) is not None:
+            return {"copied": False, "reason": f"{new_deck_id!r} already exists."}
+
+        snapshot = self.save_version(
+            deck_id=new_deck_id, name=new_name or f"{latest.name} (copy)",
+            format=latest.format or None,
+            decklist=dict(latest.decklist), zones=dict(latest.zones),
+            scores=dict(latest.scores), metrics=dict(latest.metrics),
+            notes=f"Copied from {latest.name or deck_id}",
+            printings=list(latest.printings))
+        return {"copied": True, "deck_id": new_deck_id,
+                "version_number": snapshot.version_number,
+                "cards": sum(latest.decklist.values())}
+
     def decks_for_sync(self) -> list[dict]:
         """Every deck as its latest version — for a device starting fresh."""
         out = []
@@ -499,6 +539,20 @@ class VersionStore:
                     (notes, deck_id, latest.version_number))
                 conn.commit()
                 latest.notes = notes
+            # The FORMAT is not a card either, and it has to stick.
+            #
+            # Deciding a pile of cards is Modern rather than Commander
+            # changes what is legal about it and nothing about the deck, so
+            # it must not mint a version — but it also must not be quietly
+            # discarded, which is what happened when an unchanged deck
+            # returned early: the dropdown moved and the deck went on being
+            # judged by the old rules.
+            if format and str(format) != (latest.format or ""):
+                conn = self.connect()
+                conn.execute("UPDATE decks SET format = ? WHERE deck_id = ?",
+                             (str(format), deck_id))
+                conn.commit()
+                latest.format = str(format)
             return latest, False
 
         snapshot = self.save_version(

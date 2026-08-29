@@ -301,6 +301,29 @@ function Folding({
   );
 }
 
+/**
+ * The formats a deck can be, and what each one asks of it.
+ *
+ * The size is on the chip because it is the thing that changes when you
+ * switch — Standard wants sixty OR MORE, Commander wants exactly a hundred,
+ * and somebody switching wants to know which before they do it rather than
+ * after.
+ */
+const DECK_FORMATS: Array<{ value: string; label: string; size: string }> = [
+  { value: 'commander', label: 'Commander', size: 'exactly 100' },
+  { value: 'duel', label: 'Duel Cmdr', size: 'exactly 100' },
+  { value: 'brawl', label: 'Brawl', size: 'exactly 60' },
+  { value: 'oathbreaker', label: 'Oathbreaker', size: 'exactly 60' },
+  { value: 'standard', label: 'Standard', size: '60 min' },
+  { value: 'pioneer', label: 'Pioneer', size: '60 min' },
+  { value: 'modern', label: 'Modern', size: '60 min' },
+  { value: 'legacy', label: 'Legacy', size: '60 min' },
+  { value: 'vintage', label: 'Vintage', size: '60 min' },
+  { value: 'pauper', label: 'Pauper', size: '60 min, commons' },
+  { value: 'premodern', label: 'Premodern', size: '60 min' },
+  { value: 'limited', label: 'Limited', size: '40 min' },
+];
+
 export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');
@@ -364,6 +387,8 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * is also visible: the strip says what tapping will do while it is on.
    */
   const [pickingCommander, setPickingCommander] = useState(false);
+  /** Open while choosing a format, so the twelve chips are not always here. */
+  const [pickingFormat, setPickingFormat] = useState(false);
   const fold = useCallback(
     (key: string) => setFolded((f) => ({ ...f, [key]: !f[key] })),
     [],
@@ -580,6 +605,54 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     [deck, state, recheck],
   );
 
+  /**
+   * Judge this deck by a different format.
+   *
+   * The cards do not move, so this is not an edit and mints no version — but
+   * it does change what the warnings mean, so they are recomputed. Saved
+   * through the same door as any other change, so the desktop hears about it.
+   */
+  const changeFormat = useCallback(
+    async (format: string) => {
+      if (!deck) return;
+      const next: Deck = {
+        ...deck,
+        format,
+        updated_at: new Date().toISOString(),
+      };
+      await state.saveDeck(next);
+      setDeck(next);
+      setPickingFormat(false);
+      await recheck(mergeCounts(next.decklist, next.sideboard));
+    },
+    [deck, state, recheck],
+  );
+
+  /**
+   * Copy this deck.
+   *
+   * A new deck from the first moment: its own id, no games. Somebody copying
+   * a list wants the cards as a starting point, not a record of somebody
+   * else's games — and a shared record would make both decks' numbers
+   * meaningless.
+   */
+  const duplicate = useCallback(async () => {
+    if (!deck) return;
+    setProblem('');
+    try {
+      const copy: Deck = {
+        ...deck,
+        deck_id: uuid(),
+        name: `${deck.name} (copy)`,
+        updated_at: new Date().toISOString(),
+      };
+      await state.saveDeck(copy);
+      onBack();
+    } catch (err) {
+      setProblem(`${(err as Error).message}. The copy was not made.`);
+    }
+  }, [deck, state, onBack]);
+
   /** Put the commander back in the deck. */
   const clearCommander = useCallback(async () => {
     if (!deck || !(deck.commander ?? []).length) return;
@@ -715,6 +788,46 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             ? `  ·  $${money.toFinish.usd.toFixed(2)} still to buy`
             : ''}
         </Text>
+      ) : null}
+
+      {/*
+        Which rules this deck is judged by. On the deck screen rather than in
+        a menu because switching changes what every warning below it means.
+      */}
+      <View style={styles.formatRow}>
+        <Pressable
+          style={styles.formatChip}
+          onPress={() => setPickingFormat((v) => !v)}
+        >
+          <Text style={styles.formatChipText}>
+            {DECK_FORMATS.find((f) => f.value === deck?.format)?.label
+              ?? deck?.format ?? 'No format'}
+          </Text>
+          <Text style={styles.formatSize}>
+            {DECK_FORMATS.find((f) => f.value === deck?.format)?.size ?? 'tap to set'}
+          </Text>
+        </Pressable>
+        <Pressable style={styles.secondary} onPress={() => void duplicate()}>
+          <Text style={styles.secondaryText}>Duplicate</Text>
+        </Pressable>
+      </View>
+
+      {pickingFormat ? (
+        <View style={styles.formatGrid}>
+          {DECK_FORMATS.map((f) => (
+            <Pressable
+              key={f.value}
+              style={[
+                styles.formatOption,
+                deck?.format === f.value && styles.formatOptionOn,
+              ]}
+              onPress={() => void changeFormat(f.value)}
+            >
+              <Text style={styles.formatOptionText}>{f.label}</Text>
+              <Text style={styles.formatSize}>{f.size}</Text>
+            </Pressable>
+          ))}
+        </View>
       ) : null}
 
       {/*
@@ -1131,6 +1244,40 @@ const styles = StyleSheet.create({
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { marginBottom: 8 },
+  formatRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  formatChip: {
+    backgroundColor: '#1a1d27',
+    borderColor: '#2d3142',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexGrow: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  formatChipText: { color: '#e4e6eb', fontSize: 14, fontWeight: '600' },
+  // The size sits under the name in both the chip and the grid, because it
+  // is the thing that changes when you switch.
+  formatSize: { color: '#8a8f9c', fontSize: 11 },
+  formatGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  formatOption: {
+    borderColor: '#4a5568',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  formatOptionOn: { backgroundColor: '#1a2634', borderColor: '#4a90e2' },
+  formatOptionText: { color: '#e4e6eb', fontSize: 13 },
   commanderStrip: {
     alignItems: 'center',
     backgroundColor: '#1a1d27',

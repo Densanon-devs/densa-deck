@@ -98,6 +98,13 @@ FORMAT_RULES: dict[Format, dict] = {
         "singleton": False,
     },
     Format.PAUPER: {
+        # Sixty is the floor here as everywhere else. What makes Pauper
+        # Pauper — every card must have been printed at common somewhere —
+        # is NOT re-derived from rarity here, deliberately. Scryfall
+        # publishes a `pauper` legality per card that already accounts for
+        # which printings count and which sets are excluded, and
+        # `_check_legality` reads it. A rarity check written here would be a
+        # second, worse answer to a question already answered.
         "min_deck": 60,
         "max_deck": None,
         "max_copies": 4,
@@ -105,6 +112,46 @@ FORMAT_RULES: dict[Format, dict] = {
         "has_sideboard": True,
         "max_sideboard": 15,
         "singleton": False,
+    },
+
+    # The formats that had no entry at all.
+    #
+    # A missing entry did not mean "no rules" — it meant NO CHECKS. The
+    # validator returned after an info message, so a three-card Historic
+    # deck running twenty copies of one card came back clean, and so did a
+    # deck full of cards banned in it. Sixty-card constructed rules are
+    # right for all of these bar Duel Commander.
+    Format.HISTORIC: {
+        "min_deck": 60, "max_deck": None, "max_copies": 4,
+        "requires_commander": False, "has_sideboard": True,
+        "max_sideboard": 15, "singleton": False,
+    },
+    Format.EXPLORER: {
+        "min_deck": 60, "max_deck": None, "max_copies": 4,
+        "requires_commander": False, "has_sideboard": True,
+        "max_sideboard": 15, "singleton": False,
+    },
+    Format.ALCHEMY: {
+        "min_deck": 60, "max_deck": None, "max_copies": 4,
+        "requires_commander": False, "has_sideboard": True,
+        "max_sideboard": 15, "singleton": False,
+    },
+    Format.PENNY: {
+        "min_deck": 60, "max_deck": None, "max_copies": 4,
+        "requires_commander": False, "has_sideboard": True,
+        "max_sideboard": 15, "singleton": False,
+    },
+    Format.PREMODERN: {
+        "min_deck": 60, "max_deck": None, "max_copies": 4,
+        "requires_commander": False, "has_sideboard": True,
+        "max_sideboard": 15, "singleton": False,
+    },
+    # Duel Commander is Commander's rules at a different table: a hundred
+    # cards exactly, singleton, one commander.
+    Format.DUEL: {
+        "min_deck": 100, "max_deck": 100, "max_copies": 1,
+        "requires_commander": True, "has_sideboard": False,
+        "singleton": True,
     },
 }
 
@@ -344,8 +391,18 @@ def _check_commander(deck: Deck, issues: list[ValidationIssue]):
 
 
 def _check_sideboard(deck: Deck, rules: dict, issues: list[ValidationIssue]):
-    """Check sideboard size limits."""
+    """Check sideboard size limits.
+
+    `None` means the format has no cap, which is a real answer rather than a
+    missing one: in Limited everything you opened and did not play IS the
+    sideboard, so there is nothing to be over. `.get(key, 15)` returns the
+    stored None rather than the default, and comparing an int to it raised a
+    TypeError — so validating any Limited deck that had a sideboard crashed
+    outright instead of passing.
+    """
     max_sb = rules.get("max_sideboard", 15)
+    if max_sb is None:
+        return
     sb_total = sum(e.quantity for e in deck.sideboard)
     if sb_total > max_sb:
         issues.append(

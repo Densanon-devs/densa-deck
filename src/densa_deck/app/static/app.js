@@ -67,6 +67,7 @@ function cacheElements() {
     "refresh-decks-btn", "deck-list",
     "deck-editor-empty", "deck-editor-open",
     "editor-deck-name", "editor-version-number", "editor-saved-at", "editor-card-count",
+    "editor-format-select", "editor-duplicate-btn", "editor-legality",
     "editor-record", "log-win-btn", "log-loss-btn", "log-draw-btn",
     "editor-games-btn", "editor-games", "games-tbody", "games-empty",
     "editor-textarea", "editor-notes-input",
@@ -273,6 +274,12 @@ async function bootstrap() {
   els.editor_analyze_btn.addEventListener("click", () => loadIntoAnalyzeTab());
   if (els.editor_build_btn) {
     els.editor_build_btn.addEventListener("click", () => loadIntoBuildTab());
+  }
+  if (els.editor_format_select) {
+    els.editor_format_select.addEventListener("change", changeDeckFormat);
+  }
+  if (els.editor_duplicate_btn) {
+    els.editor_duplicate_btn.addEventListener("click", duplicateOpenDeck);
   }
   els.editor_history_btn.addEventListener("click", toggleHistory);
   els.editor_delete_btn.addEventListener("click", deleteCurrentDeck);
@@ -1498,6 +1505,90 @@ async function loadIntoBuildTab(deckId) {
         "success");
 }
 
+/**
+ * Judge the open deck by a different format's rules.
+ *
+ * Not an edit — the cards do not move — so no version is minted. What comes
+ * back is the deck re-checked under the new rules, shown straight away:
+ * finding out what the change MEANS is the reason to make it, and asking
+ * someone to press Save to hear the answer would be a worse way to tell them.
+ */
+async function changeDeckFormat() {
+  if (!state.currentDeckId || !els.editor_format_select) return;
+  const chosen = els.editor_format_select.value;
+  let out;
+  try {
+    out = await callApi("set_deck_format", state.currentDeckId, chosen);
+  } catch (e) {
+    toast("Could not change the format: " + e.message, "error");
+    return;
+  }
+  if (!out || out.ok === false) {
+    toast((out && out.error) || "Could not change the format.", "error");
+    return;
+  }
+  if (state.currentSnapshot) state.currentSnapshot.format = out.format;
+  renderLegality(out.issues || [], out.total_cards);
+  toast(`Now judged as ${chosen}.`, "success");
+  await refreshDeckList();
+}
+
+/**
+ * What is wrong with the deck under the rules it now has.
+ *
+ * Errors and warnings kept apart: half of deckbuilding is holding a pile
+ * that is not legal yet, and a list that mixes "this is banned" with "you
+ * are four cards short" reads as one undifferentiated wall of red.
+ */
+function renderLegality(issues, totalCards) {
+  if (!els.editor_legality) return;
+  const errors = issues.filter(i => i.severity === "error");
+  const warnings = issues.filter(i => i.severity === "warning");
+  if (!errors.length && !warnings.length) {
+    els.editor_legality.className = "editor-legality legal";
+    els.editor_legality.innerHTML =
+      `<strong>Legal</strong>${totalCards ? ` — ${totalCards} cards` : ""}`;
+    els.editor_legality.classList.remove("hidden");
+    return;
+  }
+  const line = (i) => `<li>${escape(i.message)}</li>`;
+  els.editor_legality.className = "editor-legality" +
+    (errors.length ? " illegal" : " warned");
+  els.editor_legality.innerHTML =
+    (errors.length
+      ? `<strong>${errors.length} problem${errors.length === 1 ? "" : "s"}</strong>
+         <ul>${errors.slice(0, 6).map(line).join("")}</ul>`
+      : "") +
+    (warnings.length
+      ? `<p class="panel-hint">${warnings.length} warning${
+          warnings.length === 1 ? "" : "s"}</p>
+         <ul>${warnings.slice(0, 4).map(line).join("")}</ul>`
+      : "");
+  els.editor_legality.classList.remove("hidden");
+}
+
+/** Copy this deck's current cards into a new one. */
+async function duplicateOpenDeck() {
+  if (!state.currentDeckId) return;
+  let out;
+  try {
+    out = await callApi("duplicate_deck", state.currentDeckId, "", "");
+  } catch (e) {
+    toast("Could not duplicate: " + e.message, "error");
+    return;
+  }
+  if (!out || out.ok === false) {
+    // A free tier hitting its deck limit lands here, and the endpoint's own
+    // sentence explains which limit and what it buys.
+    toast((out && out.error) || "Could not duplicate.",
+          out && out.error_type === "ProRequired" ? "info" : "error");
+    return;
+  }
+  toast(`Copied ${out.cards} cards into "${out.deck_id}".`, "success");
+  await refreshDeckList();
+  await openDeck(out.deck_id);
+}
+
 async function openDeck(deckId) {
   try {
     const snap = await callApi("get_deck_latest", deckId);
@@ -1517,6 +1608,12 @@ async function openDeck(deckId) {
     // Which version is loaded, so the record can show this version's share
     // of it beside the deck's total.
     state.currentVersion = snap.version_number;
+    if (els.editor_format_select) {
+      // Falls back to commander only when the deck names nothing, which is
+      // what the rest of the app assumes for an unlabelled deck.
+      els.editor_format_select.value = (snap.format || "commander").toLowerCase();
+    }
+    if (els.editor_legality) els.editor_legality.classList.add("hidden");
     await refreshDeckRecord();
     await refreshDeckList(); // re-highlight the active deck
   } catch (e) {

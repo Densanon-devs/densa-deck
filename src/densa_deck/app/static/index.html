@@ -601,6 +601,30 @@ Mainboard:
           <div id="deck-editor-open" class="editor-open hidden">
             <h2 id="editor-deck-name"></h2>
             <div class="editor-meta">
+              <!-- The rules this deck is judged by, changeable. A deck is a
+                   pile of cards; which format it is decides what is legal
+                   about it, and that is a decision people revise. -->
+              <label class="editor-format">
+                <span class="filter-label">Format</span>
+                <select id="editor-format-select">
+                  <option value="commander">Commander &mdash; exactly 100</option>
+                  <option value="duel">Duel Commander &mdash; exactly 100</option>
+                  <option value="brawl">Brawl &mdash; exactly 60</option>
+                  <option value="oathbreaker">Oathbreaker &mdash; exactly 60</option>
+                  <option value="standard">Standard &mdash; 60 minimum</option>
+                  <option value="pioneer">Pioneer &mdash; 60 minimum</option>
+                  <option value="modern">Modern &mdash; 60 minimum</option>
+                  <option value="legacy">Legacy &mdash; 60 minimum</option>
+                  <option value="vintage">Vintage &mdash; 60 minimum</option>
+                  <option value="pauper">Pauper &mdash; 60 min, commons only</option>
+                  <option value="premodern">Premodern &mdash; 60 minimum</option>
+                  <option value="historic">Historic &mdash; 60 minimum</option>
+                  <option value="explorer">Explorer &mdash; 60 minimum</option>
+                  <option value="alchemy">Alchemy &mdash; 60 minimum</option>
+                  <option value="penny">Penny Dreadful &mdash; 60 minimum</option>
+                  <option value="limited">Limited &mdash; 40 minimum</option>
+                </select>
+              </label>
               <span id="editor-version-number"></span>
               <span id="editor-saved-at"></span>
               <span id="editor-card-count"></span>
@@ -641,6 +665,8 @@ Mainboard:
               </p>
             </div>
 
+            <div id="editor-legality" class="editor-legality hidden"></div>
+
             <textarea id="editor-textarea" class="editor-textarea"></textarea>
 
             <div class="editor-notes">
@@ -655,6 +681,7 @@ Mainboard:
               <button id="editor-build-btn" class="btn btn-outline" title="Open this deck in the Build tab to edit it card by card">Load in Build tab &rarr;</button>
               <button id="editor-history-btn" class="btn btn-outline">Version history</button>
               <button id="editor-duel-btn" class="btn btn-outline" title="Pit this deck against another saved deck">Duel &rarr;</button>
+              <button id="editor-duplicate-btn" class="btn btn-outline" title="Copy this deck's current cards into a new deck">Duplicate</button>
               <button id="editor-delete-btn" class="btn btn-danger" title="Delete the entire deck + all versions">Delete deck</button>
             </div>
 

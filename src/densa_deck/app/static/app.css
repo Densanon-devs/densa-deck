@@ -2875,3 +2875,30 @@ code {
   padding: 1px 6px;
   text-transform: uppercase;
 }
+
+/* ---- deck format + legality -------------------------------------------- */
+
+.editor-format {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.editor-format select { max-width: 16rem; }
+
+/* The verdict, coloured by whether it stops you playing the deck. Warnings
+   are not failures — half of deckbuilding is a pile that is not legal yet. */
+.editor-legality {
+  border-left: 3px solid #4a5568;
+  border-radius: 0 8px 8px 0;
+  font-size: 0.9rem;
+  margin: 8px 0;
+  padding: 10px 12px;
+}
+
+.editor-legality.legal { border-color: #48bb78; color: #68d391; }
+.editor-legality.illegal { border-color: #fc8181; }
+.editor-legality.warned { border-color: #d69e2e; }
+
+.editor-legality ul { margin: 4px 0 0; padding-left: 1.1rem; }
+.editor-legality li { padding: 1px 0; }

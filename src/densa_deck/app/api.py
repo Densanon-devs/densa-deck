@@ -618,6 +618,84 @@ class AppApi:
         return _snapshot_to_dict(snap)
 
     @_safe
+    def set_deck_format(self, deck_id: str, format_: str) -> dict:
+        """Judge this deck by a different format's rules.
+
+        Not an edit: the cards do not move, so there is no version to mint
+        and no diff worth showing. What changes is which size limit, copy
+        limit and colour rule the same cards are measured against — Standard
+        wants sixty or more, Commander wants exactly a hundred, Limited wants
+        forty and does not care about playsets.
+
+        Returns the deck re-validated under the new rules, so the caller can
+        show what became legal or stopped being.
+        """
+        if not (deck_id or "").strip():
+            return {"ok": False, "error": "Which deck?"}
+        fmt = self._as_format(format_)
+        if isinstance(fmt, dict):
+            return fmt
+
+        store = self._get_vstore()
+        if not store.set_format(deck_id, fmt.value):
+            return {"ok": False, "error": f"No deck called {deck_id!r}."}
+
+        snapshot = store.get_latest(deck_id)
+        out = {"deck_id": deck_id, "format": fmt.value}
+        if snapshot is not None:
+            # Re-validated straight away: the point of switching is to find
+            # out what it means, and making somebody press Save to hear the
+            # answer would be a worse way of telling them.
+            text = _snapshot_to_text(snapshot)
+            checked = self.analyze_deck(text, fmt.value, snapshot.name or deck_id)
+            body = checked.get("data", checked)
+            if isinstance(body, dict) and body.get("ok") is not False:
+                out["issues"] = body.get("issues", [])
+                out["total_cards"] = body.get("total_cards")
+        return out
+
+    @_safe
+    def duplicate_deck(self, deck_id: str, new_deck_id: str = "",
+                       new_name: str = "") -> dict:
+        """Copy a deck, so a variant starts from what already works.
+
+        The copy is its own deck from the first moment: v1, no history, no
+        win/loss record. Somebody duplicating a list wants the cards as a
+        starting point, not a record of games they did not play — and a
+        shared record would make both decks' numbers meaningless.
+        """
+        if not (deck_id or "").strip():
+            return {"ok": False, "error": "Which deck?"}
+
+        store = self._get_vstore()
+        source = store.get_latest(deck_id)
+        if source is None:
+            return {"ok": False, "error": f"No saved versions for {deck_id!r}."}
+
+        target = (new_deck_id or "").strip() or self._free_deck_id(deck_id)
+        # A copy is a new deck, so it costs a deck slot like any other.
+        refused = self._deck_slot_refused(target)
+        if refused is not None:
+            return refused
+
+        result = store.duplicate(deck_id, target,
+                                 new_name or f"{source.name or deck_id} (copy)")
+        if not result.get("copied"):
+            return {"ok": False, "error": result.get("reason", "Could not copy.")}
+        self._log_deck_upsert(target)
+        return result
+
+    def _free_deck_id(self, base: str) -> str:
+        """`atraxa-copy`, or `atraxa-copy-2` when that is taken."""
+        store = self._get_vstore()
+        candidate = f"{base}-copy"
+        n = 2
+        while store.get_latest(candidate) is not None:
+            candidate = f"{base}-copy-{n}"
+            n += 1
+        return candidate
+
+    @_safe
     def deck_as_builder_draft(self, deck_id: str) -> dict:
         """A saved deck in the shape the Build tab holds a draft in.
 
