@@ -32,6 +32,7 @@ import {
 
 import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
+import { withinIdentity } from '../lib/decks.ts';
 import type {
   CardQuery,
   CatalogueCard,
@@ -52,6 +53,15 @@ interface Props {
    * one because a picture happened to be on screen would quietly make every
    * deck printing-level.
    */
+  /**
+   * Colours this deck may play, or undefined when nothing constrains it.
+   *
+   * Undefined and "the empty set" are different answers and stay different:
+   * a Modern deck has no constraint, a colourless commander has a very
+   * strict one, and treating the first as the second would lock out every
+   * coloured card in the game.
+   */
+  identity?: Set<string> | null;
   onPick: (
     card: CatalogueCard,
     printing?: CataloguePrinting,
@@ -131,6 +141,7 @@ const TYPES = [
 export function CardBrowser({
   state,
   onPick,
+  identity,
   onUnpick,
   onClose,
   countFor,
@@ -630,17 +641,29 @@ export function CardBrowser({
       <View style={styles.grid}>
         {cards.map((card) => {
           const held = countFor?.(card) ?? 0;
+          // Shown but not addable. Hiding it outright would leave someone
+          // searching for a card they can see in their hand and being told
+          // it does not exist; greyed with a reason says what is actually
+          // true — it is a real card, and this deck cannot play it.
+          const castable = withinIdentity(card.color_identity, identity ?? null);
           return (
             <Pressable
               key={card.scryfall_id || card.name}
-              style={styles.tile}
+              style={[styles.tile, !castable && styles.tileLocked]}
+              disabled={!castable}
+              accessibilityState={{ disabled: !castable }}
+              accessibilityHint={
+                castable
+                  ? undefined
+                  : `${card.name} is outside your commander's colours`
+              }
               onPress={() =>
                 previewOnTap ? setPreview(card) : void onPick(card)
               }
             >
               <Image
                 source={artSource(card.scryfall_id, 'small')}
-                style={styles.tileArt}
+                style={[styles.tileArt, !castable && styles.artLocked]}
                 resizeMode="contain"
               />
               {/* The name under the picture, because a thumbnail of a card
@@ -651,6 +674,13 @@ export function CardBrowser({
               {held ? (
                 <View style={styles.badge}>
                   <Text style={styles.badgeText}>{held}</Text>
+                </View>
+              ) : null}
+              {!castable ? (
+                <View style={styles.lockTag}>
+                  <Text style={styles.lockTagText}>
+                    {(card.color_identity ?? []).join('') || 'off'}-colour
+                  </Text>
                 </View>
               ) : null}
             </Pressable>
@@ -840,6 +870,7 @@ export function CardBrowser({
               ) : null}
               <Pressable
                 style={[styles.previewButton, styles.previewAdd]}
+                disabled={!withinIdentity(preview.color_identity, identity ?? null)}
                 onPress={() => void onPick(preview)}
               >
                 <Text style={styles.previewAddText}>
@@ -945,6 +976,20 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingBottom: 30,
   },
+  // Dimmed rather than hidden, and the art dimmed harder than the name so
+  // the card is still identifiable at a glance.
+  tileLocked: { opacity: 0.75 },
+  artLocked: { opacity: 0.35 },
+  lockTag: {
+    backgroundColor: '#2d3748',
+    borderRadius: 4,
+    left: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    position: 'absolute',
+    top: 4,
+  },
+  lockTagText: { color: '#fc8181', fontSize: 10, fontWeight: '700' },
   tile: { width: '31%' },
   tileArt: {
     width: '100%',

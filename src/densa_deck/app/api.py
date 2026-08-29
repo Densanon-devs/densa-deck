@@ -3548,6 +3548,13 @@ class AppApi:
         Unresolvable slots come back with `found` false rather than being
         dropped. A caller that got a shorter list than it sent would have to
         work out which ones went missing, and would probably get it wrong.
+
+        Each slot also carries the card's COLOUR IDENTITY. The phone cannot
+        work one out on its own — it mirrors what you own, not the catalogue —
+        and without it a singleton format cannot tell you that a card is
+        outside your commander's colours until the deck reaches a desktop.
+        Sent here because the phone caches these answers, so the check keeps
+        working after the desktop goes away.
         """
         db = self._get_db()
         slots = list(slots or [])
@@ -3588,6 +3595,10 @@ class AppApi:
             else:
                 found = representative.get(name.lower())
 
+            card = db.lookup_by_name(name)
+            identity = [c.value for c in (getattr(card, "color_identity", None) or [])]                 if card is not None else []
+            type_line = getattr(card, "type_line", "") or "" if card else ""
+
             if found is None:
                 out.append({
                     "name": name,
@@ -3596,6 +3607,11 @@ class AppApi:
                     "collector_number": number,
                     "price_usd": None,
                     "found": False,
+                    # Known even when no PRINTING was: the two are different
+                    # questions, and a card whose art could not be resolved is
+                    # still a card whose colours decide whether it is legal.
+                    "color_identity": identity,
+                    "type_line": type_line,
                 })
                 continue
 
@@ -3608,6 +3624,8 @@ class AppApi:
                 "collector_number": found.get("collector_number") or "",
                 "price_usd": found.get("price_usd"),
                 "found": True,
+                "color_identity": identity,
+                "type_line": type_line,
             })
 
         return {"slots": out, "catalogue_ready": True}

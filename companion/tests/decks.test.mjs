@@ -76,11 +76,33 @@ describe('reading a decklist', () => {
     assert.equal(cards[1].qty, 2);
   });
 
-  test('section headers and comments are ignored', () => {
-    const { cards } = parseDecklist(
-      'Commander\n1 Atraxa\n\n// notes\nDeck:\n4 Sol Ring\n# end',
+  test('comments and deck headers are ignored', () => {
+    const { cards } = parseDecklist('// notes\nDeck:\n4 Sol Ring\n# end');
+    assert.deepEqual(counts(cards), { 'Sol Ring': 4 });
+  });
+
+  test('the commander header is a zone, not noise', () => {
+    // It used to fold into the mainboard, which left the phone with no way to
+    // know which card the other ninety-nine are legal against — so a
+    // singleton format had no colour identity to check anything by.
+    const { cards, commander } = parseDecklist(
+      'Commander\n1 Atraxa\n\nDeck:\n4 Sol Ring',
     );
-    assert.deepEqual(counts(cards), { Atraxa: 1, 'Sol Ring': 4 });
+    assert.deepEqual(counts(commander), { Atraxa: 1 });
+    assert.deepEqual(counts(cards), { 'Sol Ring': 4 });
+  });
+
+  test('a commander survives the round trip through the text box', () => {
+    const text = 'Commander\n1 Atraxa\n\n4 Sol Ring';
+    const parsed = parseDecklist(text);
+    const written = formatDecklist(
+      parsed.cards,
+      parsed.sideboard,
+      parsed.commander,
+    );
+    const again = parseDecklist(written);
+    assert.deepEqual(counts(again.commander), { Atraxa: 1 });
+    assert.deepEqual(counts(again.cards), { 'Sol Ring': 4 });
   });
 
   test('repeated lines add up rather than overwrite', () => {

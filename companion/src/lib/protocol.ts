@@ -354,6 +354,14 @@ export interface ResolvedSlot extends DeckSlotRef {
   collector_number: string;
   price_usd?: number | null;
   found: boolean;
+  /**
+   * The card's colour identity, which the phone cannot work out alone — it
+   * mirrors what you own, not the catalogue. Carried so a singleton format
+   * can say a card is outside your commander's colours without waiting to
+   * reach a desktop, and cached so it keeps saying it afterwards.
+   */
+  color_identity?: string[];
+  type_line?: string;
 }
 
 export interface DeckResolveReply {

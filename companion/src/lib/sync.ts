@@ -391,12 +391,35 @@ export class SyncEngine {
           await remember();
           return false;
         }
+        // The commander, from whichever shape the sender speaks. The phone
+        // sends its own list; the desktop describes zones by name, and the
+        // commander is the one zone whose contents change what the rest of
+        // the deck is allowed to be.
+        const zones = (payload.zones ?? {}) as Record<string, unknown>;
+        const commander = entriesFromSync(payload.commander)
+          .concat(
+            Array.isArray(zones.commander)
+              ? (zones.commander as unknown[]).map((name) => ({
+                  name: String(name), qty: 1,
+                }))
+              : [],
+          );
+        const seenCommander = new Set<string>();
+        const uniqueCommander = commander.filter((entry) => {
+          const key = entry.name.trim().toLowerCase();
+          if (!key || seenCommander.has(key)) return false;
+          seenCommander.add(key);
+          return true;
+        });
+
         await decks.upsertFromSync({
           deck_id: deckId,
           name: String(payload.name ?? 'Untitled'),
           format: String(payload.format ?? ''),
-          decklist: entriesFromSync(payload.entries ?? payload.decklist),
+          decklist: entriesFromSync(payload.entries ?? payload.decklist)
+            .filter((e) => !seenCommander.has(e.name.trim().toLowerCase())),
           sideboard: entriesFromSync(payload.sideboard),
+          commander: uniqueCommander,
           notes: String(payload.notes ?? ''),
           // When the DECK was edited, not when the event was written. They
           // are different, and the difference decides who wins.
@@ -494,11 +517,12 @@ export class SyncEngine {
     format: string;
     decklist: DeckEntry[];
     sideboard?: DeckEntry[];
+    commander?: DeckEntry[];
     notes: string;
     updated_at: string;
   }): Promise<void> {
     const asMap: Record<string, number> = {};
-    for (const entry of deck.decklist ?? []) {
+    for (const entry of [...(deck.decklist ?? []), ...(deck.commander ?? [])]) {
       asMap[entry.name] = (asMap[entry.name] ?? 0) + entry.qty;
     }
     await this.log('deck-upsert', {
@@ -506,9 +530,19 @@ export class SyncEngine {
       name: deck.name,
       format: deck.format,
       notes: deck.notes,
+      // The map counts the commander too — it is a card in the deck, and a
+      // desktop reading only this would otherwise receive a 99-card deck.
       decklist: asMap,
       entries: deck.decklist ?? [],
       sideboard: deck.sideboard ?? [],
+      commander: deck.commander ?? [],
+      // Said the desktop's way as well, so it lands in the right zone there
+      // rather than as one more card in the ninety-nine.
+      zones: {
+        commander: (deck.commander ?? []).map((e) => e.name),
+        mainboard: (deck.decklist ?? []).map((e) => e.name),
+        sideboard: (deck.sideboard ?? []).map((e) => e.name),
+      },
       updated_at: deck.updated_at,
     });
   }

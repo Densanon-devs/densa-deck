@@ -34,7 +34,7 @@ import type {
   CollectionPage,
   CollectionsReply,
 } from './protocol.ts';
-import { DeckStore, resolveSlots, wishlistFromDecks } from './decks.ts';
+import { DeckStore, entryKey, resolveSlots, wishlistFromDecks } from './decks.ts';
 import type { Deck, DeckEntry, SlotFacts, WishlistRow } from './decks.ts';
 import type { Via } from './reach.ts';
 import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
@@ -436,10 +436,35 @@ export class AppState {
         })),
       });
       answered = reply.slots ?? [];
+      // Kept, so the next time the desktop is out of range this deck still
+      // has its pictures, its prices and its colours. The cache warms simply
+      // by using the app while it is in range.
+      await this.store.cacheSlotFacts(
+        entries.map((entry, index) => ({
+          slot_key: entryKey(entry),
+          ...(answered[index] ?? {}),
+        })).filter((row) => row.printing_id || row.color_identity),
+      );
     } catch {
-      // Offline, or the desktop is asleep. The mirror still has an answer for
-      // everything you own, which is most of a deck you are holding.
-      answered = [];
+      // Offline, or the desktop is asleep. The mirror answers for everything
+      // you OWN — most of a deck you are holding — and the cache answers for
+      // the rest, so a deck opened out of range looks the same as one opened
+      // at a desk rather than a grid of grey rectangles with no total.
+      const remembered = await this.store.cachedSlotFacts();
+      answered = entries.map((entry) => {
+        const hit = remembered.get(entryKey(entry));
+        if (!hit) return undefined as unknown as ResolvedSlot;
+        return {
+          name: entry.name,
+          printing_id: hit.printing_id,
+          set_code: hit.set_code,
+          collector_number: hit.collector_number,
+          price_usd: hit.price_usd,
+          color_identity: hit.color_identity,
+          type_line: hit.type_line,
+          found: Boolean(hit.printing_id),
+        } as ResolvedSlot;
+      });
     }
     return resolveSlots(entries, owned, answered);
   }

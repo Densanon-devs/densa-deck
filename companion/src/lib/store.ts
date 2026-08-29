@@ -115,6 +115,27 @@ export const SCHEMA: string[] = [
      played_at TEXT NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS idx_games_deck ON deck_games(deck_id)`,
+  // What the desktop told us about a deck slot, kept.
+  //
+  // The mirror already answers for cards you OWN, so a deck of your own
+  // cards survives going offline. Everything else — the price of a card you
+  // have never owned, the art standing in for a name-only slot, the colour
+  // identity a legality check needs — came from the desktop and vanished
+  // with it. Opening a deck out of range then showed grey rectangles and no
+  // total, which is the opposite of what a companion is for.
+  //
+  // Keyed by the slot key rather than the printing: a name-only slot and an
+  // exact one are different questions with different answers.
+  `CREATE TABLE IF NOT EXISTS slot_facts (
+     slot_key TEXT PRIMARY KEY,
+     printing_id TEXT NOT NULL DEFAULT '',
+     set_code TEXT NOT NULL DEFAULT '',
+     collector_number TEXT NOT NULL DEFAULT '',
+     price_usd REAL,
+     color_identity TEXT NOT NULL DEFAULT '',
+     type_line TEXT NOT NULL DEFAULT '',
+     cached_at TEXT NOT NULL
+   )`,
 ];
 
 /** A stack as it comes back from the mirror. */
@@ -353,6 +374,84 @@ export class LocalStore {
   }
 
   // ---------------------------------------------------------- collections
+
+  /**
+   * Remember what the desktop said about these slots.
+   *
+   * Written on every successful resolve, so the cache warms simply by using
+   * the app while it is in range.
+   */
+  async cacheSlotFacts(
+    rows: Array<{ slot_key: string } & Record<string, unknown>>,
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    for (const row of rows) {
+      const key = String(row.slot_key || '').trim();
+      if (!key) continue;
+      await this.db.run(
+        `INSERT INTO slot_facts
+           (slot_key, printing_id, set_code, collector_number, price_usd,
+            color_identity, type_line, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(slot_key) DO UPDATE SET
+           printing_id = excluded.printing_id,
+           set_code = excluded.set_code,
+           collector_number = excluded.collector_number,
+           price_usd = excluded.price_usd,
+           color_identity = excluded.color_identity,
+           type_line = excluded.type_line,
+           cached_at = excluded.cached_at`,
+        [
+          key,
+          String(row.printing_id ?? ''),
+          String(row.set_code ?? ''),
+          String(row.collector_number ?? ''),
+          row.price_usd == null ? null : Number(row.price_usd),
+          Array.isArray(row.color_identity) ? row.color_identity.join('') : '',
+          String(row.type_line ?? ''),
+          now,
+        ],
+      );
+    }
+  }
+
+  /**
+   * Everything remembered, keyed by slot.
+   *
+   * Read whole rather than queried per slot: a deck asks about a hundred
+   * slots at once, and a hundred round trips through the driver costs more
+   * than reading a table that holds a few thousand small rows.
+   */
+  async cachedSlotFacts(): Promise<Map<string, {
+    printing_id: string;
+    set_code: string;
+    collector_number: string;
+    price_usd: number | null;
+    color_identity: string[];
+    type_line: string;
+  }>> {
+    const rows = await this.db.all<{
+      slot_key: string;
+      printing_id: string;
+      set_code: string;
+      collector_number: string;
+      price_usd: number | null;
+      color_identity: string;
+      type_line: string;
+    }>('SELECT * FROM slot_facts');
+    const out = new Map();
+    for (const row of rows) {
+      out.set(row.slot_key, {
+        printing_id: row.printing_id ?? '',
+        set_code: row.set_code ?? '',
+        collector_number: row.collector_number ?? '',
+        price_usd: row.price_usd ?? null,
+        color_identity: String(row.color_identity ?? '').split('').filter(Boolean),
+        type_line: row.type_line ?? '',
+      });
+    }
+    return out;
+  }
 
   async upsertCollection(row: {
     collection_uid: string;

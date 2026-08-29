@@ -31,6 +31,7 @@ import { CardBrowser } from './CardBrowser.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
+  deckColorIdentity,
   type DeckRecord,
   addToDeck,
   carryPrintings,
@@ -252,6 +253,49 @@ export function DeckListScreen({
   );
 }
 
+/**
+ * A section heading that folds what is under it.
+ *
+ * A commander deck is a hundred cards on a phone, and everything below the
+ * grid — what you still need, the PC actions, the analysis — sat behind a
+ * very long scroll past something you had already looked at.
+ *
+ * The arrow and the count are both on the header so a folded section still
+ * says how much is inside; a fold that hides the fact that anything is there
+ * is just a missing feature.
+ */
+function Folding({
+  title,
+  count,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  count?: number;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <>
+      <Pressable
+        style={styles.foldHead}
+        onPress={onToggle}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: open }}
+      >
+        <Text style={styles.foldArrow}>{open ? '▾' : '▸'}</Text>
+        <Text style={[styles.section, styles.grow]}>{title}</Text>
+        {count !== undefined ? (
+          <Text style={styles.foldCount}>{count}</Text>
+        ) : null}
+      </Pressable>
+      {open ? children : null}
+    </>
+  );
+}
+
 export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');
@@ -297,6 +341,20 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    */
   const [record, setRecord] = useState<DeckRecord | null>(null);
   const [logging, setLogging] = useState('');
+  /**
+   * Which sections are folded away.
+   *
+   * A commander deck is a hundred cards on a phone screen, and everything
+   * underneath it — what you still need, the PC actions, the analysis — was
+   * a very long scroll past a grid you had already looked at. Folded state
+   * starts open for the deck and closed for nothing, so the screen behaves
+   * as it did until somebody folds something.
+   */
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+  const fold = useCallback(
+    (key: string) => setFolded((f) => ({ ...f, [key]: !f[key] })),
+    [],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -332,6 +390,18 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       }
     },
     [state, decks, deckId],
+  );
+
+  /**
+   * The colours this deck may play.
+   *
+   * Derived from the commander through the slot facts, which are cached — so
+   * the lock keeps working after the desktop goes away, which is exactly
+   * when someone is standing at a table adding cards.
+   */
+  const identity = useMemo(
+    () => deckColorIdentity(deck?.commander ?? [], slots, deck?.format ?? ''),
+    [deck, slots],
   );
 
   /** What you still need, from the phone's own mirror. Works with no signal. */
@@ -783,10 +853,18 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         a search that needs the answer first is the wrong shape for the
         question.
       */}
+      {browsing && identity ? (
+        <Text style={styles.muted}>
+          {identity.size
+            ? `Locked to ${[...identity].join('')} — your commander's colours.`
+            : 'Locked to colourless — your commander has no colours.'}
+        </Text>
+      ) : null}
       {browsing ? (
         <View style={styles.browser}>
           <CardBrowser
             state={state}
+            identity={identity}
             onPick={(card, printing) =>
               add(
                 printing
@@ -814,51 +892,72 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         </View>
       ) : null}
 
-      <Text style={styles.section}>Still needed — on your wishlist</Text>
-      {missing.length === 0 ? (
-        <Text style={styles.good}>You own every card in this deck.</Text>
-      ) : (
-        <>
-          <Text style={styles.muted}>
-            These aren’t counted as owned. They’re what this deck would cost
-            to finish.
-          </Text>
-          {missing.map((row) => (
-            <Pressable key={entryKey(row)} style={styles.row}
-                       onLongPress={() => void drop(row)}>
-              <Text style={styles.short}>{row.short}</Text>
-              <View style={styles.grow}>
-                <Text style={styles.name}>{row.name}</Text>
-                {printingLabel(row) ? (
-                  <Text style={styles.exactPrinting}>{printingLabel(row)}</Text>
-                ) : null}
-              </View>
-              <Text style={styles.muted}>
-                have {row.have} of {row.need}
-              </Text>
-            </Pressable>
-          ))}
-        </>
-      )}
-
-      <Text style={styles.section}>On your PC</Text>
-      <Pressable style={styles.secondary} onPress={() => void saveToPc()}>
-        <Text style={styles.secondaryText}>Save this deck to my PC</Text>
-      </Pressable>
-      <Text style={styles.muted}>
-        Puts it where the versions and the deep analysis live. Saving again
-        makes a new version rather than a second deck.
-      </Text>
-      {savedToPc ? <Text style={styles.good}>{savedToPc}</Text> : null}
-
-      <Text style={styles.section}>Analysis</Text>
-      <Pressable style={styles.secondary} onPress={analyse} disabled={thinking}>
-        <Text style={styles.secondaryText}>
-          {thinking ? 'Your PC is thinking…' : 'Analyse on my PC'}
+      <Folding
+        title="On your PC"
+        open={!folded.pc}
+        onToggle={() => fold('pc')}
+      >
+        <Pressable style={styles.secondary} onPress={() => void saveToPc()}>
+          <Text style={styles.secondaryText}>Save this deck to my PC</Text>
+        </Pressable>
+        <Text style={styles.muted}>
+          Puts it where the versions and the deep analysis live. Saving again
+          makes a new version rather than a second deck.
         </Text>
-      </Pressable>
-      {thinking ? <ActivityIndicator color="#48bb78" /> : null}
-      {analysis ? <Text style={styles.analysis}>{analysis}</Text> : null}
+        {savedToPc ? <Text style={styles.good}>{savedToPc}</Text> : null}
+      </Folding>
+
+      <Folding
+        title="Analysis"
+        open={!folded.analysis}
+        onToggle={() => fold('analysis')}
+      >
+        <Pressable style={styles.secondary} onPress={analyse} disabled={thinking}>
+          <Text style={styles.secondaryText}>
+            {thinking ? 'Your PC is thinking…' : 'Analyse on my PC'}
+          </Text>
+        </Pressable>
+        {thinking ? <ActivityIndicator color="#48bb78" /> : null}
+        {analysis ? <Text style={styles.analysis}>{analysis}</Text> : null}
+      </Folding>
+
+      {/*
+        Last, because it is the part you act on AFTER the deck is settled —
+        and because it is a list of cards you do NOT have, which is the wrong
+        thing to meet first when you open a deck you are proud of.
+      */}
+      <Folding
+        title="Still needed — on your wishlist"
+        count={missing.length || undefined}
+        open={!folded.missing}
+        onToggle={() => fold('missing')}
+      >
+        {missing.length === 0 ? (
+          <Text style={styles.good}>You own every card in this deck.</Text>
+        ) : (
+          <>
+            <Text style={styles.muted}>
+              These aren’t counted as owned. They’re what this deck would cost
+              to finish.
+            </Text>
+            {missing.map((row) => (
+              <Pressable key={entryKey(row)} style={styles.row}
+                         onLongPress={() => void drop(row)}>
+                <Text style={styles.short}>{row.short}</Text>
+                <View style={styles.grow}>
+                  <Text style={styles.name}>{row.name}</Text>
+                  {printingLabel(row) ? (
+                    <Text style={styles.exactPrinting}>{printingLabel(row)}</Text>
+                  ) : null}
+                </View>
+                <Text style={styles.muted}>
+                  have {row.have} of {row.need}
+                </Text>
+              </Pressable>
+            ))}
+          </>
+        )}
+      </Folding>
     </ScrollView>
   );
 }
@@ -919,6 +1018,23 @@ const styles = StyleSheet.create({
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { marginBottom: 8 },
+  foldHead: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 4,
+  },
+  foldArrow: { color: '#8a8f9c', fontSize: 13, width: 12 },
+  foldCount: {
+    backgroundColor: '#2d3142',
+    borderRadius: 9,
+    color: '#e4e6eb',
+    fontSize: 12,
+    overflow: 'hidden',
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+  },
   recordRow: {
     alignItems: 'center',
     flexDirection: 'row',

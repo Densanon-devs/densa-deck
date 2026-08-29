@@ -118,6 +118,10 @@ export class MemoryDatabase {
       // fake happily stores the same game twice — so a test for "syncing
       // twice does not double the record" would pass against a real bug.
       deck_games: 'game_uid',
+      // Without this the ON CONFLICT never matches, so a re-resolve appends
+      // a second row and the cache reads back whichever was written first —
+      // a stale price that a test for exactly that would miss.
+      slot_facts: 'slot_key',
     };
     const key = keys[table];
     return key && columns.includes(key) ? key : undefined;
@@ -212,6 +216,8 @@ export class MemoryDatabase {
       );
     }
     if (/FROM deck_games/i.test(text)) return this._selectGames(text, params);
+    // Read whole and filtered in the caller, the way the real one is.
+    if (/FROM slot_facts/i.test(text)) return [...this._table('slot_facts')];
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
   }
 
