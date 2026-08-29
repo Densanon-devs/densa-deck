@@ -296,8 +296,27 @@ def _is_board_wipe(card: Card) -> bool:
 
 
 def _is_counterspell(card: Card) -> bool:
+    """Can this card counter something?
+
+    The rule was "an instant, a sorcery, or something with flash" — a spell
+    you cast in response. That is most counterspells and it misses the other
+    kind: a permanent with an ACTIVATED counter ability, like Wizard Replica's
+    `{U}, Sacrifice this creature: Counter target spell`. Those sit on the
+    battlefield and answer at instant speed, which is if anything more
+    reliable than holding a card.
+
+    Forty-nine cards, all creatures, all reading as zero interaction — so a
+    deck built around them was told it had none and to go and add some.
+
+    The activated form is matched by the cost separator, so it is an ability
+    with a price rather than reminder text mentioning the word "counter".
+    """
     ot = card.oracle_text.lower()
-    return "counter target" in ot and (card.is_instant or card.is_sorcery or "flash" in ot)
+    if "counter target" not in ot:
+        return False
+    if card.is_instant or card.is_sorcery or "flash" in ot:
+        return True
+    return bool(re.search(r":[^.]*counter target", ot))
 
 
 def _is_artifact_enchantment_removal(card: Card) -> bool:

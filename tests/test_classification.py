@@ -251,3 +251,45 @@ class TestDrawWasMostlyInvisible:
                      "Draw cards equal to the number of creatures you control.",
                      "Whenever a creature dies, draw a card."):
             assert CardTag.CARD_DRAW in classify_card(self._card("X", text)), text
+
+
+class TestAPermanentThatCountersIsInteraction:
+    """The rule was "an instant, a sorcery, or something with flash".
+
+    That is most counterspells and it missed the other kind: a permanent with
+    an activated counter ability, which sits on the battlefield and answers at
+    instant speed. Forty-nine cards read as zero interaction, so a deck built
+    around them was told it had none.
+    """
+
+    def _card(self, name, text, type_line="Creature — Human Wizard"):
+        return Card(
+            scryfall_id=f"c-{name}", oracle_id=f"o-{name}", name=name,
+            layout=CardLayout.NORMAL, cmc=2, mana_cost="{1}{U}",
+            type_line=type_line, oracle_text=text,
+            legalities={"commander": Legality.LEGAL},
+        )
+
+    def test_an_activated_counter_ability_counts(self):
+        card = self._card("Wizard Replica",
+                          "Flying\n{U}, Sacrifice this creature: Counter "
+                          "target spell.")
+        assert CardTag.COUNTERSPELL in classify_card(card)
+
+    def test_a_plain_counterspell_still_counts(self):
+        card = self._card("Counterspell", "Counter target spell.",
+                          type_line="Instant")
+        card.is_instant = True
+        assert CardTag.COUNTERSPELL in classify_card(card)
+
+    def test_a_permanent_that_only_mentions_countering_does_not(self):
+        """The cost separator is what makes it an ability with a price rather
+        than a permanent whose text happens to contain the phrase."""
+        card = self._card(
+            "Sigil Bearer",
+            "Whenever an opponent would counter target spell, they may not.")
+        assert CardTag.COUNTERSPELL not in classify_card(card)
+
+    def test_a_creature_with_no_counter_text_is_left_alone(self):
+        assert CardTag.COUNTERSPELL not in classify_card(
+            self._card("Grizzly Bears", "Vanilla."))

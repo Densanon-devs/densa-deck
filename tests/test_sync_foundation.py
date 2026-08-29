@@ -446,3 +446,84 @@ class TestTheKindRegistryMatchesWhatCanActuallyBeApplied:
 
         assert KIND_STACK_SET in KNOWN_KINDS
         assert KIND_MEMBERSHIP in KNOWN_KINDS
+
+
+class TestABroadcastThatFailsIsNoticed:
+    """Every emission path is deliberately non-fatal: a phone that is not
+    paired must not fail somebody's edit.
+
+    The cost of that is silence, and silence is how the last two sync faults
+    survived — one where nothing called the broadcast at all, one where the
+    applier had no store to apply into. Both looked exactly like "sync is
+    quiet". So a failure is counted and reported, and still never raised.
+    """
+
+    @pytest.fixture
+    def api(self):
+        import tempfile
+        from pathlib import Path
+
+        from densa_deck.app.api import AppApi
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            made = AppApi(db_path=root / "cards.db",
+                          version_db_path=root / "versions.db")
+            yield made
+            made.close()
+
+    def _status(self, api):
+        reply = api.sync_status()
+        return reply.get("data", reply)
+
+    def test_a_healthy_install_reports_none(self, api):
+        assert self._status(api)["emit_failures"] == 0
+
+    def test_a_failed_broadcast_is_counted(self, api):
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("log unwritable")
+
+        api._get_sync().record_deck_delete = boom
+        api._log_deck_delete("atraxa")
+
+        status = self._status(api)
+        assert status["emit_failures"] == 1
+        assert "unwritable" in status["last_emit_failure"]
+        assert status["last_emit_failure_kind"] == "deck-delete"
+
+    def test_and_the_edit_still_goes_through(self, api):
+        """The whole reason these are swallowed. Counting must not change
+        that — an unpaired phone cannot be allowed to fail a save."""
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("nope")
+
+        api._get_sync().record_deck_delete = boom
+        api._log_deck_delete("atraxa")      # must not raise
+
+    def test_failures_accumulate_rather_than_overwrite(self, api):
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("nope")
+
+        api._get_sync().record_deck_delete = boom
+        for _ in range(3):
+            api._log_deck_delete("atraxa")
+        assert self._status(api)["emit_failures"] == 3
+
+    def test_the_most_recent_failure_is_the_one_kept(self, api):
+        sync = api._get_sync()
+
+        def first(*_args, **_kwargs):
+            raise RuntimeError("older")
+
+        sync.record_deck_delete = first
+        api._log_deck_delete("a")
+
+        def second(*_args, **_kwargs):
+            raise ValueError("newer")
+
+        sync.record_deck_game = second
+        api._log_deck_game("a", {"game_uid": "g"})
+
+        status = self._status(api)
+        assert "newer" in status["last_emit_failure"]
+        assert status["last_emit_failure_kind"] == "deck-game"

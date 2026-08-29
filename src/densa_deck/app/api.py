@@ -1751,8 +1751,8 @@ class AppApi:
                 collection_uid=collection_uid,
                 member=member,
             ))
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("membership", exc)
 
     @_safe
     def collections_for_item(self, item_id: int) -> list:
@@ -4181,6 +4181,27 @@ class AppApi:
                                              deck_store=self._get_vstore())
         return self._sync_applier
 
+    def _note_sync_failure(self, what: str, exc: Exception) -> None:
+        """Remember that something failed to reach the log.
+
+        Every broadcast here is deliberately non-fatal: a phone that is not
+        paired must not fail somebody's edit. The cost of that is silence —
+        and silence is exactly how the last two sync faults survived, one
+        where nothing called the broadcast at all and one where the applier
+        had no store to apply into. Both looked like "sync is quiet".
+
+        So the failure is counted and the most recent kept, and `sync_status`
+        reports them. Still never raised: the point is that "my phone is not
+        getting my edits" becomes something you can look at rather than
+        something you have to guess.
+        """
+        failures = getattr(self, "_sync_failures", None)
+        if failures is None:
+            failures = self._sync_failures = {"count": 0, "last": "", "what": ""}
+        failures["count"] += 1
+        failures["last"] = f"{type(exc).__name__}: {exc}"[:200]
+        failures["what"] = what
+
     def _log_deck_upsert(self, deck_id: str) -> None:
         """Tell the other device this deck changed.
 
@@ -4208,20 +4229,20 @@ class AppApi:
                 "printings": latest.printings,
                 "updated_at": store.deck_updated_at(deck_id) or latest.saved_at,
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("deck-upsert", exc)
 
     def _log_deck_delete(self, deck_id: str) -> None:
         try:
             self._get_sync().record_deck_delete(deck_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("deck-delete", exc)
 
     def _log_deck_game(self, deck_id: str, game: dict) -> None:
         try:
             self._get_sync().record_deck_game(deck_id, game)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("deck-game", exc)
 
     def _log_stack_delta(self, printing_id: str, card_name: str, delta: int,
                          *, collection_id=None, collection_uid: str = "",
@@ -4250,8 +4271,8 @@ class AppApi:
                 collection_uid=uid, oracle_id=oracle_id, finish=finish,
                 condition=condition, language=language, location=location,
                 reason=reason)
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("stack-delta", exc)
 
     def _log_collection_change(self, kind: str, collection: dict, **extra) -> None:
         try:
@@ -4262,8 +4283,8 @@ class AppApi:
                 sync.record_collection_delete(
                     collection.get("collection_uid", ""),
                     discard_cards=bool(extra.get("discard_cards")))
-        except Exception:
-            pass
+        except Exception as exc:
+            self._note_sync_failure("collection-" + kind, exc)
 
     @_safe
     def sync_hello(self, peer: str = "") -> dict:
@@ -4505,10 +4526,20 @@ class AppApi:
 
     @_safe
     def sync_status(self) -> dict:
-        """What has been exchanged with whom, for the Settings panel."""
+        """What has been exchanged with whom, for the Settings panel.
+
+        Includes anything that failed to reach the log. Those failures are
+        non-fatal by design and were therefore invisible; a count and the
+        last message turn "my phone is not getting my edits" into something
+        that can be read off a screen.
+        """
         sync = self._get_sync()
+        failures = getattr(self, "_sync_failures", None) or {}
         return {
             "device": sync.log.device,
+            "emit_failures": int(failures.get("count", 0)),
+            "last_emit_failure": failures.get("last", ""),
+            "last_emit_failure_kind": failures.get("what", ""),
             "events": sync.log.count(),
             "head": sync.log.head(),
             "peers": sync.log.peers(),
