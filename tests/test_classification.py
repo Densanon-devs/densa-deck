@@ -293,3 +293,52 @@ class TestAPermanentThatCountersIsInteraction:
     def test_a_creature_with_no_counter_text_is_left_alone(self):
         assert CardTag.COUNTERSPELL not in classify_card(
             self._card("Grizzly Bears", "Vanilla."))
+
+
+class TestBurnIsRemoval:
+    """"Deals 3 damage to ANY target" is how every burn spell has been
+    written since 2016. The phrase list only had "to target", so 555 of the
+    572 cards that burn something classified as nothing — Lightning Bolt
+    among them — and a mono-red deck holding four of them reported zero
+    interaction and was told to go and find some removal.
+    """
+
+    def _spell(self, name, text, type_line="Instant"):
+        return Card(
+            scryfall_id=f"b-{name}", oracle_id=f"ob-{name}", name=name,
+            layout=CardLayout.NORMAL, cmc=1, mana_cost="{R}",
+            type_line=type_line, oracle_text=text,
+            legalities={"modern": Legality.LEGAL},
+        )
+
+    def test_lightning_bolt_is_removal(self):
+        card = self._spell("Lightning Bolt",
+                           "Lightning Bolt deals 3 damage to any target.")
+        assert CardTag.TARGETED_REMOVAL in classify_card(card)
+
+    def test_a_creature_that_pings_on_death_is_too(self):
+        card = self._spell("Mudbutton Torchrunner",
+                           "When this creature dies, it deals 3 damage to any "
+                           "target.", type_line="Creature — Goblin")
+        assert CardTag.TARGETED_REMOVAL in classify_card(card)
+
+    def test_the_older_wording_still_works(self):
+        card = self._spell("Shock", "Shock deals 2 damage to target creature "
+                                    "or player.")
+        assert CardTag.TARGETED_REMOVAL in classify_card(card)
+
+    def test_destroy_and_exile_are_untouched(self):
+        for text in ("Destroy target creature.",
+                     "Exile target nonland permanent."):
+            assert CardTag.TARGETED_REMOVAL in classify_card(
+                self._spell("X", text)), text
+
+    def test_a_card_that_removes_nothing_is_left_alone(self):
+        card = self._spell("Ancestral Recall", "Target player draws three cards.")
+        assert CardTag.TARGETED_REMOVAL not in classify_card(card)
+
+    def test_damage_to_you_alone_is_not_removal(self):
+        """A drawback that hits your own face is not interaction."""
+        card = self._spell("Painful Truths",
+                           "You draw three cards and you lose 3 life.")
+        assert CardTag.TARGETED_REMOVAL not in classify_card(card)

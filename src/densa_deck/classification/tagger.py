@@ -273,6 +273,12 @@ def _is_targeted_removal(card: Card) -> bool:
         "exile target",
         "target creature gets -",
         "deals.*damage to target",
+        # "ANY target" is how every burn spell has been written since 2016 —
+        # Lightning Bolt, Shock, the lot. The list only had "to target", so
+        # 555 of the 572 cards that burn something classified as nothing, and
+        # a mono-red deck holding four Bolts reported zero interaction and was
+        # told to go and find some removal.
+        "deals.*damage to any target",
         "return target.*to its owner's hand",
         "target player sacrifices",
     ]
