@@ -954,7 +954,7 @@
     // Prices have been captured every time the collection was valued and
     // shown nowhere. Drawn before the synergy panel because it is about the
     // printing on screen rather than about the deck.
-    void renderPriceHistory(printingId);
+    void renderPriceHistory(printingId, cardName || d.name || "");
 
     // Loaded AFTER the card text is on screen, and never awaited by it. The
     // synergy report parses a decklist and walks the combo cache; making the
@@ -972,14 +972,18 @@
    * a history, and a chart of it would be a flat line implying stability
    * nobody measured.
    */
-  async function renderPriceHistory(printingId) {
+  async function renderPriceHistory(printingId, cardName) {
     const host = e("card-price-history");
-    if (!host || !printingId) return;
+    if (!host || (!printingId && !cardName)) return;
     host.innerHTML = "";
 
     let out;
     try {
-      out = await callApi("get_price_history", printingId, "nonfoil", 365);
+      // The card name is passed so a card you do NOT own still has a
+      // series: a wishlist entry naming no printing is tracked at whichever
+      // copy was cheapest each day, which only reads as a series per card.
+      out = await callApi("get_price_history", printingId, "nonfoil", 365,
+                          cardName || "");
     } catch (err) {
       return;                      // a card view is not worth breaking over
     }
@@ -1019,8 +1023,10 @@
           <span class="subtle">over ${points.length} readings ·
             low ${money(low)} · high ${money(high)}</span>
         </p>
-        <p class="panel-hint subtle">Recorded on this machine when your
-          collection was valued. It does not go back further than that.</p>
+        <p class="panel-hint subtle">${out.scope === "card"
+          ? "Cheapest copy each day, from your wishlist."
+          : "Recorded on this machine each day the app was open."}
+          It does not go back further than that.</p>
       </div>`;
   }
 

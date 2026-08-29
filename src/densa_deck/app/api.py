@@ -3656,19 +3656,98 @@ class AppApi:
         return {"sets": collection_sets(self._get_collection_store(),
                                         self._get_db(), limit=min(int(limit), 500))}
 
+    def capture_prices_if_due(self) -> int:
+        """Record today's prices, if today has not been recorded yet.
+
+        Price history is the one thing here that cannot be rebuilt: Scryfall
+        serves today's prices and nothing else, so a day nobody captured is
+        gone. It used to depend on somebody opening the Collection tab, which
+        is a fine trigger for someone who does and no trigger at all for
+        someone who does not — this machine has two days recorded out of the
+        three weeks the app has been installed.
+
+        Called on launch and once an hour after that, so a session left open
+        across midnight still catches the new day. The write itself is
+        idempotent per day, so the hourly check is nearly always a no-op that
+        costs one indexed query.
+
+        Never raises. Losing a day of price history is a shame; failing to
+        open the app over it would be worse.
+        """
+        from datetime import date
+
+        from densa_deck.collection.prices import capture_price_snapshot
+
+        try:
+            store = self._get_collection_store()
+            today = date.today().isoformat()
+            if getattr(self, "_prices_captured_on", "") == today:
+                return 0
+            written = capture_price_snapshot(store, self._get_db())
+            self._prices_captured_on = today
+            return written
+        except Exception as exc:
+            self._note_sync_failure("price-capture", exc)
+            return 0
+
+    def start_price_capture(self) -> None:
+        """Capture now, then keep checking while the app is open.
+
+        A daemon thread so it cannot hold the app open at shutdown, and an
+        hourly tick because the only thing it is waiting for is the date
+        changing.
+        """
+        import threading
+
+        def loop() -> None:
+            while True:
+                self.capture_prices_if_due()
+                if self._price_stop.wait(3600):
+                    return
+
+        if getattr(self, "_price_thread", None) is not None:
+            return
+        self._price_stop = threading.Event()
+        self._price_thread = threading.Thread(
+            target=loop, name="price-capture", daemon=True)
+        self._price_thread.start()
+
+    def stop_price_capture(self) -> None:
+        """Let the ticker go on close."""
+        stop = getattr(self, "_price_stop", None)
+        if stop is not None:
+            stop.set()
+
     @_safe
     def get_price_history(self, printing_id: str, finish: str = "nonfoil",
-                          limit: int = 365) -> dict:
+                          limit: int = 365, card_name: str = "") -> dict:
         """Captured price points for one printing, oldest first.
 
         Empty until snapshots have accumulated — this is local history, not a
         backfill. Scryfall does not serve past prices.
         """
-        from densa_deck.collection.prices import price_history_for_printing
-        points = price_history_for_printing(
-            self._get_collection_store(), printing_id, finish, limit=min(int(limit), 2000))
-        return {"printing_id": printing_id, "finish": finish,
-                "points": points, "count": len(points)}
+        from densa_deck.collection.prices import (
+            price_history_for_card,
+            price_history_for_printing,
+        )
+        capped = min(int(limit), 2000)
+        store = self._get_collection_store()
+        points = price_history_for_printing(store, printing_id, finish,
+                                            limit=capped)
+        scope = "printing"
+
+        # Nothing recorded for this exact printing, but maybe for the card.
+        #
+        # A wishlist entry that names no printing is a wish for the CHEAPEST
+        # copy, and which printing that is legitimately changes from day to
+        # day — so its history is spread across several ids and only reads as
+        # a series when asked about the card.
+        if not points and (card_name or "").strip():
+            points = price_history_for_card(store, self._get_db(),
+                                            card_name, limit=capped)
+            scope = "card"
+        return {"printing_id": printing_id, "finish": finish, "scope": scope,
+                "card_name": card_name, "points": points, "count": len(points)}
 
     @_safe
     def get_card_printings(self, card_name: str) -> dict:

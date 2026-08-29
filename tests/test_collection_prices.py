@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from densa_deck.collection.prices import (
+    price_history_for_card,
     ScryfallBulkProvider,
     capture_price_snapshot,
     is_stale,
@@ -340,3 +341,109 @@ class TestPriceAwareSearch:
         sets = collection_sets(store, db)
         assert sets[0]["set_code"] == "cmm"
         assert sets[0]["copies"] == 3
+
+
+class TestTheWishlistIsTrackedToo:
+    """"Is this going up, should I buy now" is a question about a card you do
+    NOT own, and tracking only what you already have answers it for nobody.
+    """
+
+    @pytest.fixture
+    def kit(self, tmp_path):
+        """A catalogue with two printings of one card at different prices."""
+        db = CardDatabase(db_path=tmp_path / "cards.db")
+        db.upsert_printings([
+            printing_row_from_scryfall(
+                _raw("p-cheap", "Lightning Bolt", "m10", "146", usd="1.50"), "t"),
+            printing_row_from_scryfall(
+                _raw("p-dear", "Lightning Bolt", "lea", "161", usd="400.00"), "t"),
+            printing_row_from_scryfall(
+                _raw("p-sol", "Sol Ring", "cmm", "410", usd="2.00"), "t"),
+        ])
+        store = CollectionStore(db_path=tmp_path / "collection.db")
+        return store, db
+
+    def test_a_wished_card_is_captured(self, kit):
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 4)
+        assert capture_price_snapshot(store, db, on_date="2026-01-01") > 0
+        assert price_history_for_card(store, db, "Lightning Bolt")
+
+    def test_a_name_only_wish_takes_the_cheapest_copy(self, kit):
+        """What a shopping list costs is what the cheapest copy costs."""
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 4)
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        points = price_history_for_card(store, db, "Lightning Bolt")
+        assert points[-1]["price_usd"] == 1.50, points
+
+    def test_a_wish_that_names_a_printing_takes_that_one(self, kit):
+        """Wanting the Alpha one is not the same as wanting a Bolt."""
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 1, set_code="lea",
+                           collector_number="161")
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        assert price_history_for_printing(store, "p-dear")
+
+    def test_owning_something_still_tracks_it(self, kit):
+        store, db = kit
+        store.add_copies("p-sol", "Sol Ring", quantity=1)
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        assert price_history_for_printing(store, "p-sol")
+
+    def test_a_card_neither_owned_nor_wanted_is_not_tracked(self, kit):
+        """The snapshot is about your cards, not the catalogue — recording all
+        107,000 printings daily would be a different product."""
+        store, db = kit
+        store.add_copies("p-sol", "Sol Ring", quantity=1)
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        assert not price_history_for_card(store, db, "Lightning Bolt")
+
+    def test_the_card_series_follows_the_cheapest_copy_as_it_moves(self, kit):
+        """Which printing is cheapest legitimately changes, so the series is
+        keyed on the CARD. Read per printing it would scatter across ids with
+        a point or two each and never draw."""
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 4)
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+
+        # The formerly-dear printing is now the cheap one.
+        db.upsert_printings([
+            printing_row_from_scryfall(
+                _raw("p-dear", "Lightning Bolt", "lea", "161", usd="0.25"), "t"),
+        ])
+        capture_price_snapshot(store, db, on_date="2026-01-02")
+
+        points = price_history_for_card(store, db, "Lightning Bolt")
+        assert len(points) == 2, points
+        assert points[0]["price_usd"] == 1.50
+        assert points[1]["price_usd"] == 0.25, "it did not follow the cheapest"
+
+    def test_capturing_twice_in_a_day_stores_one_snapshot(self, kit):
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 4)
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        assert len(price_history_for_card(store, db, "Lightning Bolt")) == 1
+
+    def test_the_card_series_is_the_cheapest_of_that_days_copies(self, kit):
+        """The case where MIN matters, and the only one that shows it.
+
+        Own the expensive printing AND want the card: both get recorded that
+        day, and what the card COSTS is the cheaper of them. Every other test
+        here records one printing per day, where cheapest and dearest are the
+        same number and a wrong answer looks right.
+        """
+        store, db = kit
+        store.add_copies("p-dear", "Lightning Bolt", quantity=1)   # the £400 one
+        store.wishlist_set("Lightning Bolt", 4)                    # any copy
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+
+        # Both printings recorded on the one day.
+        assert price_history_for_printing(store, "p-dear")
+        assert price_history_for_printing(store, "p-cheap")
+
+        points = price_history_for_card(store, db, "Lightning Bolt")
+        assert len(points) == 1
+        assert points[0]["price_usd"] == 1.50, (
+            "the card series took the expensive copy")

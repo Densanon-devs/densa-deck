@@ -80,6 +80,7 @@ def run(debug: bool = False):
     )
 
     def _on_closing():
+        api.stop_price_capture()
         api.close()
         # Released here as well as in the `finally` below: a window closed
         # normally should free the lock at the moment it closes, not whenever
@@ -97,6 +98,19 @@ def run(debug: bool = False):
         api.start_phone_bridge_if_enabled()
     except Exception as exc:                                  # pragma: no cover
         print(f"Phone scanning could not start: {exc}", file=sys.stderr)
+
+    # Today's prices, recorded because the app was opened rather than because
+    # somebody visited the right tab.
+    #
+    # Scryfall serves today's prices and nothing else, so a day nobody
+    # captured is gone for good — and the previous trigger, opening the
+    # Collection tab, had produced two days of history in three weeks of the
+    # app being installed. Idempotent per day, and it keeps checking hourly so
+    # a session left open over midnight still catches the new date.
+    try:
+        api.start_price_capture()
+    except Exception as exc:                                  # pragma: no cover
+        print(f"Price history could not start: {exc}", file=sys.stderr)
 
     # Window + taskbar icon.
     #

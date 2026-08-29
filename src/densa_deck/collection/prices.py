@@ -263,10 +263,93 @@ def capture_price_snapshot(store, card_db, *, on_date: str | None = None) -> int
             """,
             (on_date,),
         )
+        written = cur.rowcount
+
+        # And the cards you have NOT bought yet.
+        #
+        # A wishlist is a shopping list, so its prices are the ones somebody
+        # is actually waiting on — "is this going up, should I buy now" is a
+        # question about a card you do not own, and tracking only what you
+        # already have answers it for nobody.
+        #
+        # A wish that names a printing gets that printing. A name-only wish
+        # gets the CHEAPEST printing that day, because what a shopping list
+        # costs is what the cheapest copy costs — and which printing that is
+        # legitimately changes. Read back per CARD rather than per printing
+        # for exactly that reason; see `price_history_for_card`.
+        cur = conn.execute(
+            """
+            INSERT OR REPLACE INTO price_history
+                (printing_id, captured_on, finish, price_usd, source)
+            SELECT DISTINCT p.printing_id, ?, 'nonfoil', p.price_usd, 'wishlist'
+            FROM wishlist_items w
+            JOIN cards.card_printings p
+              ON p.name = w.card_name COLLATE NOCASE
+             AND (
+                   -- the exact printing the wish named
+                   (w.set_code != ''
+                    AND p.set_code = w.set_code COLLATE NOCASE
+                    AND (w.collector_number = ''
+                         OR p.collector_number = w.collector_number))
+                   OR
+                   -- or the cheapest copy of the card, when it named none
+                   (w.set_code = '' AND p.printing_id = (
+                        SELECT p2.printing_id FROM cards.card_printings p2
+                        WHERE p2.name = w.card_name COLLATE NOCASE
+                          AND p2.price_usd IS NOT NULL
+                        ORDER BY p2.price_usd ASC, p2.released_at DESC,
+                                 p2.collector_number ASC
+                        LIMIT 1))
+                 )
+            WHERE p.price_usd IS NOT NULL
+            """,
+            (on_date,),
+        )
+        written += cur.rowcount
         conn.commit()
-        return cur.rowcount
+        return written
     finally:
         conn.close()
+
+
+def price_history_for_card(store, card_db, card_name: str,
+                           limit: int = 365) -> list[dict]:
+    """What this CARD has cost, cheapest copy per day.
+
+    Not the same question as `price_history_for_printing`, and the difference
+    matters for anything you do not own yet. A wishlist entry that names no
+    printing is a wish for the cheapest copy, and WHICH printing that is
+    changes as prices move — so the day-by-day series is keyed on the card
+    and takes the lowest price recorded for it that day.
+
+    Read per printing instead and the same wish scatters across half a dozen
+    ids, each with a point or two, and no series long enough to draw.
+
+    Needs the catalogue: the join from a recorded printing back to a card
+    name lives there, so this cannot answer without it.
+    """
+    name = (card_name or "").strip()
+    if not name:
+        return []
+    conn = _attached(store, card_db)
+    try:
+        has = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='price_history'"
+        ).fetchone()
+        if not has:
+            return []
+        rows = conn.execute(
+            """SELECT h.captured_on, MIN(h.price_usd)
+               FROM price_history h
+               JOIN cards.card_printings p ON p.printing_id = h.printing_id
+               WHERE LOWER(p.name) = LOWER(?) AND h.price_usd IS NOT NULL
+               GROUP BY h.captured_on
+               ORDER BY h.captured_on DESC LIMIT ?""",
+            (name, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"captured_on": r[0], "price_usd": r[1]} for r in reversed(rows)]
 
 
 def value_deltas(store, card_db, *, windows=(1, 7, 30)) -> dict:
