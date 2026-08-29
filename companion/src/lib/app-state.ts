@@ -614,10 +614,20 @@ export class AppState {
    * catalogue is every card in Magic, and "things I want" is a list about
    * cards, not about the collection.
    */
-  async wishlistAdd(cardName: string, quantity = 1): Promise<void> {
+  async wishlistAdd(
+    cardName: string,
+    quantity = 1,
+    printing?: { set_code?: string; collector_number?: string },
+  ): Promise<void> {
     await this.client.call('wishlist/add', {
       card_name: cardName,
       quantity,
+      // Naming a printing is a different want from wanting the card, and it
+      // decides what gets tracked: a name-only wish is priced at whichever
+      // copy is cheapest each day, which is the wrong answer for somebody
+      // watching one particular version.
+      set_code: printing?.set_code ?? '',
+      collector_number: printing?.collector_number ?? '',
     });
   }
 

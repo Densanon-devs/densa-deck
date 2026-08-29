@@ -11,9 +11,12 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -23,7 +26,7 @@ import {
 import type { AppState } from '../lib/app-state.ts';
 import { entryKey, printingLabel } from '../lib/decks.ts';
 import type { DeckStore, WishlistRow } from '../lib/decks.ts';
-import type { CatalogueCard } from '../lib/protocol.ts';
+import type { CatalogueCard, CataloguePrinting } from '../lib/protocol.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -72,9 +75,43 @@ export function WishlistScreen({ state, decks }: Props) {
     setRows(await state.wishlist(await decks.list()));
   }, [state, decks]);
 
+  /**
+   * The card whose printings are being looked through, and what came back.
+   *
+   * Null until somebody holds down a result. Wanting a card is the common
+   * case and stays one tap; wanting THIS Lightning Bolt is the rare one and
+   * costs a long press, which is the right way round.
+   */
+  const [picking, setPicking] = useState<CatalogueCard | null>(null);
+  const [variants, setVariants] = useState<CataloguePrinting[] | null>(null);
+
+  /**
+   * Look through the printings of one card.
+   *
+   * Needs the PC — the phone's mirror only holds printings you own, and the
+   * whole point here is a printing you do not. So this is one of the few
+   * places that says so rather than answering from cache.
+   */
+  const lookThrough = useCallback(
+    async (card: CatalogueCard) => {
+      setPicking(card);
+      setVariants(null);
+      try {
+        const reply = await state.printingsFor(card.name);
+        setVariants(reply.printings ?? []);
+      } catch (err) {
+        setVariants([]);
+        reporting('finding its printings', setProblem)(err);
+      }
+    },
+    [state],
+  );
+
   const want = useCallback(
-    async (name: string) => {
-      await state.wishlistAdd(name, 1);
+    async (name: string, printing?: CataloguePrinting) => {
+      await state.wishlistAdd(name, 1, printing);
+      setPicking(null);
+      setVariants(null);
       setSearch('');
       setFound([]);
       await load();
@@ -216,12 +253,20 @@ export function WishlistScreen({ state, decks }: Props) {
                   onPress={() => {
                     void want(card.name).catch(reporting('adding it', setProblem));
                   }}
+                  onLongPress={() => {
+                    void lookThrough(card);
+                  }}
                 >
                   <View style={styles.grow}>
                     <Text style={styles.name}>{card.name}</Text>
                     <Text style={styles.muted}>{card.type_line}</Text>
                   </View>
-                  <Text style={styles.add}>Want it</Text>
+                  {/* Said out loud, because a long press nobody knows about
+                      is a feature nobody has. */}
+                  <View style={styles.resultActions}>
+                    <Text style={styles.add}>Want it</Text>
+                    <Text style={styles.hint}>hold for a printing</Text>
+                  </View>
                 </Pressable>
               ))}
             </View>
@@ -279,6 +324,71 @@ export function WishlistScreen({ state, decks }: Props) {
           </View>
         )}
       />
+
+      {/*
+        Which printing, when it matters.
+
+        Wanting "a Lightning Bolt" and wanting the Alpha one are different
+        wants, and they are tracked differently: a name-only wish is priced
+        at whichever copy is cheapest that day, which is right for a shopping
+        list and wrong for watching one version. So naming a printing here
+        also decides what gets recorded.
+      */}
+      <Modal
+        visible={picking != null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setPicking(null)}
+      >
+        <View style={styles.sheetBack}>
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>{picking?.name}</Text>
+            <Text style={styles.muted}>
+              Pick the printing you want. Its price is recorded daily, instead
+              of whichever copy is cheapest.
+            </Text>
+
+            {variants == null ? (
+              <ActivityIndicator color="#8a8f9c" style={styles.sheetSpinner} />
+            ) : variants.length === 0 ? (
+              <Text style={styles.muted}>
+                No printings came back. Your PC has to be reachable for this —
+                the phone only knows the printings you own.
+              </Text>
+            ) : (
+              <ScrollView style={styles.sheetList}>
+                {variants.map((printing) => (
+                  <Pressable
+                    key={printing.printing_id}
+                    style={styles.variant}
+                    onPress={() => {
+                      void want(picking!.name, printing).catch(
+                        reporting('adding it', setProblem),
+                      );
+                    }}
+                  >
+                    <Text style={styles.grow}>
+                      <Text style={styles.name}>
+                        {printing.set_code.toUpperCase()} #
+                        {printing.collector_number}
+                      </Text>
+                    </Text>
+                    <Text style={styles.printing}>
+                      {printing.price_usd != null
+                        ? `$${printing.price_usd.toFixed(2)}`
+                        : '—'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+
+            <Pressable style={styles.sheetClose} onPress={() => setPicking(null)}>
+              <Text style={styles.findText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -289,6 +399,39 @@ const styles = StyleSheet.create({
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
   printing: { color: '#68d391', fontSize: 12 },
+  hint: { color: '#8a8f9c', fontSize: 11 },
+  resultActions: { alignItems: 'flex-end', gap: 2 },
+  sheetBack: {
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#161923',
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    gap: 8,
+    maxHeight: '80%',
+    padding: 16,
+  },
+  sheetTitle: { color: '#e4e6eb', fontSize: 18, fontWeight: '700' },
+  sheetSpinner: { paddingVertical: 24 },
+  sheetList: { marginVertical: 4 },
+  sheetClose: {
+    alignItems: 'center',
+    borderColor: '#2b3040',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingVertical: 10,
+  },
+  variant: {
+    alignItems: 'center',
+    borderBottomColor: '#2b3040',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 12,
+  },
   bought: {
     borderColor: '#38a169',
     borderWidth: 1,

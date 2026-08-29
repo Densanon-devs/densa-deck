@@ -678,7 +678,11 @@ class PhoneBridge:
                 int(payload.get("quantity", 1) or 1),
                 payload.get("deck_id", ""),
                 payload.get("deck_name", ""),
-                payload.get("notes", "")))
+                payload.get("notes", ""),
+                # Carried through, so watching one printing from a phone
+                # means the same thing it means on the desktop.
+                payload.get("set_code", ""),
+                payload.get("collector_number", "")))
         if route == "wishlist/remove":
             return _unwrap(api.wishlist_remove(
                 payload.get("card_name", ""), payload.get("deck_id", "")))

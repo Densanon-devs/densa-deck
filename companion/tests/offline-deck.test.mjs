@@ -308,3 +308,46 @@ describe('price history reaches the phone and stays there', () => {
     assert.equal((await state.priceHistory('', 'Lightning Bolt')).scope, 'card');
   });
 });
+
+describe('naming a printing on the wishlist', () => {
+  /**
+   * "A Lightning Bolt" and "the Alpha Lightning Bolt" are different wants,
+   * and the desktop tracks them differently: a name-only wish is priced at
+   * whichever copy was cheapest that day. So the printing has to survive the
+   * trip, or holding down a result in a shop quietly watches the cheap one.
+   */
+  function recording(desktop) {
+    const sent = [];
+    const inner = desktop.handle.bind(desktop);
+    desktop.handle = (route, payload) => {
+      sent.push({ route, payload });
+      return route === 'wishlist/add' ? { ok: true } : inner(route, payload);
+    };
+    return sent;
+  }
+
+  test('a picked printing is sent with the card', async () => {
+    const desktop = new FakeDesktop();
+    const sent = recording(desktop);
+    const { state } = await makePhone(desktop);
+
+    await state.wishlistAdd('Lightning Bolt', 1,
+      { set_code: 'lea', collector_number: '161' });
+
+    const add = sent.find((c) => c.route === 'wishlist/add');
+    assert.equal(add.payload.set_code, 'lea');
+    assert.equal(add.payload.collector_number, '161');
+  });
+
+  test('and adding without one still means any copy', async () => {
+    const desktop = new FakeDesktop();
+    const sent = recording(desktop);
+    const { state } = await makePhone(desktop);
+
+    await state.wishlistAdd('Lightning Bolt', 1);
+
+    const add = sent.find((c) => c.route === 'wishlist/add');
+    assert.equal(add.payload.set_code, '',
+      'a wish for the card got pinned to a printing');
+  });
+});

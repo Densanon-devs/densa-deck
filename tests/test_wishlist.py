@@ -254,3 +254,39 @@ class TestReadingTheList:
         listed = api.get_wishlist()["data"]
         assert listed["cards"] == []
         assert listed["cost_usd"] == 0
+
+
+class TestNamingAPrinting:
+    """Wanting a card and wanting THIS copy of it are different wants.
+
+    A wish that names no printing is priced at whichever copy is cheapest
+    each day — right for a shopping list. Somebody watching the Alpha Bolt
+    wants ITS price, which is the whole reason to name one, so the name has
+    to survive the trip from the button to the database.
+    """
+
+    def test_a_named_printing_reaches_the_store(self, api):
+        api.wishlist_add("Lightning Bolt", 1, "", "", "", "lea", "161")
+        row = api.get_wishlist()["data"]["cards"][0]
+        assert row["set_code"] == "lea"
+        assert row["collector_number"] == "161"
+
+    def test_naming_none_still_means_any_copy(self, api):
+        api.wishlist_add("Lightning Bolt", 1)
+        row = api.get_wishlist()["data"]["cards"][0]
+        assert not row["set_code"], "a wish for the card got pinned to a printing"
+
+    def test_the_phone_can_name_one_too(self, api):
+        """Same want, different door. The route used to drop the printing,
+        so watching one from a shop quietly watched the cheapest instead."""
+        from densa_deck.app.phone import PhoneBridge
+
+        reply = PhoneBridge(api).handle_api("wishlist/add", {
+            "card_name": "Lightning Bolt", "quantity": 1,
+            "set_code": "lea", "collector_number": "161",
+        })
+        # A good reply is the payload itself; the envelope is stripped at
+        # the route. An "ok" key here would mean it FAILED.
+        assert "error" not in reply, reply
+        row = api.get_wishlist()["data"]["cards"][0]
+        assert row["set_code"] == "lea"

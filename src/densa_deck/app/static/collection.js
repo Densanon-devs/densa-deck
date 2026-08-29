@@ -1178,11 +1178,42 @@
             <div class="subtle">${escape(p.set_code.toUpperCase())} #${escape(p.collector_number)}
               · ${escape(p.rarity)} · ${escape(p.released_at)}</div>
           </div>
-          <div class="printing-actions">${finishBtns}</div>
+          <div class="printing-actions">
+            ${finishBtns}
+            <!--
+              Watching is not owning. A printing you own is priced every day
+              because you own it; this is how a printing you do NOT own gets
+              the same treatment, and it has to name the printing — a wish
+              for the card is priced at whichever copy is cheapest, which is
+              the wrong answer for somebody watching one particular version.
+            -->
+            <button class="btn btn-outline btn-slim printing-watch"
+                    data-watch="${escape(p.name)}"
+                    data-set="${escape(p.set_code)}"
+                    data-number="${escape(p.collector_number)}"
+                    title="Record this printing's price every day">Watch</button>
+          </div>
         </div>`;
     }).join("");
 
     list.onclick = async (ev) => {
+      const watch = ev.target.closest("button[data-watch]");
+      if (watch) {
+        try {
+          await callApi("wishlist_add", watch.dataset.watch, 1, "", "",
+                        "Watching this printing",
+                        watch.dataset.set, watch.dataset.number);
+        } catch (err) {
+          toast("Could not watch that: " + err.message, "error");
+          return;
+        }
+        toast(`Watching ${watch.dataset.watch} `
+              + `(${(watch.dataset.set || "").toUpperCase()} `
+              + `#${watch.dataset.number}). Its price is recorded daily.`,
+              "success");
+        return;
+      }
+
       const btn = ev.target.closest("button[data-add]");
       if (!btn) return;
       const condition = e("printings-condition").value || "NM";

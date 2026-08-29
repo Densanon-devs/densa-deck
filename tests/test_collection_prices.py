@@ -447,3 +447,49 @@ class TestTheWishlistIsTrackedToo:
         assert len(points) == 1
         assert points[0]["price_usd"] == 1.50, (
             "the card series took the expensive copy")
+
+    def test_watching_one_printing_tracks_that_one(self, kit):
+        """Naming a printing is a different want from wanting the card.
+
+        The Alpha Bolt is not four hundred pounds of the same thing as the
+        tenth-edition one, and somebody watching it wants ITS price — not
+        whichever copy happens to be cheapest, which is what a name-only wish
+        is priced at.
+        """
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 1, set_code="lea",
+                           collector_number="161")
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+
+        watched = price_history_for_printing(store, "p-dear")
+        assert watched and watched[-1]["price_usd"] == 400.00, watched
+        assert not price_history_for_printing(store, "p-cheap"), (
+            "it tracked a printing nobody asked about")
+
+    def test_watching_a_printing_and_wanting_the_card_are_both_kept(self, kit):
+        """Two different wants about one card, and neither replaces the
+        other: what the cheapest copy costs, and what THIS one costs."""
+        store, db = kit
+        store.wishlist_set("Lightning Bolt", 1, set_code="lea",
+                           collector_number="161")
+        store.wishlist_set("Lightning Bolt", 4)          # any copy will do
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+
+        assert price_history_for_printing(store, "p-dear")
+        assert price_history_for_printing(store, "p-cheap")
+        # And the card-level read is still what it would COST you.
+        card = price_history_for_card(store, db, "Lightning Bolt")
+        assert card[-1]["price_usd"] == 1.50, card
+
+    def test_a_watched_printing_with_no_price_is_skipped_not_stored_as_zero(self, kit):
+        """An unpriced printing is unknown, not free. Storing a zero would
+        put a cliff in the chart that never happened."""
+        store, db = kit
+        db.upsert_printings([
+            printing_row_from_scryfall(
+                _raw("p-none", "Lightning Bolt", "xyz", "1", usd=None), "t"),
+        ])
+        store.wishlist_set("Lightning Bolt", 1, set_code="xyz",
+                           collector_number="1")
+        capture_price_snapshot(store, db, on_date="2026-01-01")
+        assert not price_history_for_printing(store, "p-none")

@@ -4885,12 +4885,27 @@ class AppApi:
     @_safe
     def wishlist_add(self, card_name: str, quantity: int = 1,
                      deck_id: str = "", deck_name: str = "",
-                     notes: str = "") -> dict:
-        """Put something on the list by hand, deck or no deck."""
+                     notes: str = "", set_code: str = "",
+                     collector_number: str = "") -> dict:
+        """Put something on the list by hand, deck or no deck.
+
+        `set_code` names a PARTICULAR printing, and that is a different want
+        from wanting the card: the Alpha Lightning Bolt is not four hundred
+        pounds of the same thing as the tenth-edition one. A deck slot that
+        named a printing has always carried it through to the list; adding by
+        hand could not, so every manual entry was a wish for "any copy".
+
+        It decides what gets tracked, too. A name-only wish is priced at
+        whichever copy is cheapest each day — right for a shopping list, and
+        wrong for watching one printing, which is the whole reason somebody
+        would name it.
+        """
         try:
             return self._get_collection_store().wishlist_set(
                 card_name, int(quantity), deck_id=deck_id,
-                deck_name=deck_name, notes=notes)
+                deck_name=deck_name, notes=notes,
+                set_code=(set_code or "").strip(),
+                collector_number=(collector_number or "").strip())
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
 
