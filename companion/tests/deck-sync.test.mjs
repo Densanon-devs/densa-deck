@@ -495,3 +495,68 @@ describe('an edit made here reaches the desktop', () => {
     assert.equal(await state.engine.pending(), 0);
   });
 });
+
+describe('what this phone is allowed', () => {
+  /**
+   * The licence lives on the desktop, so the answer comes from there. The
+   * phone had no tier concept at all, which made installing the companion a
+   * way around the whole paywall.
+   */
+  async function makeState(desktop) {
+    const { buildAppState } = await import('../src/lib/app-state.ts');
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store,
+      { baseUrl: 'https://100.64.0.1:8791', token: desktop.token },
+      'phone-1',
+      testUuid,
+      desktop.fetchImpl,
+      new DeckStore(db),
+    );
+    return state;
+  }
+
+  function answeringTier(desktop, snapshot) {
+    const inner = desktop.handle.bind(desktop);
+    desktop.handle = (route, payload) =>
+      route === 'tier' ? snapshot : inner(route, payload);
+    return desktop;
+  }
+
+  test('it asks the desktop rather than deciding for itself', async () => {
+    const desktop = answeringTier(new FakeDesktop(), {
+      tier: 'free', is_pro: false, allowances: { saved_decks: 1 },
+    });
+    const state = await makeState(desktop);
+
+    const tier = await state.tier();
+    assert.equal(tier.is_pro, false);
+    assert.equal(tier.allowances.saved_decks, 1);
+  });
+
+  test('the answer is remembered rather than asked for every screen', async () => {
+    const desktop = answeringTier(new FakeDesktop(), {
+      tier: 'pro', is_pro: true, allowances: {},
+    });
+    const state = await makeState(desktop);
+    await state.tier();
+
+    // The desktop now says something different; the cached answer stands
+    // until something asks for a fresh one.
+    answeringTier(desktop, { tier: 'free', is_pro: false, allowances: {} });
+    assert.equal((await state.tier()).is_pro, true);
+    assert.equal((await state.tier(true)).is_pro, false, 'refresh was ignored');
+  });
+
+  test('an unreachable desktop reads as Pro, not as locked out', async () => {
+    // A phone out of range must not start hiding features somebody paid
+    // for. The desktop refuses the routes anyway, so failing open costs a
+    // button that explains itself when pressed.
+    const desktop = new FakeDesktop();
+    desktop.reachable = false;
+    const state = await makeState(desktop);
+    assert.equal((await state.tier()).is_pro, true);
+  });
+});

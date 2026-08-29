@@ -441,6 +441,32 @@ class PhoneBridge:
         # compare_digest so a wrong token can't be narrowed by timing.
         return bool(self.token) and secrets.compare_digest(supplied or "", self.token)
 
+    # Routes that cost money on the desktop and must cost money here.
+    #
+    # The phone had NO tier awareness at all, so a free user with the
+    # companion could call `analyst/analyze`, `analyst/explain` and the deck
+    # lab and get every Pro capability for nothing — the whole paywall,
+    # walked around by installing an app. The desktop is where the licence
+    # lives, so the desktop is where this is decided; the phone is told, and
+    # asking politely is not what keeps it honest.
+    #
+    # Only the LLM-backed routes are listed. Everything else the phone
+    # reaches is either your own collection, a deterministic rules reading,
+    # or a deck save — and a deck save is limited by count inside AppApi, so
+    # it is already answered correctly for both tiers without a second gate
+    # here that could disagree with the first.
+    _PRO_ROUTES: dict[str, tuple[str, str]] = {
+        "analyst/analyze": (
+            "analyst",
+            "Deck analysis is written by the model on your PC, which is a "
+            "Densa Deck Pro feature.",
+        ),
+        "analyst/explain": (
+            "explain_card",
+            "Explaining a single card is a Pro feature.",
+        ),
+    }
+
     def handle_api(self, route: str, payload: dict) -> dict:
         """The entire phone-reachable surface.
 
@@ -449,6 +475,11 @@ class PhoneBridge:
         `delete_deck` or `printings_remove`.
         """
         api = self._api
+
+        locked = self._route_locked(route)
+        if locked is not None:
+            return locked
+
         if route == "identify":
             return _unwrap(api.scan_identify(payload.get("text", ""),
                                              payload.get("name_hint", "")))
@@ -734,10 +765,59 @@ class PhoneBridge:
         if route == "appraise":
             return _unwrap(api.appraise_scan_session(None))
         if route == "capabilities":
-            return _unwrap(api.get_scan_capabilities())
+            out = _unwrap(api.get_scan_capabilities())
+            # What this phone may do, decided here and sent, so the app can
+            # hide what it cannot use instead of offering a button that
+            # fails. Refreshed on every capabilities call, so activating Pro
+            # on the desktop reaches the phone without reinstalling it.
+            if isinstance(out, dict):
+                out["tier"] = self._tier_snapshot()
+            return out
+        if route == "tier":
+            return self._tier_snapshot()
         if route == "capture":
             return self._handle_capture(payload)
         return {"ok": False, "error": f"unknown route '{route}'"}
+
+    def _route_locked(self, route: str) -> dict | None:
+        """Refuse a Pro route on a free tier, in words a phone can show."""
+        entry = self._PRO_ROUTES.get(route)
+        if entry is None:
+            return None
+        feature, message = entry
+        try:
+            from densa_deck.tiers import check_access
+
+            if check_access(feature):
+                return None
+        except Exception:
+            # A tier that cannot be read must not lock someone out of a
+            # feature they have paid for. Failing open here is the right
+            # direction: the desktop UI and the licence file are the real
+            # record, and this is one of several places that reads them.
+            return None
+        return {"ok": False, "error": message, "error_type": "ProRequired",
+                "feature": feature}
+
+    def _tier_snapshot(self) -> dict:
+        """What the phone needs to decide what to show."""
+        try:
+            from densa_deck.tiers import Tier, free_allowance, get_user_tier
+
+            tier = get_user_tier()
+            return {
+                "tier": tier.value,
+                "is_pro": tier == Tier.PRO,
+                "allowances": {
+                    "saved_decks": free_allowance("saved_decks"),
+                    "suggestions": free_allowance("suggestions"),
+                    "sets_tracked": free_allowance("sets_tracked"),
+                },
+            }
+        except Exception:
+            # Same direction as above: unknown reads as Pro rather than
+            # locking a paying user out of their own phone.
+            return {"tier": "pro", "is_pro": True, "allowances": {}}
 
     def _handle_capture(self, payload: dict) -> dict:
         """A phone-camera frame: detect the card, OCR its corner, identify.

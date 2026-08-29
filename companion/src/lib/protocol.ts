@@ -364,6 +364,24 @@ export interface ResolvedSlot extends DeckSlotRef {
   type_line?: string;
 }
 
+/**
+ * What this phone is allowed to do, decided on the DESKTOP.
+ *
+ * The licence lives there, so the answer comes from there. The phone had no
+ * tier concept at all, which made installing the companion a way around the
+ * whole paywall — the desktop refuses the routes now, and this is so the app
+ * can hide what it cannot use rather than offer a button that fails.
+ */
+export interface TierSnapshot {
+  tier: string;
+  is_pro: boolean;
+  allowances: {
+    saved_decks?: number;
+    suggestions?: number;
+    sets_tracked?: number;
+  };
+}
+
 export interface DeckResolveReply {
   slots: ResolvedSlot[];
   /** False before the opt-in printings ingest has been run on the desktop. */

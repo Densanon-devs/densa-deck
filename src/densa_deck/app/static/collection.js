@@ -555,14 +555,20 @@
     const section = (title, body) =>
       body ? `<div class="breakdown-section"><h4>${title}</h4>${body}</div>` : "";
 
+    // What a GROUP is worth is the bundle-and-sell workflow, which is Pro.
+    // What everything you own is worth stays free, so the same panel shows a
+    // total in one place and an upgrade line in the other — and says which,
+    // rather than showing a blank where a number belongs.
+    const worth = b.value_usd === null || b.value_usd === undefined
+      ? `<span class="pro-more">Pro prices a group</span>`
+      : `${money(b.value_usd)}${b.unpriced_cards
+          ? ` <span class="subtle">(${b.unpriced_cards} unpriced, not in that total)</span>`
+          : ""}`;
     host.innerHTML = `
       <p class="breakdown-total">
         <strong>${b.total_cards}</strong> cards
         · ${b.distinct_cards} distinct
-        · ${money(b.value_usd)}
-        ${b.unpriced_cards
-          ? `<span class="subtle">(${b.unpriced_cards} unpriced, not in that total)</span>`
-          : ""}
+        · ${worth}
       </p>
       ${section("Colours", bars(b.colors || [], r => r.name, r => r.cards))}
       ${section("Mana value", bars(b.curve || [], r => r.label, r => r.cards)
@@ -616,6 +622,10 @@
           </div>`).join("")}
         <p class="panel-hint subtle">Counted by collector number, so extra
           copies and alternate printings are the same slot.</p>
+        ${out.withheld
+          ? `<p class="panel-hint pro-more">${out.withheld} more set${
+              out.withheld === 1 ? "" : "s"} with Densa Deck Pro.</p>`
+          : ""}
       </div>`;
   }
 
@@ -1017,13 +1027,17 @@
               </li>`).join("")}</ul></div>`
       : "";
 
+    const moreWithPro = r.withheld
+      ? `<p class="panel-hint pro-more">${r.withheld} more with Densa Deck `
+        + `Pro.</p>`
+      : "";
     const suggestions = (r.suggestions || []).length
       ? `<div class="synergy-block"><h4>Would work well with it</h4>
            <ul class="synergy-list">${r.suggestions.map(x =>
              `<li>${chip(x.card_name)}
                 <span class="subtle">${escape(x.reason)}</span>
                 ${x.completes_combo ? "<span class=\"synergy-now\">completes a combo</span>" : ""}
-              </li>`).join("")}</ul></div>`
+              </li>`).join("")}</ul>${moreWithPro}</div>`
       : "";
 
     const nothing = !inDeck && !lines && !completions && !suggestions;

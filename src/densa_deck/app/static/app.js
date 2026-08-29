@@ -1481,6 +1481,14 @@ async function saveEditorAsNewVersion() {
     const snap = await callApi("save_deck_version",
       state.currentDeckId, state.currentSnapshot.deck_id,
       text, state.currentSnapshot.format || "commander", notes);
+    // The editor never handled this because it was never gated — the check
+    // lived one function away, in the Build tab's save, which delegated
+    // straight past it.
+    if (snap && snap.ok === false) {
+      toast(snap.error || "Could not save.",
+            snap.error_type === "ProRequired" ? "info" : "error");
+      return;
+    }
     // Saying which of the two things happened. A user who edited nothing
     // and sees no new version needs to know that is the right answer rather
     // than a failed save — and one who edited a card needs the number.

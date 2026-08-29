@@ -396,6 +396,57 @@ class AppApi:
 
     # ------------------------------------------------------------------ status
 
+    def _locked(self, feature: str, message: str) -> dict | None:
+        """`None` when this tier may proceed, or the refusal to return.
+
+        One helper rather than a copy of the check at each site: the two gates
+        that existed were written by hand, and the deck editor's save — the
+        very thing `save_builder_as_deck` gates by delegating to it — had no
+        check at all. A hand-written gate is a gate somebody forgets.
+
+        The message says what is locked and what it buys, never just "Pro".
+        """
+        from densa_deck.tiers import check_access
+
+        if check_access(feature):
+            return None
+        return {"ok": False, "error": message, "error_type": "ProRequired",
+                "feature": feature}
+
+    def _allowance(self, name: str) -> int:
+        """How many of something this tier may have. -1 means no limit."""
+        from densa_deck.tiers import free_allowance
+
+        return free_allowance(name)
+
+    def _deck_slot_refused(self, deck_id: str) -> dict | None:
+        """Is there room to save this deck, or is it one too many?
+
+        Editing a deck you already have is ALWAYS allowed — the limit counts
+        decks, not saves, and a limit that stopped you improving the one deck
+        you have would teach the wrong thing about what Pro buys.
+        """
+        allowed = self._allowance("saved_decks")
+        if allowed < 0:
+            return None
+        existing = [d.get("deck_id") for d in self._get_vstore().list_decks()]
+        if deck_id in existing or len(existing) < allowed:
+            return None
+        return {
+            "ok": False,
+            "error": (
+                f"Free keeps {allowed} deck"
+                f"{'' if allowed == 1 else 's'}, and you are using "
+                f"{'it' if allowed == 1 else 'them'}. Densa Deck Pro keeps as "
+                "many as you build — versions, win/loss and all. Your draft is "
+                "safe; nothing has been lost."
+            ),
+            "error_type": "ProRequired",
+            "feature": "saved_decks",
+            "saved": len(existing),
+            "allowed": allowed,
+        }
+
     @_safe
     def get_tier(self) -> dict:
         """Return the current tier + whether Pro features should be shown."""
@@ -721,6 +772,13 @@ class AppApi:
             }
         if not decklist_text.strip():
             return {"ok": False, "error": "Decklist is empty."}
+
+        # The gate the editor never had. `save_builder_as_deck` checked the
+        # tier and then delegated straight to here, so saving from the Decks
+        # tab walked around it entirely.
+        refused = self._deck_slot_refused(deck_id)
+        if refused is not None:
+            return refused
 
         entries = parse_auto(decklist_text)
         if not entries:
@@ -1122,7 +1180,21 @@ class AppApi:
         from densa_deck.collection.breakdown import breakdown
         out = breakdown(store, self._get_db(), collection_id=collection_id)
         out["collection_uid"] = collection_uid or ""
+
+        # What everything you own is worth stays free — it is one number
+        # about your own cards, and the CLI has always given it away. What a
+        # GROUP is worth is the bundle-and-sell workflow, which is the
+        # portfolio layer Pro is for.
+        if collection_id is not None and not self._tier_allows("collection_analytics"):
+            out["value_usd"] = None
+            out["unpriced_cards"] = 0
+            out["locked_feature"] = "collection_analytics"
         return out
+
+    def _tier_allows(self, feature: str) -> bool:
+        from densa_deck.tiers import check_access
+
+        return check_access(feature)
 
     @_safe
     def get_set_completion(self, collection_uid: str = "",
@@ -1142,9 +1214,17 @@ class AppApi:
             collection_id = found["collection_id"]
 
         from densa_deck.collection.breakdown import set_completion
-        return set_completion(store, self._get_db(),
-                              collection_id=collection_id,
-                              limit=int(limit), min_owned=int(min_owned))
+        out = set_completion(store, self._get_db(),
+                             collection_id=collection_id,
+                             limit=int(limit), min_owned=int(min_owned))
+        # Sorted closest-to-finished first, so a free taste of three is the
+        # actionable end of the list rather than an arbitrary slice.
+        allowed = self._allowance("sets_tracked")
+        if allowed >= 0 and len(out.get("sets", [])) > allowed:
+            out["withheld"] = len(out["sets"]) - allowed
+            out["locked_feature"] = "collection_analytics"
+            out["sets"] = out["sets"][:allowed]
+        return out
 
     @_safe
     def card_synergy_report(self, card_name: str, decklist_text: str = "",
@@ -1249,8 +1329,19 @@ class AppApi:
             # Reported in the payload so a fault is visible as a fault.
             out["combo_error"] = str(exc)
 
-        out["suggestions"] = card_synergy.suggestions_for_card(
+        found = card_synergy.suggestions_for_card(
             card, deck, db, combo_completers=completers)
+        # The half of this panel that is the recommendation engine — the same
+        # capability `suggest_deckbuild_additions` charges for, so the same
+        # price wherever it is reached from. What the card DOES here, what it
+        # works with, and its combo lines stay free: those are readings of
+        # cards and rules, like combos and rule0.
+        allowed = self._allowance("suggestions")
+        if allowed >= 0 and len(found) > allowed:
+            out["withheld"] = len(found) - allowed
+            out["locked_feature"] = "deckbuild_suggestions"
+            found = found[:allowed]
+        out["suggestions"] = found
         return out
 
     @_safe
@@ -2384,12 +2475,6 @@ class AppApi:
         call — the Free-tier user can still see static analysis +
         combo detection.
         """
-        if get_user_tier() != Tier.PRO:
-            return {
-                "ok": False,
-                "error": "AI deckbuild suggestions require Densa Deck Pro.",
-                "error_type": "ProRequired",
-            }
         deck = self._build_deck(decklist_text, format_, name)
         if isinstance(deck, dict):
             return deck
@@ -2527,12 +2612,25 @@ class AppApi:
         # Cap to the requested count so the UI list isn't overwhelmed.
         suggestions = suggestions[: int(count or 8)]
 
+        # A taste rather than a locked door. Free sees the same suggestions
+        # in the same order, just fewer of them — never a quietly worse list,
+        # which would teach someone the feature is bad rather than limited.
+        allowed = self._allowance("suggestions")
+        withheld = 0
+        if allowed >= 0 and len(suggestions) > allowed:
+            withheld = len(suggestions) - allowed
+            suggestions = suggestions[:allowed]
+
         return {
             "deck_name": deck.name,
             "count": len(suggestions),
             "gaps": [g.value for g in gaps],
             "color_identity": sorted(deck_color_identity),
             "suggestions": suggestions,
+            # What Pro would add, so the UI can say so honestly instead of
+            # implying this is everything the engine found.
+            "withheld": withheld,
+            "locked_feature": "deckbuild_suggestions" if withheld else "",
         }
 
     @_safe
@@ -5745,22 +5843,23 @@ class AppApi:
         decklist_text: str,
         notes: str = "",
     ) -> dict:
-        """Pro-gated save — wraps `save_deck_version` with an explicit tier
-        check so free-tier users get a clear "upgrade to save" envelope
-        rather than the underlying analyze-flow error.
+        """The Build tab's save. Wraps `save_deck_version`.
+
+        It used to carry its own tier check, which refused every free save
+        outright while the endpoint it delegates to accepted all of them —
+        the gate and the way around it two lines apart. The limit now lives
+        where the writing happens, counts decks rather than saves, and lets
+        free keep its one.
 
         The frontend catches `error_type == "ProRequired"` to surface the
         upgrade modal; pro users land directly in `save_deck_version`,
         which parses + resolves + snapshots the deck into the same
         VersionStore as the Analyze tab's Save button.
         """
-        if get_user_tier() != Tier.PRO:
-            return {
-                "ok": False,
-                "error": "Saving decks requires Densa Deck Pro. "
-                         "Your draft is preserved — activate Pro on the Settings tab to save it as a tracked deck.",
-                "error_type": "ProRequired",
-            }
+        # No separate check here any more. It used to refuse every free save
+        # outright while the endpoint it delegates to allowed all of them —
+        # the gate and the hole were the same two lines apart. One lever now,
+        # applied where the writing happens.
         return self.save_deck_version(
             deck_id=deck_id, name=name,
             decklist_text=decklist_text, format_=format_, notes=notes,

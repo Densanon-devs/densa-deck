@@ -402,6 +402,20 @@
     collectionPanelTimer = setTimeout(refreshCollectionPanel, 600);
   }
 
+  /**
+   * "and 6 more with Pro", under a list that is deliberately short.
+   *
+   * Without this the free list looks like everything the engine found, and
+   * the honest reading of a two-item answer is that the feature is weak
+   * rather than sampled.
+   */
+  function withheldNote(reply) {
+    const n = reply && reply.withheld;
+    if (!n) return "";
+    return `<p class="panel-hint pro-more">` +
+      `${n} more suggestion${n === 1 ? "" : "s"} with Densa Deck Pro.</p>`;
+  }
+
   async function refreshCollectionPanel() {
     const panel = e("build-collection-panel");
     const body = e("build-collection-body");
@@ -1281,7 +1295,7 @@
       );
       if (r && r.ok === false) {
         if (r.error_type === "ProRequired") {
-          showProGate();
+          showProGate(r.error);
           if (statusEl) statusEl.textContent = "";
           return;
         }
@@ -1806,9 +1820,19 @@
     } catch (err) { /* non-fatal */ }
   }
 
-  function showProGate() {
+  /**
+   * The upgrade prompt.
+   *
+   * Takes the SERVER's sentence when there is one. The wall moved from "no
+   * saving on free" to "one deck on free", and a modal with its own hardcoded
+   * copy would still be telling people the old rule — the endpoint that
+   * refused knows exactly which limit was hit and how many they have.
+   */
+  function showProGate(reason) {
     const m = e("pro-gate-modal");
     if (!m) return;
+    const said = e("pro-gate-reason");
+    if (said) said.textContent = reason || "";
     m.classList.remove("hidden");
     m.setAttribute("aria-hidden", "false");
   }

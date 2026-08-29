@@ -2774,3 +2774,23 @@ code {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+/* ---- the wall ---------------------------------------------------------- */
+
+/* Said in the accent rather than in an error colour: this is an offer, not a
+   fault, and red would read as something having gone wrong. */
+.pro-more {
+  color: #4a90e2;
+  font-weight: 600;
+}
+
+/* The specific reason the save was refused, above the general pitch. */
+.pro-gate-reason {
+  background: #1a202c;
+  border-left: 3px solid #4a90e2;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.pro-gate-reason:empty { display: none; }

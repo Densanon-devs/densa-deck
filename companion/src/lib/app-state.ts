@@ -26,6 +26,7 @@ import type {
   GroupManifest,
   GroupReview,
   SavedToPc,
+  TierSnapshot,
   OverlapsReply,
   TagResult,
   ResolvedSlot,
@@ -80,6 +81,34 @@ export class AppState {
     this.client = client;
     this.decks = decks;
   }
+
+  /**
+   * What this phone may do, as the DESKTOP sees it.
+   *
+   * The licence lives there, so the answer comes from there. The phone had
+   * no tier concept at all, which made installing the companion a way around
+   * the whole paywall.
+   *
+   * Cached after the first answer so every screen is not asking, and
+   * refreshable — activating Pro on the desktop should reach the phone
+   * without reinstalling it.
+   *
+   * Unknown reads as PRO. A phone out of range must not start hiding
+   * features somebody has paid for, and the desktop refuses the routes
+   * itself, so failing open here costs nothing but a button that explains
+   * itself when pressed.
+   */
+  async tier(refresh = false): Promise<TierSnapshot> {
+    if (!refresh && this._tier) return this._tier;
+    try {
+      this._tier = await this.client.call<TierSnapshot>('tier', {});
+    } catch {
+      this._tier = { tier: 'pro', is_pro: true, allowances: {} };
+    }
+    return this._tier;
+  }
+
+  private _tier?: TierSnapshot;
 
   /**
    * Save a deck edited HERE, and tell the desktop.

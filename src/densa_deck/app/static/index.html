@@ -1114,13 +1114,21 @@ Mainboard:
   <div id="pro-gate-modal" class="modal-overlay pro-gate-modal hidden" role="dialog" aria-hidden="true">
     <div class="modal-panel">
       <div class="modal-header">
-        <h2>Upgrade to Pro to save decks</h2>
+        <h2>Room for one more deck</h2>
         <button id="pro-gate-close-btn" class="modal-close" title="Close">×</button>
       </div>
       <div class="modal-body">
-        <p>Your draft is preserved — no work is lost. Save, version tracking,
-          goldfish simulation, matchup gauntlet, deck-vs-deck duels, and the
-          AI coach are Pro features.</p>
+        <!-- Filled from the endpoint that refused, which knows which limit
+             was hit and how many you are using. Hardcoding it here is how a
+             modal ends up describing a rule that changed. -->
+        <p id="pro-gate-reason" class="pro-gate-reason"></p>
+        <p>Your draft is preserved — no work is lost.</p>
+        <p><strong>Free</strong> keeps one deck, with its full version history
+          and win/loss record, plus combo detection, bracket and Rule 0
+          worksheets, and your whole collection.</p>
+        <p><strong>Pro</strong> adds every deck after the first, the complete
+          suggestion lists, set-completion tracking, bundle pricing, goldfish
+          simulation, matchup gauntlets, duels and the AI coach.</p>
         <p>Pro is a one-time <strong>$49.99</strong> purchase.
           Activate your key on the Settings tab after purchase.</p>
       </div>

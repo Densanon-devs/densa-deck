@@ -60,7 +60,73 @@ FEATURE_TIERS: dict[str, Tier] = {
     # where Pro earns its keep. Every gate stays a capability gate, never a
     # gate on card access or anything resembling in-game power.
     "collection": Tier.FREE,
+
+    # --- deck records -----------------------------------------------------
+    # FREE, and the deck COUNT is what limits it.
+    #
+    # The lever has to be how many decks you may keep, not what you may do
+    # with one, or the taste is worthless: a deck you cannot version is not a
+    # sample of version history, and a deck you cannot log a game against
+    # never shows you why you would want a record. So the one free deck gets
+    # the whole deck lab — versions, diffs, win/loss, retention — and the
+    # second deck is what costs money.
+    "deck_record": Tier.FREE,
+
+    # --- the card panel, split down the middle ----------------------------
+    # What a card DOES here, what it already works with, and which combo
+    # lines it sits in are deterministic readings of cards and rules — the
+    # same call as `combos` and `rule0`, and free for the same reason.
+    "card_synergy": Tier.FREE,
+    # What to ADD is the recommendation engine, which is what
+    # `suggest_deckbuild_additions` already charges for. One capability, one
+    # price, wherever it is reached from.
+    "deckbuild_suggestions": Tier.PRO,
+
+    # --- collection, split the same way -----------------------------------
+    # Describing cards you own — colours, curve, types, rarity, which sets
+    # they came from — is your data, and free like the rest of the
+    # collection.
+    "collection_breakdown": Tier.FREE,
+    # What it is WORTH, and how far through a set you are, is the portfolio
+    # analytics named above as where Pro earns its keep.
+    "collection_analytics": Tier.PRO,
 }
+
+# How much of a Pro feature the free tier gets before the wall.
+#
+# A taste, not a locked door. Somebody who has never saved a deck cannot want
+# deck history — they have to have used it once to know what they would be
+# buying. So free gets the feature genuinely WORKING, at a scale small enough
+# that anyone who relies on it will pass the limit quickly and know exactly
+# what they are paying for.
+#
+# Every one of these is a COUNT, never a crippled version of the thing. A
+# suggestion list that is quietly worse on free would teach people the
+# feature is bad rather than that it is limited.
+
+# One saved deck, with its full history and its whole win/loss record. The
+# limit is on how MANY decks, not on what you may do with one — a deck you
+# cannot version is not a taste of version history.
+FREE_SAVED_DECKS = 1
+
+# Two of the eight cards the panel would suggest, in the same order Pro sees.
+FREE_SUGGESTIONS = 2
+
+# The three sets you are closest to finishing, which is the actionable end of
+# that list anyway.
+FREE_SETS_TRACKED = 3
+
+
+def free_allowance(name: str) -> int:
+    """How many of `name` the current tier may have. -1 means no limit."""
+    if get_user_tier() == Tier.PRO:
+        return -1
+    return {
+        "saved_decks": FREE_SAVED_DECKS,
+        "suggestions": FREE_SUGGESTIONS,
+        "sets_tracked": FREE_SETS_TRACKED,
+    }.get(name, -1)
+
 
 # Map CLI command names to feature keys
 COMMAND_FEATURES: dict[str, str] = {

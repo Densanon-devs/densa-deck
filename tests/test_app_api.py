@@ -1539,17 +1539,29 @@ class TestBuilder:
         finally:
             api.close()
 
-    def test_save_builder_as_deck_free_tier_returns_pro_required(self, api_with_cards, monkeypatch):
-        # Force the free tier regardless of the test runner's env.
+    def test_save_builder_as_deck_free_tier_gets_one_deck(self, api_with_cards, monkeypatch):
+        """Free keeps ONE deck now, rather than none.
+
+        This used to assert that every free save was refused. That was a
+        locked door, and it was also a lie: the check lived here and the
+        endpoint it delegates to had none, so saving from the Decks tab
+        walked straight around it. The limit is a deck count now, applied
+        where the writing happens.
+        """
         monkeypatch.setenv("MTG_ENGINE_TIER", "free")
-        # Clear the tier cache in the env-based lookup — get_user_tier
-        # re-reads the env var each call so no invalidation is needed.
         text = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
-        r = api_with_cards.save_builder_as_deck(
+
+        first = api_with_cards.save_builder_as_deck(
             deck_id="test", name="Test", format_="commander", decklist_text=text,
         )
-        assert r["ok"] is False
-        assert r.get("error_type") == "ProRequired"
+        assert first.get("ok") is not False, first
+        assert first["data"]["version_number"] == 1
+
+        second = api_with_cards.save_builder_as_deck(
+            deck_id="test-2", name="Two", format_="commander", decklist_text=text,
+        )
+        assert second["ok"] is False
+        assert second.get("error_type") == "ProRequired"
 
     def test_save_builder_as_deck_pro_writes_version(self, api_with_cards, monkeypatch):
         monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
