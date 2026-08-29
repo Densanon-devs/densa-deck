@@ -800,7 +800,7 @@ async function startRulingsDownload() {
       els.rulings_download_btn.disabled = false;
       els.rulings_status_text.textContent = "";
       loadRulingsStatus();
-    });
+    }, "rulings_download_progress");
   } catch (e) {
     els.rulings_download_btn.disabled = false;
     els.rulings_status_text.textContent = "";
@@ -2448,8 +2448,20 @@ async function startAnalystPull() {
  * Poll a background operation's progress and update its bar until done.
  * `op` is "ingest" or "analyst_pull" — same naming as the API.
  */
-function pollProgress(op, onComplete) {
-  const apiMethod = op + "_progress";
+/**
+ * Watch a long job.
+ *
+ * `op` names the ELEMENTS (`<op>-progress-fill`, `<op>-progress-msg`) and,
+ * by default, the endpoint too. Those are two different namespaces and they
+ * do not have to agree: the rulings download draws into `rulings-progress-*`
+ * and is polled by `rulings_download_progress`, so deriving one from the
+ * other called a method that does not exist. The bar showed "Progress poll
+ * failed" for the entire download, which ran fine underneath.
+ *
+ * `apiMethod` overrides the guess for exactly that case.
+ */
+function pollProgress(op, onComplete, apiMethod) {
+  apiMethod = apiMethod || (op + "_progress");
   const fill = els[op + "_progress_fill"];
   const msg = els[op + "_progress_msg"];
   const tick = async () => {

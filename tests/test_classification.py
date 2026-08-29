@@ -1,7 +1,7 @@
 """Tests for card classification."""
 
 from densa_deck.classification.tagger import classify_card
-from densa_deck.models import Card, CardLayout, CardTag
+from densa_deck.models import Card, CardLayout, CardTag, Legality
 
 
 def _make_card(**kwargs) -> Card:
@@ -170,3 +170,84 @@ def test_dual_land():
     tags = classify_card(card)
     assert CardTag.LAND in tags
     assert CardTag.DUAL_LAND in tags
+
+
+class TestDrawWasMostlyInvisible:
+    """A third of the draw in the game classified as nothing.
+
+    The phrase list read naturally and caught 64% of the paper cards whose
+    text plainly draws. It missed the plural verb — "target player DRAWS two
+    cards", which is how Sign in Blood is written — and it missed
+    "when this enters, draw a card" on a creature, because `_is_cantrip`
+    refuses creatures and `_is_card_draw` wanted "whenever".
+
+    That did not stay in the classifier. `draw_engine_count` feeds the
+    card-advantage score and the role gaps, and the role gaps decide what the
+    app SUGGESTS — so every deck looked short of draw and got told to add
+    more of what it already had.
+    """
+
+    def _card(self, name, text, *, type_line="Instant", cmc=3):
+        return Card(
+            scryfall_id=f"x-{name}", oracle_id=f"o-{name}", name=name,
+            layout=CardLayout.NORMAL, cmc=cmc, mana_cost="{2}{B}",
+            type_line=type_line, oracle_text=text,
+            legalities={"commander": Legality.LEGAL},
+        )
+
+    def test_the_plural_verb_counts(self):
+        card = self._card("Sign in Blood",
+                          "Target player draws two cards and loses 2 life.")
+        assert CardTag.CARD_DRAW in classify_card(card)
+
+    def test_a_creature_that_draws_on_arrival_counts(self):
+        card = self._card("Baleful Strix",
+                          "Flying, deathtouch\nWhen this creature enters, "
+                          "draw a card.",
+                          type_line="Artifact Creature — Bird", cmc=2)
+        assert CardTag.CARD_DRAW in classify_card(card)
+
+    def test_a_plain_draw_rider_counts(self):
+        """Three mana, so `_is_cantrip` will not have it, and no "whenever",
+        so the old phrase list would not either."""
+        card = self._card("Instill Infection",
+                          "Put a -1/-1 counter on target creature.\n"
+                          "Draw a card.")
+        assert CardTag.CARD_DRAW in classify_card(card)
+
+    def test_an_opponent_drawing_is_not_your_card_advantage(self):
+        card = self._card("Rites of Refusal",
+                          "Each opponent draws a card.")
+        assert CardTag.CARD_DRAW not in classify_card(card)
+
+    def test_but_a_symmetric_draw_still_is(self):
+        """You are one of the players a Howling Mine draws for, and it is a
+        draw engine in the deck that runs it."""
+        card = self._card("Howling Mine",
+                          "At the beginning of each player's draw step, that "
+                          "player draws an additional card.",
+                          type_line="Artifact")
+        assert CardTag.CARD_DRAW in classify_card(card)
+
+    def test_drawing_beside_an_opponent_still_counts(self):
+        card = self._card("Font of Mythos",
+                          "Draw two cards. Each opponent draws a card.")
+        assert CardTag.CARD_DRAW in classify_card(card)
+
+    def test_a_card_that_never_draws_is_left_alone(self):
+        card = self._card("Lightning Bolt",
+                          "Lightning Bolt deals 3 damage to any target.")
+        assert CardTag.CARD_DRAW not in classify_card(card)
+
+    def test_lands_are_still_excluded(self):
+        card = self._card("Some Land", "{T}: Draw a card.",
+                          type_line="Land", cmc=0)
+        card.is_land = True
+        assert CardTag.CARD_DRAW not in classify_card(card)
+
+    def test_the_original_phrases_still_work(self):
+        """Kept as a union, so nothing that was recognised stops being."""
+        for text in ("Draw two cards.",
+                     "Draw cards equal to the number of creatures you control.",
+                     "Whenever a creature dies, draw a card."):
+            assert CardTag.CARD_DRAW in classify_card(self._card("X", text)), text

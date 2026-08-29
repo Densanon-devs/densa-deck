@@ -396,23 +396,6 @@ class AppApi:
 
     # ------------------------------------------------------------------ status
 
-    def _locked(self, feature: str, message: str) -> dict | None:
-        """`None` when this tier may proceed, or the refusal to return.
-
-        One helper rather than a copy of the check at each site: the two gates
-        that existed were written by hand, and the deck editor's save — the
-        very thing `save_builder_as_deck` gates by delegating to it — had no
-        check at all. A hand-written gate is a gate somebody forgets.
-
-        The message says what is locked and what it buys, never just "Pro".
-        """
-        from densa_deck.tiers import check_access
-
-        if check_access(feature):
-            return None
-        return {"ok": False, "error": message, "error_type": "ProRequired",
-                "feature": feature}
-
     def _allowance(self, name: str) -> int:
         """How many of something this tier may have. -1 means no limit."""
         from densa_deck.tiers import free_allowance
@@ -1192,6 +1175,13 @@ class AppApi:
         return out
 
     def _tier_allows(self, feature: str) -> bool:
+        """One place the tier is asked, so the next gate reads like the rest.
+
+        The two gates that existed before were written by hand, and the deck
+        editor's save — the very thing the builder's save gates by delegating
+        to it — had no check at all. A hand-written gate is a gate somebody
+        forgets.
+        """
         from densa_deck.tiers import check_access
 
         return check_access(feature)

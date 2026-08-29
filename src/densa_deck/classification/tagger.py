@@ -185,7 +185,38 @@ def _is_mana_dork(card: Card) -> bool:
     return "{t}: add" in ot or "{t}: add {" in ot
 
 
+# Somebody DRAWING, in any of the forms a card writes it.
+_DRAWS = re.compile(r"\bdraws? (a|one|two|three|four|five|six|seven|x|\d+) cards?\b")
+
+# A clause where an OPPONENT is the one drawing. Removed before deciding, so
+# "each opponent draws a card" on its own is not your card advantage while
+# "draw two cards. Each opponent draws a card" still is.
+#
+# Opponents only, deliberately. An earlier attempt also stripped "target
+# player draws", which in a deck you built means you — and it dropped 320
+# real draw cards on the way to catching a handful of symmetric ones.
+_THEY_DRAW = re.compile(
+    r"(each|target|an|another) opponents?\s+draws?\s+"
+    r"(a|one|two|three|four|five|x|\d+)?\s*(an )?(additional )?cards?")
+
+
 def _is_card_draw(card: Card) -> bool:
+    """Does this card draw you cards?
+
+    The phrase list came first and reads naturally, but it only caught 2,547
+    of the 3,918 paper cards whose text plainly draws — 36% of them fell
+    through, including "draws two cards" (the plural verb, as Sign in Blood
+    writes it) and "when this enters, draw a card" on a creature, which
+    `_is_cantrip` refuses because it is a creature.
+
+    That gap did not stay in the classifier: `draw_engine_count` feeds the
+    card-advantage score, the role gaps, and therefore which cards get
+    suggested — so a third of the draw in the game was invisible and every
+    deck looked short of it.
+
+    Kept as a UNION with the original phrases rather than a replacement, so
+    recall can only go up and no card that was recognised stops being.
+    """
     ot = card.oracle_text.lower()
     if card.is_land:
         return False
@@ -200,7 +231,19 @@ def _is_card_draw(card: Card) -> bool:
         "whenever.*draw a card",
         "at the beginning.*draw",
     ]
-    return any(re.search(p, ot) for p in draw_phrases)
+    # Judged on the text with the OPPONENT's own draw taken out, so
+    # "each opponent draws a card" is not counted as your card advantage —
+    # the phrase list caught it through "draws a card" and called a punisher
+    # card a draw engine.
+    #
+    # The match is tight on purpose: the opponent has to be the direct
+    # subject of the verb. A looser version spanned whole clauses and ate
+    # "whenever an opponent searches their library, YOU ... draw a card",
+    # dropping a hundred cards that genuinely draw for you.
+    mine = _THEY_DRAW.sub(" ", ot)
+    if any(re.search(p, mine) for p in draw_phrases):
+        return True
+    return bool(_DRAWS.search(mine))
 
 
 def _is_tutor(card: Card) -> bool:
