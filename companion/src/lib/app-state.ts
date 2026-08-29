@@ -83,6 +83,56 @@ export class AppState {
   }
 
   /**
+   * What a card has been worth.
+   *
+   * Asked of the desktop, which is the only side that records it — the phone
+   * has no catalogue to price against. Whatever comes back is kept, and
+   * whatever is kept is what answers when the desktop is away, which is when
+   * somebody standing in a shop most wants to know whether a card has been
+   * climbing.
+   *
+   * A card NAME is passed as well as a printing so a card you do not own
+   * still has a series: a wishlist entry naming no printing is tracked at
+   * whichever copy was cheapest each day, which only reads as a series when
+   * asked about the card.
+   */
+  async priceHistory(printingId: string, cardName = ''): Promise<{
+    points: Array<{ captured_on: string; price_usd: number | null }>;
+    scope: string;
+    cached: boolean;
+  }> {
+    const key = (printingId || cardName || '').trim().toLowerCase();
+    try {
+      const reply = await this.client.call<{
+        points: Array<{ captured_on: string; price_usd: number | null }>;
+        scope: string;
+      }>('prices/history', {
+        printing_id: printingId,
+        card_name: cardName,
+        finish: 'nonfoil',
+        limit: 365,
+      });
+      const points = reply.points ?? [];
+      // Cached under the key that was ASKED for, not the one that answered,
+      // so the same question finds it again offline.
+      await this.store.cachePricePoints(key, reply.scope ?? 'printing', points);
+      // Read back rather than returned directly: the cache may hold days the
+      // desktop's window no longer covers.
+      return {
+        points: await this.store.cachedPricePoints(key),
+        scope: reply.scope ?? 'printing',
+        cached: false,
+      };
+    } catch {
+      return {
+        points: await this.store.cachedPricePoints(key),
+        scope: 'printing',
+        cached: true,
+      };
+    }
+  }
+
+  /**
    * What this phone may do, as the DESKTOP sees it.
    *
    * The licence lives there, so the answer comes from there. The phone had

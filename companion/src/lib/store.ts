@@ -126,6 +126,25 @@ export const SCHEMA: string[] = [
   //
   // Keyed by the slot key rather than the printing: a name-only slot and an
   // exact one are different questions with different answers.
+  // What a card has been worth, one row per day.
+  //
+  // The phone cannot record this itself — it has no catalogue to price
+  // against and no daily trigger — so the desktop keeps the series and this
+  // holds whatever it has been handed. Kept rather than refetched because
+  // the answer is the same tomorrow: a captured day never changes, and a
+  // phone in a shop with no signal is exactly when somebody wants to know
+  // whether a card has been climbing.
+  //
+  // Keyed by day as well as card, so pulling twice writes one row and a
+  // later pull ADDS to what is there rather than replacing it. The desktop
+  // returns a window; the phone should not forget a day that fell out of it.
+  `CREATE TABLE IF NOT EXISTS price_points (
+     series_key TEXT NOT NULL,
+     captured_on TEXT NOT NULL,
+     price_usd REAL,
+     scope TEXT NOT NULL DEFAULT 'printing',
+     PRIMARY KEY (series_key, captured_on)
+   )`,
   `CREATE TABLE IF NOT EXISTS slot_facts (
      slot_key TEXT PRIMARY KEY,
      printing_id TEXT NOT NULL DEFAULT '',
@@ -451,6 +470,46 @@ export class LocalStore {
       });
     }
     return out;
+  }
+
+  /** Keep the points the desktop just handed over. */
+  async cachePricePoints(
+    seriesKey: string,
+    scope: string,
+    points: Array<{ captured_on: string; price_usd: number | null }>,
+  ): Promise<void> {
+    const key = (seriesKey || '').trim().toLowerCase();
+    if (!key) return;
+    for (const point of points) {
+      const day = String(point.captured_on || '').trim();
+      if (!day) continue;
+      await this.db.run(
+        `INSERT INTO price_points (series_key, captured_on, price_usd, scope)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(series_key, captured_on) DO UPDATE SET
+           price_usd = excluded.price_usd,
+           scope = excluded.scope`,
+        [key, day, point.price_usd == null ? null : Number(point.price_usd),
+         scope || 'printing'],
+      );
+    }
+  }
+
+  /** Everything remembered for one card or printing, oldest first. */
+  async cachedPricePoints(
+    seriesKey: string,
+  ): Promise<Array<{ captured_on: string; price_usd: number | null }>> {
+    const key = (seriesKey || '').trim().toLowerCase();
+    if (!key) return [];
+    const rows = await this.db.all<{
+      series_key: string;
+      captured_on: string;
+      price_usd: number | null;
+    }>('SELECT * FROM price_points');
+    return rows
+      .filter((r) => r.series_key === key)
+      .sort((a, b) => a.captured_on.localeCompare(b.captured_on))
+      .map((r) => ({ captured_on: r.captured_on, price_usd: r.price_usd }));
   }
 
   async upsertCollection(row: {

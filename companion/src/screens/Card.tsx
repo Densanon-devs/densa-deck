@@ -48,6 +48,66 @@ interface Props {
   onClose: () => void;
 }
 
+/**
+ * A price series, drawn as bars.
+ *
+ * Bars rather than a line because React Native has no SVG here and a
+ * polyline would mean pulling in a charting library for forty pixels of
+ * chrome. Heights are scaled to the range rather than to zero: what somebody
+ * wants from this is the SHAPE — has it been climbing — and a $0.20 card
+ * plotted from zero is a flat line whatever it did.
+ */
+function PriceBars({ points }: {
+  points: Array<{ captured_on: string; price_usd: number | null }>;
+}) {
+  const values = points
+    .map((p) => Number(p.price_usd))
+    .filter((v) => Number.isFinite(v));
+  if (values.length < 2) return null;
+
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  // A flat series is a real answer, so a zero range becomes half-height
+  // rather than a division by zero.
+  const span = high - low || 1;
+  // Pulled out rather than indexed inline: the length check above does not
+  // narrow an indexed read for the compiler, and `?? low` is a truthful
+  // fallback for a series that cannot be empty here anyway.
+  const first = values[0] ?? low;
+  const last = values[values.length - 1] ?? high;
+  const move = last - first;
+  const tone = move > 0 ? '#68d391' : move < 0 ? '#fc8181' : '#8a8f9c';
+
+  return (
+    <View style={styles.sparkWrap}>
+      <View style={styles.spark}>
+        {values.map((v, i) => (
+          <View
+            key={i}
+            style={[
+              styles.sparkBar,
+              {
+                backgroundColor: tone,
+                height: Math.max(2, ((v - low) / span) * 34 + 2),
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={styles.sparkLabel}>
+        ${last.toFixed(2)}
+        <Text style={{ color: tone }}>
+          {'  '}{move >= 0 ? '+' : ''}{move.toFixed(2)}
+        </Text>
+        <Text style={styles.muted}>
+          {'  '}over {values.length} readings · low ${low.toFixed(2)} ·
+          high ${high.toFixed(2)}
+        </Text>
+      </Text>
+    </View>
+  );
+}
+
 /** Mana costs arrive as "{2}{U}{U}"; braces are noise on a phone. */
 function readableCost(cost: string): string {
   return (cost || '').replace(/[{}]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -56,6 +116,18 @@ function readableCost(cost: string): string {
 export function CardScreen({ state, stack, onClose }: Props) {
   const [detail, setDetail] = useState<CardDetail | null>(null);
   const [problem, setProblem] = useState('');
+  /**
+   * The price series, and whether it came from the phone's own copy.
+   *
+   * Loaded beside the card rather than on demand: it is two dozen numbers,
+   * and a second tap to see whether a card is climbing is a tap most people
+   * will not make.
+   */
+  const [history, setHistory] = useState<{
+    points: Array<{ captured_on: string; price_usd: number | null }>;
+    scope: string;
+    cached: boolean;
+  }>({ points: [], scope: 'printing', cached: false });
   const [artFailed, setArtFailed] = useState('');
   const [busy, setBusy] = useState(true);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
@@ -69,6 +141,16 @@ export function CardScreen({ state, stack, onClose }: Props) {
   useEffect(() => {
     void loadLists().catch(reporting('the lists', setProblem));
   }, [loadLists]);
+
+  useEffect(() => {
+    // Never fatal and never reported: a card with no price history is the
+    // normal case, and a red line about it would be noise on a screen whose
+    // job is showing you a card.
+    void (async () => {
+      setHistory(await state.priceHistory(stack.printing_id ?? '',
+                                          stack.card_name ?? ''));
+    })().catch(() => undefined);
+  }, [state, stack.printing_id, stack.card_name]);
 
   /**
    * Put this card in a list, or take it out.
@@ -191,6 +273,23 @@ export function CardScreen({ state, stack, onClose }: Props) {
         ) : null}
       </View>
 
+      {/*
+        What it has been worth. Two points or more, because one point is a
+        price rather than a history and drawing it would imply a steadiness
+        nobody measured.
+      */}
+      {history.points.length >= 2 ? (
+        <>
+          <PriceBars points={history.points} />
+          <Text style={styles.muted}>
+            {history.scope === 'card'
+              ? 'Cheapest copy each day.'
+              : 'This printing, each day your PC was open.'}
+            {history.cached ? ' From this phone — your PC is not reachable.' : ''}
+          </Text>
+        </>
+      ) : null}
+
       {busy && !detail ? (
         <ActivityIndicator color="#8a8f9c" />
       ) : null}
@@ -296,6 +395,15 @@ const styles = StyleSheet.create({
   ownedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   owned: { color: '#38a169', fontSize: 16, fontWeight: '700', flex: 1 },
   price: { color: '#8a8f9c', fontSize: 14 },
+  sparkWrap: { gap: 4, marginTop: 10 },
+  spark: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 2,
+    height: 38,
+  },
+  sparkBar: { borderRadius: 1, flex: 1, minWidth: 2 },
+  sparkLabel: { color: '#e4e6eb', fontSize: 13 },
   panel: {
     borderColor: '#2d3142',
     borderWidth: 1,

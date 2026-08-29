@@ -218,3 +218,93 @@ describe('what that identity allows', () => {
     assert.equal(withinIdentity(['U'], new Set()), false);
   });
 });
+
+describe('price history reaches the phone and stays there', () => {
+  /**
+   * The phone cannot record this itself — no catalogue to price against, no
+   * daily trigger — so the desktop keeps the series and the phone keeps what
+   * it is handed. Which matters most in a shop with no signal, which is
+   * exactly where somebody wants to know whether a card has been climbing.
+   */
+  function servingHistory(desktop, points, scope = 'printing') {
+    const inner = desktop.handle.bind(desktop);
+    desktop.handle = (route, payload) =>
+      route === 'prices/history'
+        ? { points, scope, count: points.length }
+        : inner(route, payload);
+    return desktop;
+  }
+
+  const JAN = [
+    { captured_on: '2026-01-01', price_usd: 1.5 },
+    { captured_on: '2026-01-02', price_usd: 1.75 },
+  ];
+
+  test('a pull returns the desktop series', async () => {
+    const desktop = servingHistory(new FakeDesktop(), JAN);
+    const { state } = await makePhone(desktop);
+    const out = await state.priceHistory('p-bolt', 'Lightning Bolt');
+    assert.equal(out.points.length, 2);
+    assert.equal(out.cached, false);
+  });
+
+  test('and the same series answers with the desktop gone', async () => {
+    const desktop = servingHistory(new FakeDesktop(), JAN);
+    const { state } = await makePhone(desktop);
+    await state.priceHistory('p-bolt', 'Lightning Bolt');
+
+    desktop.reachable = false;
+    const out = await state.priceHistory('p-bolt', 'Lightning Bolt');
+    assert.equal(out.points.length, 2, 'the history vanished with the desktop');
+    assert.equal(out.cached, true, 'and it should say where it came from');
+  });
+
+  test('a later pull ADDS days rather than replacing them', async () => {
+    // The desktop returns a window. A phone that replaced its copy would
+    // forget every day that fell out of it.
+    const desktop = servingHistory(new FakeDesktop(), JAN);
+    const { state } = await makePhone(desktop);
+    await state.priceHistory('p-bolt', 'Lightning Bolt');
+
+    servingHistory(desktop, [{ captured_on: '2026-01-03', price_usd: 2.0 }]);
+    const out = await state.priceHistory('p-bolt', 'Lightning Bolt');
+
+    assert.deepEqual(out.points.map((p) => p.captured_on),
+      ['2026-01-01', '2026-01-02', '2026-01-03']);
+  });
+
+  test('pulling the same day twice keeps one row', async () => {
+    const desktop = servingHistory(new FakeDesktop(), JAN);
+    const { state } = await makePhone(desktop);
+    await state.priceHistory('p-bolt', 'Lightning Bolt');
+    const out = await state.priceHistory('p-bolt', 'Lightning Bolt');
+    assert.equal(out.points.length, 2);
+  });
+
+  test('a revised price for a day replaces that day', async () => {
+    const desktop = servingHistory(new FakeDesktop(), JAN);
+    const { state } = await makePhone(desktop);
+    await state.priceHistory('p-bolt', 'Lightning Bolt');
+
+    servingHistory(desktop, [{ captured_on: '2026-01-02', price_usd: 9.99 }]);
+    const out = await state.priceHistory('p-bolt', 'Lightning Bolt');
+    const second = out.points.find((p) => p.captured_on === '2026-01-02');
+    assert.equal(second.price_usd, 9.99);
+  });
+
+  test('a card never asked about has nothing, rather than something', async () => {
+    const desktop = new FakeDesktop();
+    desktop.reachable = false;
+    const { state } = await makePhone(desktop);
+    const out = await state.priceHistory('p-unknown', 'Never Seen');
+    assert.deepEqual(out.points, []);
+  });
+
+  test('the card-level scope is carried through', async () => {
+    // A wishlist card is tracked at whichever copy was cheapest, so the
+    // phone has to know it is looking at a card rather than a printing.
+    const desktop = servingHistory(new FakeDesktop(), JAN, 'card');
+    const { state } = await makePhone(desktop);
+    assert.equal((await state.priceHistory('', 'Lightning Bolt')).scope, 'card');
+  });
+});

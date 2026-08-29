@@ -69,9 +69,12 @@ export class MemoryDatabase {
       row[col] = literal === '?' ? params[paramIndex++] : this._literal(literal);
     });
 
-    const keyCol = this._primaryKeyFor(text, columns);
-    const existing = keyCol
-      ? table.find((r) => r[keyCol] === row[keyCol])
+    // A primary key can be more than one column — `price_points` is keyed by
+    // series AND day, so pulling the same day twice must update rather than
+    // append. Normalised to a list so both shapes match the same way.
+    const keyCols = this._primaryKeyFor(text, columns);
+    const existing = keyCols
+      ? table.find((r) => keyCols.every((c) => r[c] === row[c]))
       : undefined;
 
     if (existing) {
@@ -122,9 +125,15 @@ export class MemoryDatabase {
       // a second row and the cache reads back whichever was written first —
       // a stale price that a test for exactly that would miss.
       slot_facts: 'slot_key',
+      // Composite key. Without it a second pull appends a duplicate row for
+      // a day already held, and 'pulling twice adds nothing' would pass
+      // against a cache that doubles.
+      price_points: ['series_key', 'captured_on'],
     };
     const key = keys[table];
-    return key && columns.includes(key) ? key : undefined;
+    if (!key) return undefined;
+    const cols = Array.isArray(key) ? key : [key];
+    return cols.every((c) => columns.includes(c)) ? cols : undefined;
   }
 
   _update(text, params) {
@@ -218,6 +227,7 @@ export class MemoryDatabase {
     if (/FROM deck_games/i.test(text)) return this._selectGames(text, params);
     // Read whole and filtered in the caller, the way the real one is.
     if (/FROM slot_facts/i.test(text)) return [...this._table('slot_facts')];
+    if (/FROM price_points/i.test(text)) return [...this._table('price_points')];
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
   }
 

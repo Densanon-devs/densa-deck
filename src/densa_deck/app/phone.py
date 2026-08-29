@@ -641,6 +641,16 @@ class PhoneBridge:
         if route == "cards/sets":
             return _unwrap(api.list_sets())
 
+        if route == "prices/history":
+            # What a card has been worth. The phone has no catalogue and no
+            # scheduler, so it cannot record this itself — the desktop keeps
+            # the series and the phone caches whatever it is handed.
+            return _unwrap(api.get_price_history(
+                payload.get("printing_id", ""),
+                payload.get("finish", "nonfoil"),
+                int(payload.get("limit", 365) or 365),
+                payload.get("card_name", ""),
+            ))
         if route == "cards/detail":
             return _unwrap(api.get_card_detail(
                 payload.get("printing_id", ""),
