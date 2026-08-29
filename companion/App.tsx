@@ -273,7 +273,8 @@ function Shell() {
               onBack={() => setOpenDeck(null)}
             />
           ) : (
-            <DeckListScreen decks={phase.decks} onOpen={setOpenDeck} />
+            <DeckListScreen state={phase.state} decks={phase.decks}
+                            onOpen={setOpenDeck} />
           )
         ) : null}
 

@@ -144,7 +144,7 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
         notes: '',
         updated_at: new Date().toISOString(),
       };
-      await decks.save(copy);
+      await state.saveDeck(copy);
       onOpenLocal(copy.deck_id);
     },
     [decks, onOpenLocal],
@@ -178,7 +178,7 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
       notes: '',
       updated_at: new Date().toISOString(),
     };
-    await decks.save(deck);
+    await state.saveDeck(deck);
     onOpenLocal(deck.deck_id);
   }, [built, decks, shelves, pickedShelf, onOpenLocal]);
 

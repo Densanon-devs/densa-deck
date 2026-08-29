@@ -60,9 +60,14 @@ interface Props {
 
 /** The decks you have, and a way to start another. */
 export function DeckListScreen({
+  state,
   decks,
   onOpen,
 }: {
+  // Needed because creating, renaming and deleting a deck all have to reach
+  // the desktop, and `DeckStore` deliberately does not broadcast — the
+  // applier writes through it too.
+  state: AppState;
   decks: DeckStore;
   onOpen: (deckId: string) => void;
 }) {
@@ -99,7 +104,7 @@ export function DeckListScreen({
       notes: '',
       updated_at: new Date().toISOString(),
     };
-    await decks.save(deck);
+    await state.saveDeck(deck);
     setName('');
     await load();
     onOpen(deck.deck_id);
@@ -113,8 +118,8 @@ export function DeckListScreen({
         setProblem('A deck needs a name.');
         return;
       }
-      await decks.save({ ...deck, name: chosen,
-                         updated_at: new Date().toISOString() });
+      await state.saveDeck({ ...deck, name: chosen,
+                             updated_at: new Date().toISOString() });
       setActing(null);
       await load();
     },
@@ -130,7 +135,7 @@ export function DeckListScreen({
    */
   const remove = useCallback(
     async (deck: Deck) => {
-      await decks.remove(deck.deck_id);
+      await state.removeDeck(deck.deck_id);
       setActing(null);
       setConfirmingDelete(false);
       await load();
@@ -351,6 +356,14 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * as it did until somebody folds something.
    */
   const [folded, setFolded] = useState<Record<string, boolean>>({});
+  /**
+   * Tapping a card picks it as the commander instead of adding a copy.
+   *
+   * A mode rather than a long-press, because long-press already removes a
+   * card and overloading it would make a mis-hold delete something. A mode
+   * is also visible: the strip says what tapping will do while it is on.
+   */
+  const [pickingCommander, setPickingCommander] = useState(false);
   const fold = useCallback(
     (key: string) => setFolded((f) => ({ ...f, [key]: !f[key] })),
     [],
@@ -361,7 +374,8 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       const found = await decks.get(deckId);
       if (!found) return;
       setDeck(found);
-      setText(formatDecklist(found.decklist, found.sideboard));
+      setText(formatDecklist(found.decklist, found.sideboard,
+                             found.commander));
       setRecord(await decks.recordFor(deckId));
     })().catch(reporting('opening the deck', setProblem));
   }, [decks, deckId]);
@@ -490,7 +504,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       notes: deck?.notes ?? '',
       updated_at: new Date().toISOString(),
     };
-    await decks.save(next);
+    await state.saveDeck(next);
     setDeck(next);
     // The board counts toward what you still need — those cards get
     // bought and carried like any other.
@@ -523,9 +537,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
               decklist: edit(deck.decklist, card),
               updated_at: new Date().toISOString(),
             };
-      await decks.save(next);
+      await state.saveDeck(next);
       setDeck(next);
-      setText(formatDecklist(next.decklist, next.sideboard));
+      setText(formatDecklist(next.decklist, next.sideboard, next.commander));
       await recheck(mergeCounts(next.decklist, next.sideboard));
     },
     [deck, decks, recheck, zone],
@@ -535,6 +549,51 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     (card: string | DeckEntry) => change(card, 1),
     [change],
   );
+
+  /**
+   * Make this card the commander.
+   *
+   * It MOVES rather than copies: the commander is not one of the ninety-nine,
+   * and leaving it in both places would make a 101-card deck that fails its
+   * own size check. Any existing commander goes back to the deck rather than
+   * being dropped, because swapping commanders should not quietly lose a card
+   * you own.
+   */
+  const chooseCommander = useCallback(
+    async (entry: DeckEntry) => {
+      if (!deck) return;
+      const previous = deck.commander ?? [];
+      const next: Deck = {
+        ...deck,
+        // One copy out of the deck; any others stay, which is right for the
+        // formats where that is legal and harmless where it is not.
+        decklist: removeFromDeck(deck.decklist, entry).concat(previous),
+        commander: [{ ...entry, qty: 1 }],
+        updated_at: new Date().toISOString(),
+      };
+      await state.saveDeck(next);
+      setDeck(next);
+      setText(formatDecklist(next.decklist, next.sideboard, next.commander));
+      setPickingCommander(false);
+      await recheck(mergeCounts(next.decklist, next.sideboard));
+    },
+    [deck, state, recheck],
+  );
+
+  /** Put the commander back in the deck. */
+  const clearCommander = useCallback(async () => {
+    if (!deck || !(deck.commander ?? []).length) return;
+    const next: Deck = {
+      ...deck,
+      decklist: [...deck.decklist, ...(deck.commander ?? [])],
+      commander: [],
+      updated_at: new Date().toISOString(),
+    };
+    await state.saveDeck(next);
+    setDeck(next);
+    setText(formatDecklist(next.decklist, next.sideboard, next.commander));
+    await recheck(mergeCounts(next.decklist, next.sideboard));
+  }, [deck, state, recheck]);
   const drop = useCallback(
     (card: string | DeckEntry) => change(card, -1),
     [change],
@@ -559,7 +618,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       const said = await state.saveDeckToDesktop(
         deck.deck_id,
         deck.name,
-        formatDecklist(deck.decklist, deck.sideboard),
+        formatDecklist(deck.decklist, deck.sideboard, deck.commander),
         deck.format,
       );
       const broke = said.combos_broken?.length ?? 0;
@@ -582,7 +641,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     setAnalysis('');
     try {
       const result = await state.analyze(
-        formatDecklist(deck.decklist, deck.sideboard),
+        formatDecklist(deck.decklist, deck.sideboard, deck.commander),
         deck.name,
       );
       setAnalysis(JSON.stringify(result, null, 2));
@@ -655,6 +714,56 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           {money.toFinish.usd > 0
             ? `  ·  $${money.toFinish.usd.toFixed(2)} still to buy`
             : ''}
+        </Text>
+      ) : null}
+
+      {/*
+        The commander, and what it costs you.
+
+        Only for the formats that HAVE one — showing it on a Modern deck
+        would be inventing a rule. Without one those formats have no colour
+        identity, so the browser cannot lock anything and says nothing, which
+        is why this sits above the deck rather than in a menu.
+      */}
+      {deck && /commander|brawl|oathbreaker/i.test(deck.format ?? '') ? (
+        <View style={styles.commanderStrip}>
+          {(deck.commander ?? []).length ? (
+            <>
+              <Text style={styles.commanderLabel}>Commander</Text>
+              <Text style={styles.commanderName}>
+                {(deck.commander ?? []).map((c) => c.name).join(' & ')}
+              </Text>
+              <Pressable style={styles.commanderBtn}
+                         onPress={() => setPickingCommander((v) => !v)}>
+                <Text style={styles.commanderBtnText}>
+                  {pickingCommander ? 'Cancel' : 'Change'}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.commanderBtn}
+                         onPress={() => void clearCommander()}>
+                <Text style={styles.commanderBtnText}>Clear</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Text style={styles.commanderLabel}>No commander</Text>
+              <Text style={styles.muted}>
+                Set one and the card browser will only offer colours it can
+                cast.
+              </Text>
+              <Pressable style={styles.commanderBtn}
+                         onPress={() => setPickingCommander((v) => !v)}>
+                <Text style={styles.commanderBtnText}>
+                  {pickingCommander ? 'Cancel' : 'Choose'}
+                </Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      ) : null}
+      {pickingCommander ? (
+        <Text style={styles.picking}>
+          Tap a card below to make it your commander.
         </Text>
       ) : null}
 
@@ -768,7 +877,11 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                 <Pressable
                   key={entryKey(entry)}
                   style={styles.tile}
-                  onPress={() => void add(entry)}
+                  onPress={() =>
+                    pickingCommander
+                      ? void chooseCommander(entry)
+                      : void add(entry)
+                  }
                   onLongPress={() => void drop(entry)}
                 >
                   <Image
@@ -1018,6 +1131,36 @@ const styles = StyleSheet.create({
   name: { color: '#e4e6eb', flex: 1 },
   problem: { color: '#ecc94b', lineHeight: 20 },
   browser: { marginBottom: 8 },
+  commanderStrip: {
+    alignItems: 'center',
+    backgroundColor: '#1a1d27',
+    borderColor: '#2d3142',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+    padding: 10,
+  },
+  commanderLabel: {
+    color: '#8a8f9c',
+    fontSize: 11,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  commanderName: { color: '#e4e6eb', flexGrow: 1, fontSize: 15, fontWeight: '600' },
+  commanderBtn: {
+    borderColor: '#4a5568',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  commanderBtnText: { color: '#e4e6eb', fontSize: 13 },
+  // Said out loud while the mode is on, because a tap that does something
+  // different from usual has to announce itself.
+  picking: { color: '#68d391', fontSize: 13, fontWeight: '600' },
   foldHead: {
     alignItems: 'center',
     flexDirection: 'row',

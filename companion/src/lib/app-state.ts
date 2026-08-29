@@ -82,26 +82,30 @@ export class AppState {
   }
 
   /**
-   * Note a deck edit made HERE, so the desktop learns about it.
+   * Save a deck edited HERE, and tell the desktop.
    *
-   * Separate from `DeckStore.save`, which is the local write. Saving and
-   * broadcasting are kept apart deliberately: the applier writes decks too,
-   * and if saving broadcast, applying a deck from the PC would immediately
-   * send it back and the two would hand it to each other forever.
+   * The single door for a user edit, and the reason it exists: `deckChanged`
+   * and `deckDeleted` were written, and nothing ever called them. Every
+   * screen went straight to `DeckStore.save`, so a deck edited on the phone
+   * was stored and never broadcast — and the sync tests drove the engine
+   * directly, so they passed while this path sat disconnected.
+   *
+   * Deliberately NOT folded into `DeckStore.save`. The applier writes decks
+   * too; if saving broadcast, applying a deck from the PC would send it
+   * straight back and the two devices would hand it to each other forever.
+   * The applier uses `upsertFromSync`, this uses `saveDeck`, and the
+   * difference between them is which one is an edit.
    */
-  async deckChanged(deck: {
-    deck_id: string;
-    name: string;
-    format: string;
-    decklist: DeckEntry[];
-    sideboard?: DeckEntry[];
-    notes: string;
-    updated_at: string;
-  }): Promise<void> {
+  async saveDeck(deck: Deck): Promise<void> {
+    if (!this.decks) return;
+    await this.decks.save(deck);
     await this.engine.recordDeckUpsert(deck);
   }
 
-  async deckDeleted(deckId: string): Promise<void> {
+  /** Delete a deck here, and tell the desktop. */
+  async removeDeck(deckId: string): Promise<void> {
+    if (!this.decks) return;
+    await this.decks.remove(deckId);
     await this.engine.recordDeckDelete(deckId);
   }
 

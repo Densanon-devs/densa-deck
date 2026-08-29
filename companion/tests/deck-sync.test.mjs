@@ -386,3 +386,112 @@ describe('entries off the wire', () => {
       collector_number: undefined }]);
   });
 });
+
+describe('an edit made here reaches the desktop', () => {
+  /**
+   * The gap this closes: `deckChanged` and `deckDeleted` were written and
+   * nothing ever called them. Every screen went straight to
+   * `DeckStore.save`, so a deck edited on the phone was stored and never
+   * broadcast — and the sync tests drove the engine directly, so they passed
+   * the whole time the real path was disconnected.
+   *
+   * These go through `AppState`, which is the door the screens use.
+   */
+  async function makeState(desktop) {
+    const { buildAppState } = await import('../src/lib/app-state.ts');
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const decks = new DeckStore(db);
+    const state = buildAppState(
+      store,
+      { baseUrl: 'https://100.64.0.1:8791', token: desktop.token },
+      'phone-1',
+      testUuid,
+      desktop.fetchImpl,
+      decks,
+    );
+    return { state, decks };
+  }
+
+  const DECK = {
+    deck_id: 'mine',
+    name: 'Built here',
+    format: 'commander',
+    decklist: [{ name: 'Sol Ring', qty: 1, printing_id: 'p-sol' }],
+    sideboard: [],
+    commander: [{ name: 'Yuriko', qty: 1 }],
+    notes: '',
+    updated_at: '2026-05-01T00:00:00Z',
+  };
+
+  test('saving a deck queues it for the desktop', async () => {
+    const desktop = new FakeDesktop();
+    const { state } = await makeState(desktop);
+
+    await state.saveDeck(DECK);
+
+    assert.equal(await state.engine.pending(), 1,
+      'the deck was stored and never broadcast');
+  });
+
+  test('and it is stored locally too', async () => {
+    const desktop = new FakeDesktop();
+    const { state, decks } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    assert.equal((await decks.get('mine'))?.name, 'Built here');
+  });
+
+  test('the commander goes with it, both ways of saying so', async () => {
+    const desktop = new FakeDesktop();
+    const { state } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    await state.engine.sync();
+
+    const sent = desktop.events.find(
+      (e) => e.device === 'phone-1' && e.kind === 'deck-upsert');
+    assert.ok(sent, 'nothing was sent');
+    assert.equal(sent.payload.commander[0].name, 'Yuriko');
+    assert.deepEqual(sent.payload.zones.commander, ['Yuriko'],
+      'the desktop keys zones by name and would file it in the ninety-nine');
+  });
+
+  test('the map the desktop reads counts the commander as a card', async () => {
+    const desktop = new FakeDesktop();
+    const { state } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    await state.engine.sync();
+    const sent = desktop.events.find(
+      (e) => e.device === 'phone-1' && e.kind === 'deck-upsert');
+    assert.equal(sent.payload.decklist.Yuriko, 1,
+      'a desktop reading only the map would receive a 99-card deck');
+  });
+
+  test('deleting a deck here queues that too', async () => {
+    const desktop = new FakeDesktop();
+    const { state, decks } = await makeState(desktop);
+    await state.saveDeck(DECK);
+    await state.engine.sync();
+
+    await state.removeDeck('mine');
+    await state.engine.sync();
+
+    const kinds = desktop.events
+      .filter((e) => e.device === 'phone-1').map((e) => e.kind);
+    assert.ok(kinds.includes('deck-delete'), kinds.join(','));
+    assert.equal(await decks.get('mine'), undefined);
+  });
+
+  test('applying a deck still does NOT queue anything', async () => {
+    // The other half of the same rule: one door broadcasts, the other does
+    // not, and folding them together would make the two devices hand a deck
+    // to each other forever.
+    const desktop = new FakeDesktop();
+    const { state } = await makeState(desktop);
+    desktop.events.push(deckEvent());
+
+    await state.engine.sync();
+
+    assert.equal(await state.engine.pending(), 0);
+  });
+});
