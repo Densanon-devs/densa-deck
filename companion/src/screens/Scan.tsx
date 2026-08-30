@@ -121,6 +121,17 @@ export function ScanScreen({ state }: Props) {
   const [lastAdded, setLastAdded] = useState<{
     candidate: ScanCandidate;
     finish: string;
+    /**
+     * How many of this card went in on this pass.
+     *
+     * Boxes contain playsets, and saying "four of these" beats
+     * photographing the same card four times — which is slower, less
+     * reliable, and now actively fought by the repeat guard, which holds a
+     * card off for four seconds precisely so a card sitting in frame does
+     * not file twice. Without a count, filing a playset means waiting out
+     * that hold between every copy.
+     */
+    copies: number;
   } | null>(null);
 
   const guard = useRef(new RepeatGuard());
@@ -236,7 +247,7 @@ export function ScanScreen({ state }: Props) {
         copy,
         verb: alsoTag.length ? `ADDED +${alsoTag.length}` : 'ADDED',
       });
-      setLastAdded({ candidate, finish });
+      setLastAdded({ candidate, finish, copies: 1 });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
@@ -277,6 +288,32 @@ export function ScanScreen({ state }: Props) {
     }
   }, [tagged, state, target]);
 
+  /**
+   * One more of the card just filed.
+   *
+   * Deliberately NOT through the repeat guard. The guard exists to catch a
+   * card the camera saw twice; this is a person saying "there are four of
+   * these", which is the opposite — an answer, not an accident.
+   */
+  const addAnother = useCallback(async () => {
+    if (!lastAdded) return;
+    setProblem('');
+    try {
+      await state.addCard({
+        printing_id: lastAdded.candidate.printing_id,
+        card_name: lastAdded.candidate.name,
+        finish: lastAdded.finish,
+        collection_uid: target,
+        also_collection_uids: alsoTag,
+      });
+      setLastAdded((last) =>
+        last ? { ...last, copies: last.copies + 1 } : last);
+      setStatus(`${lastAdded.candidate.name} ×${lastAdded.copies + 1}`);
+    } catch (err) {
+      setProblem(recordCrash(err, 'adding another', false).message);
+    }
+  }, [lastAdded, state, target, alsoTag]);
+
   /** Put back a card that should not have gone in. */
   const undoLast = useCallback(async () => {
     if (!lastAdded) return;
@@ -293,8 +330,14 @@ export function ScanScreen({ state }: Props) {
       // go in twice. Having just taken it out, that hold is wrong: the next
       // frame is probably the same card being scanned again on purpose.
       guard.current.reset();
-      setStatus(`Took ${lastAdded.candidate.name} back out`);
-      setLastAdded(null);
+      setStatus(lastAdded.copies > 1
+        ? `${lastAdded.candidate.name} ×${lastAdded.copies - 1}`
+        : `Took ${lastAdded.candidate.name} back out`);
+      // Down one, not gone. Undoing the fourth of a playset should leave
+      // three and the buttons still there, rather than clearing the row and
+      // stranding the other three with nothing to press.
+      setLastAdded((last) =>
+        last && last.copies > 1 ? { ...last, copies: last.copies - 1 } : null);
     } catch (err) {
       setProblem(recordCrash(err, 'undoing', false).message);
     }
@@ -780,16 +823,33 @@ export function ScanScreen({ state }: Props) {
       {lastAdded ? (
         <View style={styles.undoRow}>
           <Text style={styles.undoText} numberOfLines={1}>
-            Filed {lastAdded.candidate.name} ({lastAdded.candidate.set_code.toUpperCase()}{' '}
+            {lastAdded.copies > 1 ? `${lastAdded.copies}× ` : ''}
+            {lastAdded.candidate.name} (
+            {lastAdded.candidate.set_code.toUpperCase()}{' '}
             #{lastAdded.candidate.collector_number})
           </Text>
+          {/*
+            The playset button. A box of cards is mostly duplicates, and one
+            tap per extra copy beats waiting out the four-second repeat hold
+            with the card held in front of the lens.
+          */}
+          <Pressable
+            style={styles.copyButton}
+            onPress={() => {
+              void addAnother();
+            }}
+          >
+            <Text style={styles.copyButtonText}>+1 more</Text>
+          </Pressable>
           <Pressable
             style={styles.undoButton}
             onPress={() => {
               void undoLast();
             }}
           >
-            <Text style={styles.undoButtonText}>Wrong? Undo</Text>
+            <Text style={styles.undoButtonText}>
+              {lastAdded.copies > 1 ? '−1' : 'Undo'}
+            </Text>
           </Pressable>
         </View>
       ) : null}
@@ -924,6 +984,14 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   target: { color: '#8a8f9c', fontSize: 13, flex: 1 },
   alsoRow: { gap: 6, marginTop: 8 },
+  copyButton: {
+    borderColor: '#38a169',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  copyButtonText: { color: '#68d391', fontSize: 13, fontWeight: '600' },
   queueBar: {
     alignItems: 'center',
     backgroundColor: '#1d2433',

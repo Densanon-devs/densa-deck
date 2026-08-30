@@ -184,6 +184,55 @@
     };
   }
 
+  // ------------------------------------------------------------- quantity
+
+  /**
+   * The card just filed, with a way to say how many of it there are.
+   *
+   * Boxes are mostly duplicates. Rescanning the same card four times is
+   * slower and less reliable than saying "four of these", and on the phone
+   * it also fights the repeat guard, which deliberately holds a card off
+   * for four seconds so one sitting in frame cannot file twice.
+   */
+  function renderLastFiled() {
+    const host = e("scan-last-filed");
+    if (!host) return;
+    const last = state.lastFiled;
+    if (!last) { host.innerHTML = ""; return; }
+    host.innerHTML = `
+      <span class="scan-last-name">${last.copies > 1 ? `${last.copies}× ` : ""}`
+      + `${escape(last.candidate.name)}</span>
+      <button class="btn btn-outline btn-slim" data-copies="1">+1 more</button>
+      <button class="btn btn-outline btn-slim" data-copies="-1">`
+      + `${last.copies > 1 ? "−1" : "Undo"}</button>`;
+  }
+
+  /** Add or take back one copy of the card just filed. */
+  async function adjustLast(delta) {
+    const last = state.lastFiled;
+    if (!last) return;
+    const home = e("scan-collection");
+    try {
+      await callApi("scan_adjust", last.candidate.printing_id, delta,
+                    last.finish, e("scan-condition").value || "NM",
+                    (e("scan-location").value || "").trim(),
+                    last.candidate.name,
+                    home && home.value ? Number(home.value) : null,
+                    pickedTags().map(Number));
+    } catch (err) {
+      toast("Could not change that: " + err.message, "error");
+      return;
+    }
+    last.copies += delta;
+    // At zero the card is gone and so is the row — there is nothing left to
+    // add to or take from.
+    if (last.copies < 1) state.lastFiled = null;
+    renderLastFiled();
+    try {
+      renderSession((await callApi("get_scan_session")).session);
+    } catch (err) { /* the count is cosmetic; the card is filed */ }
+  }
+
   // ----------------------------------------------------------- collections
 
   /**
@@ -263,6 +312,11 @@
       ? ` — tagged into ${r.tagged_into.length} more`
       : "";
     toast(`Added ${candidate.name} (${finish})${extra}`, "success");
+    // Remember what just went in, so "there are four of these" is three
+    // clicks rather than three more photographs. `scan_adjust` has always
+    // been able to do this — nothing called it.
+    state.lastFiled = { candidate, finish, copies: 1 };
+    renderLastFiled();
     renderSession(r.session);
     // Clear for the next card — continuous scanning is the point.
     e("scan-text").value = "";
@@ -410,6 +464,14 @@
     // whatever it is filed into, so that list must drop out of the boxes.
     const home = e("scan-collection");
     if (home) home.addEventListener("change", () => { void loadCollections(); });
+
+    const filed = e("scan-last-filed");
+    if (filed) {
+      filed.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-copies]");
+        if (btn) void adjustLast(Number(btn.dataset.copies));
+      });
+    }
   }
 
   async function activate() {

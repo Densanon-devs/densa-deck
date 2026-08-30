@@ -445,3 +445,76 @@ describe('one card scanned five times is one card', () => {
   });
 
 });
+
+describe('saying how many of them there are', () => {
+  /**
+   * The alternative to a count is photographing one card four times, which
+   * the repeat guard is specifically built to ignore. So an explicit extra
+   * copy must NOT go through that guard: it is a person answering "there
+   * are four of these", which is the opposite of the camera seeing one card
+   * twice.
+   */
+  test('an extra copy adds to the same stack rather than a new one',
+    async () => {
+      const desktop = serving(new FakeDesktop());
+      const { state } = await makePhone(desktop);
+      const card = {
+        printing_id: 'p-sol', card_name: 'Sol Ring',
+        collection_uid: DEFAULT_COLLECTION_UID,
+      };
+      await state.addCard(card);
+      await state.addCard(card);
+
+      const stacks = await state.cards();
+      assert.equal(stacks.length, 1, `${stacks.length} stacks for one card`);
+      assert.equal(stacks[0].quantity, 2);
+    });
+
+  test('extra copies keep the lists the first one was tagged into', async () => {
+    // A playset split across groups by an accident of which button was
+    // pressed is worse than no grouping at all.
+    const desktop = serving(new FakeDesktop());
+    const { state } = await makePhone(desktop);
+    const card = {
+      printing_id: 'p-sol', card_name: 'Sol Ring',
+      collection_uid: DEFAULT_COLLECTION_UID,
+      also_collection_uids: [SET],
+    };
+    await state.addCard(card);
+    await state.addCard(card);
+
+    const [stack] = await state.cards();
+    assert.equal(stack.quantity, 2);
+    assert.ok((await state.listsFor(stack.stack_key)).includes(SET));
+  });
+
+  test('four rapid copies are four cards when asked for explicitly',
+    async () => {
+      // The drain guard collapses rapid REPEATS because the camera cannot
+      // tell them apart. An explicit count is a different statement and
+      // must survive intact, however fast the taps are.
+      const desktop = serving(new FakeDesktop());
+      const { state } = await makePhone(desktop);
+      for (let i = 0; i < 4; i += 1) {
+        await state.addCard({
+          printing_id: 'p-sol', card_name: 'Sol Ring',
+          collection_uid: DEFAULT_COLLECTION_UID,
+        });
+      }
+      assert.equal((await state.cards())[0].quantity, 4);
+    });
+
+  test('taking one back leaves the rest', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { state } = await makePhone(desktop);
+    const card = {
+      printing_id: 'p-sol', card_name: 'Sol Ring',
+      collection_uid: DEFAULT_COLLECTION_UID,
+    };
+    await state.addCard(card);
+    await state.addCard(card);
+    await state.addCard({ ...card, quantity: -1 });
+
+    assert.equal((await state.cards())[0].quantity, 1);
+  });
+});

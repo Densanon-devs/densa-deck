@@ -735,3 +735,77 @@ class TestTheIndexThePhonePulls:
             "catalogue/page", {"after": "", "limit": 5000})
         assert "error" not in reply, reply
         assert reply["total"] == 2
+
+
+class TestSayingHowManyOfThem:
+    """A box is mostly duplicates.
+
+    Rescanning one card four times is slower and less reliable than saying
+    "four of these", and it fights the repeat guard, which deliberately
+    holds a card off for four seconds so one sitting in front of the lens
+    cannot file twice.
+    """
+
+    def test_another_copy_adds_to_the_same_stack(self, api_with_printings):
+        api = api_with_printings
+        _data(api.scan_commit(CMM, "Sol Ring"))
+        _data(api.scan_adjust(CMM, 1, card_name="Sol Ring"))
+
+        items = _data(api.list_collection())["items"]
+        assert len(items) == 1, f"{len(items)} stacks for one card"
+        assert items[0]["quantity"] == 2
+
+    def test_taking_one_back_leaves_the_rest(self, api_with_printings):
+        api = api_with_printings
+        _data(api.scan_commit(CMM, "Sol Ring"))
+        _data(api.scan_adjust(CMM, 1, card_name="Sol Ring"))
+        _data(api.scan_adjust(CMM, -1, card_name="Sol Ring"))
+
+        assert _data(api.list_collection())["items"][0]["quantity"] == 1
+
+    def test_it_cannot_reach_past_what_this_run_added(self, api_with_printings):
+        """The undo button undoes THIS session, not your collection."""
+        api = api_with_printings
+        r = api.scan_adjust(CMM, -1, card_name="Sol Ring")
+        assert r["ok"] is False and r["error_type"] == "NotInSession"
+
+    def test_extra_copies_land_in_the_same_lists(self, api_with_printings):
+        """A playset split across groups by an accident of which button was
+        pressed is worse than no grouping at all."""
+        api = api_with_printings
+        store = api._get_collection_store()
+        modern = store.create_collection("Modern binder")["collection_id"]
+
+        _data(api.scan_commit(CMM, "Sol Ring", also_collection_ids=[modern]))
+        _data(api.scan_adjust(CMM, 1, card_name="Sol Ring",
+                              also_collection_ids=[modern]))
+
+        item = _data(api.list_collection())["items"][0]
+        names = {c["name"] for c in store.collections_for_item(item["item_id"])}
+        assert "Modern binder" in names
+        assert item["quantity"] == 2
+
+    def test_a_tag_ticked_after_the_first_copy_still_applies(self, api_with_printings):
+        """You file a card, THEN realise the whole pile is for sale.
+
+        The extra copy carries the new tag onto the stack. Without this the
+        tag only ever lands via `scan_commit`, so the box you re-tagged
+        halfway through is grouped by when you changed your mind.
+        """
+        api = api_with_printings
+        store = api._get_collection_store()
+        _data(api.scan_commit(CMM, "Sol Ring"))
+        sale = store.create_collection("For sale")["collection_id"]
+
+        _data(api.scan_adjust(CMM, 1, card_name="Sol Ring",
+                              also_collection_ids=[sale]))
+
+        item = _data(api.list_collection())["items"][0]
+        names = {c["name"] for c in store.collections_for_item(item["item_id"])}
+        assert "For sale" in names, names
+
+    def test_the_session_count_follows(self, api_with_printings):
+        api = api_with_printings
+        _data(api.scan_commit(CMM, "Sol Ring"))
+        d = _data(api.scan_adjust(CMM, 1, card_name="Sol Ring"))
+        assert d["session"]["added"] == 2
