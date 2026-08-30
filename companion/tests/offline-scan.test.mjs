@@ -288,7 +288,7 @@ describe('draining the queue when the PC is back', () => {
   test('draining an empty queue does nothing and says so', async () => {
     const { state } = await makePhone(serving(new FakeDesktop()));
     assert.deepEqual(await state.drainScans(),
-      { filed: 0, undecided: 0, failed: 0 });
+      { filed: 0, undecided: 0, failed: 0, repeats: 0 });
   });
 });
 
@@ -324,4 +324,124 @@ describe('deciding on one by hand', () => {
     const { state } = await makePhone(serving(new FakeDesktop()));
     assert.equal(await state.reviewNextScan(), null);
   });
+});
+
+describe('one card scanned five times is one card', () => {
+  /**
+   * The failure this exists to stop, in the user's words: a card queued
+   * offline shows nothing obvious happening, so you photograph it again —
+   * and again — and on reconnect all five file as five separate copies.
+   *
+   * Live, `RepeatGuard` already answers this: the same name inside four
+   * seconds is the same card still in frame. The queue has to answer it the
+   * same way, using the capture times it stored, or the two halves of the
+   * app disagree about what a duplicate is.
+   */
+  async function queueAt(state, times) {
+    let n = 0;
+    for (const at of times) {
+      await state.queueScan(`data:image/jpeg;base64,${n++}`,
+        DEFAULT_COLLECTION_UID);
+    }
+    // Restamp with the capture times the test is about.
+    const rows = await state.store?.pendingScans?.();
+    return rows;
+  }
+
+  /** Queue photos with explicit capture times, oldest first. */
+  async function queuedWithTimes(store, times) {
+    let n = 0;
+    for (const captured_at of times) {
+      await store.queueScan({
+        scan_uid: `s-${n}`,
+        image: `data:image/jpeg;base64,${n}`,
+        captured_at,
+        collection_uid: DEFAULT_COLLECTION_UID,
+        also_uids: [],
+      });
+      n += 1;
+    }
+  }
+
+  test('five frantic attempts at one card file ONE copy', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { store, state } = await makePhone(desktop);
+    await queuedWithTimes(store, [
+      '2026-08-30T10:00:00.000Z',
+      '2026-08-30T10:00:00.800Z',
+      '2026-08-30T10:00:01.600Z',
+      '2026-08-30T10:00:02.400Z',
+      '2026-08-30T10:00:03.200Z',
+    ]);
+
+    const out = await state.drainScans();
+    assert.equal(out.filed, 1, `filed ${out.filed}`);
+    assert.equal(out.repeats, 4);
+    const [stack] = await state.cards();
+    assert.equal(stack.quantity, 1, `owned ${stack.quantity} of one card`);
+  });
+
+  test('and the extra photos are cleared, not left to file next time',
+    async () => {
+      const desktop = serving(new FakeDesktop());
+      const { store, state } = await makePhone(desktop);
+      await queuedWithTimes(store, [
+        '2026-08-30T10:00:00.000Z', '2026-08-30T10:00:01.000Z',
+      ]);
+      await state.drainScans();
+      assert.equal(await state.queuedScans(), 0);
+      // Draining again must not resurrect them.
+      await state.drainScans();
+      assert.equal((await state.cards())[0].quantity, 1);
+    });
+
+  test('but four copies scanned deliberately are still four cards', async () => {
+    // The whole risk of a dedup: somebody filing a playset must get four.
+    // Spaced past the hold, exactly as the live scanner requires.
+    const desktop = serving(new FakeDesktop());
+    const { store, state } = await makePhone(desktop);
+    await queuedWithTimes(store, [
+      '2026-08-30T10:00:00.000Z',
+      '2026-08-30T10:00:05.000Z',
+      '2026-08-30T10:00:10.000Z',
+      '2026-08-30T10:00:15.000Z',
+    ]);
+
+    const out = await state.drainScans();
+    assert.equal(out.filed, 4, `filed ${out.filed}`);
+    assert.equal(out.repeats, 0);
+    assert.equal((await state.cards())[0].quantity, 4);
+  });
+
+  test('the guard reads CAPTURE times, not drain times', async () => {
+    // Drained back to back every photo is milliseconds from the last, so a
+    // guard fed the clock would collapse a whole box into one card.
+    const desktop = serving(new FakeDesktop());
+    const { store, state } = await makePhone(desktop);
+    await queuedWithTimes(store, [
+      '2026-08-30T10:00:00.000Z',
+      '2026-08-30T10:01:00.000Z',
+      '2026-08-30T10:02:00.000Z',
+    ]);
+    const out = await state.drainScans();
+    assert.equal(out.filed, 3, 'a minute apart is three separate cards');
+  });
+
+  test('a photo with an unreadable timestamp is still filed', async () => {
+    // Refusing it would lose a real card over a bad clock.
+    //
+    // The guard tolerates the NaN by construction — an unparseable time
+    // fails every comparison, so the photo files and the next real
+    // timestamp restores the window. Passing 0 instead is belt and braces,
+    // not load-bearing, and no test here pretends otherwise.
+    const desktop = serving(new FakeDesktop());
+    const { store, state } = await makePhone(desktop);
+    await store.queueScan({
+      scan_uid: 's-x', image: 'data:image/jpeg;base64,x',
+      captured_at: 'not a date', collection_uid: DEFAULT_COLLECTION_UID,
+      also_uids: [],
+    });
+    assert.equal((await state.drainScans()).filed, 1);
+  });
+
 });

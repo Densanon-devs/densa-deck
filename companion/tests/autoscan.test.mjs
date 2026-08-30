@@ -202,3 +202,51 @@ describe('what the user is told', () => {
     assert.equal(explain('stopped'), '');
   });
 });
+
+describe('scanning a box with no PC', () => {
+  /**
+   * The loop used to stop dead the moment the PC went out of reach, which
+   * was right when the PC did all the identifying — capturing frames nobody
+   * could read is a flat battery and nothing else.
+   *
+   * It is wrong now that the phone holds the card index and reads cards
+   * itself. Refusing to run leaves offline scanning as button-mashing over
+   * a box of four hundred cards, which is also how one card gets
+   * photographed five times and filed five times.
+   */
+  const base = { running: true, busy: false, now: 10_000 };
+
+  test('it keeps going offline when the phone can identify alone', () => {
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    const decision = scanner.next({
+      ...base, connection: 'offline', offlineCapable: true });
+    assert.equal(decision.act, 'capture');
+  });
+
+  test('and still stops offline without the index', () => {
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    const decision = scanner.next({
+      ...base, connection: 'offline', offlineCapable: false });
+    assert.equal(decision.act, 'stop');
+    assert.equal(decision.reason, 'offline');
+  });
+
+  test('unpaired always stops, index or not', () => {
+    // No pairing means no index and nowhere to file: a loop there is
+    // photographing cards into nothing.
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    const decision = scanner.next({
+      ...base, connection: 'unpaired', offlineCapable: true });
+    assert.equal(decision.act, 'stop');
+  });
+
+  test('a caller that never heard of the flag keeps the old behaviour', () => {
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    assert.equal(
+      scanner.next({ ...base, connection: 'offline' }).act, 'stop');
+  });
+});

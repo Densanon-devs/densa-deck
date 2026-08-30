@@ -350,6 +350,16 @@ export function ScanScreen({ state }: Props) {
         try {
           const local = await state.identifyOffline(base64);
           if (local) {
+            // Through the SAME guard the online path uses. Without it the
+            // auto loop files a card once per capture for as long as it
+            // sits in frame — the exact bug RepeatGuard was written for,
+            // reintroduced by taking a different route to addCard.
+            const decision = guard.current.consider(
+              local.printing.name, Date.now());
+            if (!decision.file) {
+              setStatus('Same card still in frame');
+              return;
+            }
             const finish = local.foilHint ? 'foil' : 'nonfoil';
             await state.addCard({
               printing_id: local.printing.printing_id,
@@ -358,7 +368,11 @@ export function ScanScreen({ state }: Props) {
               collection_uid: target,
               also_collection_uids: alsoTag,
             });
-            setFlash({ name: local.printing.name, copy: 1, verb: 'ADDED' });
+            setFlash({
+              name: local.printing.name,
+              copy: decision.copy,
+              verb: 'ADDED',
+            });
             setTimeout(() => setFlash(null), 950);
             setStatus('Filed without your PC — next card');
             return;
@@ -443,6 +457,9 @@ export function ScanScreen({ state }: Props) {
         busy: busyRef.current,
         connection,
         now: Date.now(),
+        // With the index in hand the phone identifies cards itself, so
+        // losing the PC is no longer a reason to stop the loop.
+        offlineCapable: index.ready,
       });
       if (decision.act === 'stop') {
         setAuto(false);
@@ -457,7 +474,7 @@ export function ScanScreen({ state }: Props) {
       }
     }, TICK_MS);
     return () => clearInterval(timer);
-  }, [auto, connection, capture]);
+  }, [auto, connection, capture, index.ready]);
 
   const offline = connection === 'offline' || connection === 'unpaired';
 
@@ -577,7 +594,7 @@ export function ScanScreen({ state }: Props) {
         <Pressable
           style={[styles.chip, auto && styles.chipOn]}
           onPress={() => {
-            if (!auto && offline) {
+            if (!auto && offline && !index.ready) {
               setStatus(explain('offline'));
               return;
             }

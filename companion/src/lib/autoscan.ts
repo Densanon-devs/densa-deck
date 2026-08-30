@@ -44,6 +44,23 @@ export interface AutoScanInput {
   busy: boolean;
   connection: 'connected' | 'offline' | 'unpaired' | 'unknown';
   now: number;
+  /**
+   * Whether this phone can identify a card by itself.
+   *
+   * True once the card index has been pulled off the PC. Auto-scan used to
+   * stop dead the moment the PC was out of reach, which was right when the
+   * PC did all the identifying — capturing frames nobody could read is just
+   * a flat battery.
+   *
+   * It is wrong now. The phone reads the card and matches it locally, and
+   * refusing to run leaves offline scanning as button-mashing over a box of
+   * four hundred cards — which is also how one card gets photographed five
+   * times and filed five times.
+   *
+   * Absent means false, so a caller that has not been updated keeps the old
+   * behaviour rather than silently gaining a loop it never asked for.
+   */
+  offlineCapable?: boolean;
 }
 
 export class AutoScanner {
@@ -65,7 +82,11 @@ export class AutoScanner {
     // start there would mean auto-scan never works on a cold open, which is
     // exactly when a box of cards is about to be filed.
     if (input.connection === 'offline' || input.connection === 'unpaired') {
-      return { act: 'stop', reason: 'offline' };
+      // Unpaired is different from merely out of range: with no pairing
+      // there is no index and nothing to file into, so that still stops.
+      if (!input.offlineCapable || input.connection === 'unpaired') {
+        return { act: 'stop', reason: 'offline' };
+      }
     }
     if (this.failures >= FAILURE_LIMIT) {
       return { act: 'stop', reason: 'too-many-failures' };

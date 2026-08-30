@@ -17,6 +17,7 @@ import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
 import { deviceTextReader } from './ocr.ts';
+import { RepeatGuard } from './scanner.ts';
 import type { TextReader } from './ocr.ts';
 import { stackKey } from './protocol.ts';
 import { defaultFinish, identifyPhoto } from './scanner.ts';
@@ -214,10 +215,29 @@ export class AppState {
    * One at a time and in the order they were scanned, so a queue that dies
    * halfway has filed a prefix rather than a scatter.
    */
-  async drainScans(): Promise<{ filed: number; undecided: number; failed: number }> {
+  async drainScans(): Promise<{
+    filed: number; undecided: number; failed: number; repeats: number;
+  }> {
     let filed = 0;
     let undecided = 0;
     let failed = 0;
+    let repeats = 0;
+    /**
+     * The same rule the live scanner uses, applied to the queue.
+     *
+     * A card that would not file has nothing visible happen, so people
+     * photograph it again — and again — and every one of those was a
+     * separate row that filed a separate copy. One card became five.
+     *
+     * Live, `RepeatGuard` answers this with "same name inside four seconds
+     * is the same card still in frame". Here the names arrive late, but the
+     * queue stored WHEN each photo was taken, so the identical rule can be
+     * applied to the identical question. Fed capture times, not drain
+     * times: drained back to back they are all milliseconds apart, and
+     * everything after the first would vanish — including four real copies
+     * of a card somebody actually scanned four times.
+     */
+    const guard = new RepeatGuard();
     for (const scan of await this.store.pendingScans()) {
       let reply: ScanResult;
       try {
@@ -229,6 +249,16 @@ export class AppState {
       }
       const top = reply.candidates?.[0];
       if (reply.auto_addable && top) {
+        const when = Date.parse(scan.captured_at);
+        const decision = guard.consider(
+          top.name, Number.isFinite(when) ? when : 0);
+        if (!decision.file) {
+          // The same card, photographed again because nothing looked like
+          // it happened. Drop the photo — filing it is the bug.
+          await this.store.dropScan(scan.scan_uid);
+          repeats += 1;
+          continue;
+        }
         await this.addCard({
           printing_id: top.printing_id,
           card_name: top.name,
@@ -249,7 +279,7 @@ export class AppState {
         failed += 1;
       }
     }
-    return { filed, undecided, failed };
+    return { filed, undecided, failed, repeats };
   }
 
   /** The oldest queued photo the PC could not decide, ready to be shown. */
