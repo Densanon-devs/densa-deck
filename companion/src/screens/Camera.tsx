@@ -22,14 +22,31 @@
  * the device on its own executor thread at worst — an exception on a thread
  * with no handler takes the process down, which is what a crash on a phone
  * with no debugger attached looks like from the outside.
+ *
+ * **And nobody looked again.** The grant is made in Android's settings, in
+ * another app, and `useCameraPermissions` has no idea that happened: it
+ * reads once on mount and again only when something calls it. So the screen
+ * that sent you to settings still said "camera access needed" when you came
+ * back, and the only way out was to leave for another tab, pull to refresh,
+ * and return — which works, and which nobody would ever guess. Coming back
+ * to the foreground now re-reads it.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  AppState as ForegroundState,
+  Linking,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import { recordCrash } from '../lib/crash.ts';
+import { shouldRecheck } from '../lib/permission.ts';
+import type { Phase } from '../lib/permission.ts';
 
 export { CameraView };
 
@@ -47,9 +64,13 @@ interface Props {
  * that first ask is refused.
  */
 export function CameraGate({ purpose, children }: Props) {
-  const [permission, request] = useCameraPermissions();
+  // The third element re-reads the grant WITHOUT prompting, which is the
+  // one that matters here: after a trip to settings there is nothing to ask
+  // for, only something to find out.
+  const [permission, request, recheck] = useCameraPermissions();
   const [asking, setAsking] = useState(false);
   const asked = useRef(false);
+  const phase = useRef<Phase>('active');
 
   useEffect(() => {
     if (!permission || permission.granted || asked.current) return;
@@ -60,6 +81,21 @@ export function CameraGate({ purpose, children }: Props) {
       .catch((err) => recordCrash(err, 'camera permission', false))
       .finally(() => setAsking(false));
   }, [permission, request]);
+
+  // Back from settings. Android grants live in another app, so the only
+  // signal this side is the app returning to the foreground.
+  useEffect(() => {
+    const granted = !!permission?.granted;
+    const subscription = ForegroundState.addEventListener('change', (next) => {
+      const previous = phase.current;
+      phase.current = next as Phase;
+      if (shouldRecheck(previous, next as Phase, granted)) {
+        void recheck().catch((err) =>
+          recordCrash(err, 'rechecking camera permission', false));
+      }
+    });
+    return () => subscription.remove();
+  }, [permission?.granted, recheck]);
 
   if (!permission || asking) {
     return <Text style={styles.muted}>Checking camera access…</Text>;

@@ -14,6 +14,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  AppState as ForegroundState,
   Pressable,
   StatusBar,
   StyleSheet,
@@ -28,6 +29,8 @@ import {
 import { AppState, buildAppState } from './src/lib/app-state.ts';
 import type { AppSnapshot } from './src/lib/app-state.ts';
 import type { StackRow } from './src/lib/store.ts';
+import { cameBackToForeground } from './src/lib/permission.ts';
+import type { Phase } from './src/lib/permission.ts';
 import { describeConnection } from './src/lib/status.ts';
 import type { Crash } from './src/lib/crash.ts';
 import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
@@ -127,6 +130,30 @@ function Shell() {
     void state.sync().catch((err) => recordCrash(err, 'first sync', false));
     return state;
   }, []);
+
+  /**
+   * Catch up whenever the app comes back to the foreground.
+   *
+   * Whether the PC is reachable is only ever decided by a sync, and a sync
+   * only happened when a screen asked for one. So walking back into range
+   * and reopening the app left it insisting it was offline until you
+   * happened to find a screen with a pull-to-refresh — the same trap as the
+   * camera permission, one level up, and affecting every screen at once.
+   *
+   * Best-effort on purpose: being unreachable is a state this app is built
+   * to sit in, not an error to report.
+   */
+  useEffect(() => {
+    const phase = { current: 'active' as Phase };
+    const subscription = ForegroundState.addEventListener('change', (next) => {
+      const previous = phase.current;
+      phase.current = next as Phase;
+      if (cameBackToForeground(previous, next as Phase)) {
+        void state.sync().catch(() => undefined);
+      }
+    });
+    return () => subscription.remove();
+  }, [state]);
 
   useEffect(() => {
     let live = true;
