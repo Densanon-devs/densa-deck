@@ -61,39 +61,63 @@ export class MemoryDatabase {
     // for a column with a fixed initial value. Binding positionally against
     // params alone put `undefined` in those columns, which silently broke
     // every query that filtered on them.
-    const values = this._valuesOf(text);
-    const row = {};
-    let paramIndex = 0;
-    columns.forEach((col, i) => {
-      const literal = values[i];
-      row[col] = literal === '?' ? params[paramIndex++] : this._literal(literal);
-    });
-
-    // A primary key can be more than one column — `price_points` is keyed by
-    // series AND day, so pulling the same day twice must update rather than
-    // append. Normalised to a list so both shapes match the same way.
+    // One statement can carry many rows. The card index is written in
+    // batches of four hundred, and reading only the first group would store
+    // one row in four hundred while every count still looked plausible.
+    const groups = this._valueGroups(text);
     const keyCols = this._primaryKeyFor(text, columns);
-    const existing = keyCols
-      ? table.find((r) => keyCols.every((c) => r[c] === row[c]))
-      : undefined;
+    let paramIndex = 0;
 
-    if (existing) {
-      if (/OR IGNORE/i.test(text)) return;
-      if (/ON CONFLICT/i.test(text)) {
-        // Only the columns the statement names in its DO UPDATE clause.
-        const setters = text.match(/DO UPDATE SET (.+)$/i);
-        if (setters) {
-          for (const part of setters[1].split(',')) {
-            const [target, source] = part.split('=').map((s) => s.trim());
-            const col = target.replace(/^\w+\./, '');
-            const from = source.replace('excluded.', '');
-            existing[col] = row[from];
+    for (const values of groups) {
+      const row = {};
+      columns.forEach((col, i) => {
+        const literal = values[i];
+        row[col] = literal === '?' ? params[paramIndex++] : this._literal(literal);
+      });
+
+      // A primary key can be more than one column — `price_points` is keyed
+      // by series AND day, so pulling the same day twice must update rather
+      // than append. Normalised to a list so both shapes match the same way.
+      const existing = keyCols
+        ? table.find((r) => keyCols.every((c) => r[c] === row[c]))
+        : undefined;
+
+      if (existing) {
+        if (/OR IGNORE/i.test(text)) continue;
+        if (/ON CONFLICT/i.test(text)) {
+          // Only the columns the statement names in its DO UPDATE clause.
+          const setters = text.match(/DO UPDATE SET (.+)$/is);
+          if (setters) {
+            for (const part of setters[1].split(',')) {
+              const [target, source] = part.split('=').map((x) => x.trim());
+              const col = target.replace(/^\w+\./, '');
+              const from = source.replace('excluded.', '');
+              if (from in row) existing[col] = row[from];
+            }
           }
+          continue;
         }
-        return;
       }
+      table.push(row);
     }
-    table.push(row);
+  }
+
+  /** Every `( ... )` group after VALUES, in order. */
+  _valueGroups(text) {
+    let after = text.split(/VALUES/i)[1];
+    if (after === undefined) {
+      throw new Error(`no VALUES in: ${text.slice(0, 80)}`);
+    }
+    // `ON CONFLICT(scan_uid)` is a parenthesised group too, and reading it
+    // as another row of values inserted a junk row whose columns were all
+    // undefined — which then blew up sorting on a missing timestamp.
+    after = after.split(/ON CONFLICT/i)[0];
+    const groups = [...after.matchAll(/\(([^)]*)\)/g)]
+      .map((m) => m[1].split(',').map((v) => v.trim()));
+    if (!groups.length) {
+      throw new Error(`no VALUES in: ${text.slice(0, 80)}`);
+    }
+    return groups;
   }
 
   _valuesOf(text) {
@@ -129,6 +153,14 @@ export class MemoryDatabase {
       // a day already held, and 'pulling twice adds nothing' would pass
       // against a cache that doubles.
       price_points: ['series_key', 'captured_on'],
+      // Without this the ON CONFLICT DO NOTHING never matches, so queueing
+      // the same photo twice would store it twice and 'the queue does not
+      // double' would pass against a queue that does.
+      pending_scans: 'scan_uid',
+      // Without this the ON CONFLICT never matches, so re-pulling the card
+      // index appends a second copy of every printing — and the exact-key
+      // lookup then answers from whichever duplicate sorted first.
+      catalogue: 'printing_id',
     };
     const key = keys[table];
     if (!key) return undefined;
@@ -148,6 +180,12 @@ export class MemoryDatabase {
     let paramIndex = 0;
     const assignments = setPart.split(',').map((part) => {
       const [col, raw] = part.split('=').map((x) => x.trim());
+      // `tries = tries + 1` is arithmetic on the row, not a value. Treated
+      // as a literal it stored the string and the counter never moved, so a
+      // photo the PC cannot read would be retried for ever while a test for
+      // "it stops retrying" passed.
+      const bump = /^(\w+)\s*\+\s*(\d+)$/.exec(raw);
+      if (bump) return { col, from: bump[1], add: Number(bump[2]) };
       const value = raw === '?' ? params[paramIndex++] : this._literal(raw);
       return { col, value };
     });
@@ -159,7 +197,11 @@ export class MemoryDatabase {
 
     for (const row of table) {
       if (conditions.every((c) => row[c.col] === c.value)) {
-        assignments.forEach((a) => (row[a.col] = a.value));
+        assignments.forEach((a) => {
+          row[a.col] = a.add === undefined
+            ? a.value
+            : Number(row[a.from] ?? 0) + a.add;
+        });
       }
     }
   }
@@ -228,6 +270,22 @@ export class MemoryDatabase {
     // Read whole and filtered in the caller, the way the real one is.
     if (/FROM slot_facts/i.test(text)) return [...this._table('slot_facts')];
     if (/FROM price_points/i.test(text)) return [...this._table('price_points')];
+    if (/FROM pending_scans/i.test(text)) return [...this._table('pending_scans')];
+    // The card index the phone pulls off the PC. Two shapes only, and both
+    // are the ones the real store issues: a size check, and the exact-key
+    // lookup an offline identification turns on.
+    if (/FROM catalogue/i.test(text)) {
+      const rows = this._table('catalogue');
+      if (/COUNT\(\*\)/i.test(text)) return [{ n: rows.length }];
+      if (/WHERE set_code = \? AND collector_number = \?/i.test(text)) {
+        return rows.filter((r) => r.set_code === params[0]
+          && r.collector_number === params[1]);
+      }
+      if (/WHERE name = \?/i.test(text)) {
+        return rows.filter((r) => r.name === params[0]);
+      }
+      return [...rows];
+    }
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
   }
 

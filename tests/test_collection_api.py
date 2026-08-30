@@ -651,3 +651,87 @@ class TestScanningIntoSeveralLists:
         events, _ = api._get_sync().log.since(0)
         kinds = [e.kind for e in events]
         assert KIND_MEMBERSHIP in kinds, kinds
+
+
+class TestTheIndexThePhonePulls:
+    """Four fields per printing, so a phone can identify a card alone.
+
+    Not the catalogue — 181 MB of oracle text, prices, legality and art, none
+    of which answers "which printing is this". The name, set code and
+    collector number are what a scan reads; the printing id is what it files
+    against.
+    """
+
+    def test_it_serves_the_four_fields_and_nothing_else(self, api_with_printings):
+        d = _data(api_with_printings.catalogue_index_page())
+        assert d["rows"], d
+        assert all(len(row) == 4 for row in d["rows"]), d["rows"][0]
+
+    def test_it_reports_the_total_so_a_phone_can_show_progress(self, api_with_printings):
+        d = _data(api_with_printings.catalogue_index_page())
+        assert d["total"] == len(d["rows"]) == 2
+
+    def test_a_short_page_ends_the_walk(self, api_with_printings):
+        """Empty `next` is the stop signal, so the caller stops on the reply
+        rather than on a count it has to keep in step with."""
+        d = _data(api_with_printings.catalogue_index_page(limit=500))
+        assert d["next"] == ""
+
+    def test_paging_covers_every_printing_exactly_once(self, api_with_printings):
+        seen, after, guard = [], "", 0
+        while guard < 20:
+            guard += 1
+            d = _data(api_with_printings.catalogue_index_page(after, 1))
+            seen.extend(r[0] for r in d["rows"])
+            after = d["next"]
+            if not after:
+                break
+        assert sorted(seen) == sorted(set(seen)), "a printing was served twice"
+        assert len(seen) == 2, seen
+
+    def test_it_pages_on_the_id_not_an_offset(self, api_with_printings):
+        """An OFFSET walk over a table being written to SKIPS rows, and a
+        skipped row is a card the phone can never identify."""
+        first = _data(api_with_printings.catalogue_index_page(limit=1))
+        assert first["next"] == first["rows"][0][0]
+        second = _data(api_with_printings.catalogue_index_page(first["next"], 1))
+        assert second["rows"][0][0] > first["rows"][0][0]
+
+    def test_the_page_size_is_bounded(self, api_with_printings):
+        """A phone asking for everything at once must not make the desktop
+        build a hundred-megabyte reply.
+
+        Needs more rows than the cap to say anything at all — asserting a
+        limit of 20,000 against a two-row fixture passes whatever the code
+        does, which is how a cap gets quietly deleted.
+        """
+        db = api_with_printings._get_db()
+        conn = db.connect()
+        # Every NOT NULL column, or the INSERT is silently ignored and the
+        # test passes against two rows while claiming to test twenty
+        # thousand.
+        conn.executemany(
+            """INSERT OR IGNORE INTO card_printings
+               (printing_id, oracle_id, name, set_code, set_name,
+                collector_number, rarity, lang, released_at, finishes,
+                frame, border_color, promo_types)
+               VALUES (?, 'o', 'Filler', 'tst', 'Test', ?, 'common', 'en',
+                       '2020-01-01', 'nonfoil', '2015', 'black', '')""",
+            [(f"bulk-{i:06d}", str(i)) for i in range(20_050)])
+        conn.commit()
+        assert conn.execute(
+            "SELECT COUNT(*) FROM card_printings").fetchone()[0] > 20_000
+
+        d = _data(api_with_printings.catalogue_index_page(limit=10 ** 9))
+        assert len(d["rows"]) == 20000, len(d["rows"])
+        # And it still says where to carry on from, so the cap costs
+        # nothing but a second request.
+        assert d["next"] == d["rows"][-1][0]
+
+    def test_the_phone_can_ask_for_it(self, api_with_printings):
+        from densa_deck.app.phone import PhoneBridge
+
+        reply = PhoneBridge(api_with_printings).handle_api(
+            "catalogue/page", {"after": "", "limit": 5000})
+        assert "error" not in reply, reply
+        assert reply["total"] == 2

@@ -53,6 +53,7 @@ import {
 } from '../lib/scanner.ts';
 import type { ScanCandidate, ScanResult } from '../lib/scanner.ts';
 import type { TagCandidate } from '../lib/protocol.ts';
+import { shrinkForQueue } from '../lib/shrink.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
@@ -97,6 +98,19 @@ export function ScanScreen({ state }: Props) {
    * in the box and the knowledge is gone.
    */
   const [alsoTag, setAlsoTag] = useState<string[]>([]);
+  /** How many photographed cards are waiting for the PC. */
+  const [queued, setQueued] = useState(0);
+  /**
+   * Whether this phone holds the card index yet.
+   *
+   * Pulled from the PC, never shipped in the build: it changes with every
+   * set, and an app that bundled one would be wrong within weeks and only
+   * fixable by shipping another app.
+   */
+  const [index, setIndex] = useState<{ rows: number; ready: boolean }>(
+    { rows: 0, ready: false });
+  const [pulling, setPulling] = useState(0);
+  const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
   // screen afterwards, because a wrong card is not always obvious in the
@@ -329,14 +343,80 @@ export function ScanScreen({ state }: Props) {
         );
       } catch (err) {
         scanner.current.failed();
-        setStatus(recordCrash(err, 'reading the card', false).message);
+        // The PC is not there. Try to place the card here instead: the
+        // phone reads the text with ML Kit and matches it against the index
+        // pulled off the PC earlier. Exact footer keys only — see
+        // identify.ts — so this either knows the card or admits it does not.
+        try {
+          const local = await state.identifyOffline(base64);
+          if (local) {
+            const finish = local.foilHint ? 'foil' : 'nonfoil';
+            await state.addCard({
+              printing_id: local.printing.printing_id,
+              card_name: local.printing.name,
+              finish,
+              collection_uid: target,
+              also_collection_uids: alsoTag,
+            });
+            setFlash({ name: local.printing.name, copy: 1, verb: 'ADDED' });
+            setTimeout(() => setFlash(null), 950);
+            setStatus('Filed without your PC — next card');
+            return;
+          }
+        } catch {
+          // Fall through to the queue. A recogniser that failed is not a
+          // reason to lose the card.
+        }
+
+        // Could not place it here either. The card in your hand is still
+        // real, so the picture is kept for the PC rather than discarded.
+        try {
+          // Shrunk before storing, never before sending: the live path
+          // hands the PC everything it could have had.
+          await state.queueScan(await shrinkForQueue(base64), target, alsoTag);
+          setQueued(await state.queuedScans());
+          setFlash({ name: 'Saved for later', copy: 1, verb: 'QUEUED' });
+          setTimeout(() => setFlash(null), 950);
+          setStatus('No PC — kept the picture. It files itself when you are '
+                    + 'back in range.');
+        } catch {
+          // Queueing is the fallback; if IT fails, say the real thing.
+          setStatus(recordCrash(err, 'reading the card', false).message);
+        }
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [state, file],
+    [state, file, target, alsoTag],
   );
+
+  /**
+   * Send the queue to the PC.
+   *
+   * Only what it is CERTAIN of gets filed. Anything less waits for a human,
+   * exactly as it would have live — more so, since nobody was watching when
+   * it went in.
+   */
+  const drain = useCallback(async () => {
+    if (draining) return;
+    setDraining(true);
+    try {
+      const out = await state.drainScans();
+      setQueued(await state.queuedScans());
+      if (out.filed || out.undecided || out.failed) {
+        const parts = [];
+        if (out.filed) parts.push(`filed ${out.filed}`);
+        if (out.undecided) parts.push(`${out.undecided} need a decision`);
+        if (out.failed) parts.push(`${out.failed} unreadable`);
+        setStatus(`Caught up — ${parts.join(', ')}.`);
+      }
+    } catch (err) {
+      setProblem(recordCrash(err, 'filing the queue', false).message);
+    } finally {
+      setDraining(false);
+    }
+  }, [state, draining]);
 
   const capture = useCallback(async () => {
     const shot = await camera.current?.takePictureAsync({
@@ -380,6 +460,46 @@ export function ScanScreen({ state }: Props) {
   }, [auto, connection, capture]);
 
   const offline = connection === 'offline' || connection === 'unpaired';
+
+  // Back in range with a queue: work through it without being asked. The
+  // whole point is that scanning offline costs nothing extra later.
+  //
+  // Declared after `offline` on purpose — it is the condition, and reading
+  // a binding from further down the render body is the kind of thing that
+  // works until somebody reorders two lines.
+  useEffect(() => {
+    if (offline || queued === 0 || draining) return;
+    void drain();
+    // `drain` is deliberately absent: its identity changes whenever
+    // `draining` flips, and depending on it would restart the drain it
+    // just finished.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offline, queued]);
+
+  // What is already waiting, on the way in.
+  useEffect(() => {
+    void state.queuedScans().then(setQueued).catch(() => {});
+    void state.catalogueReady().then(setIndex).catch(() => {});
+  }, [state]);
+
+  /**
+   * Fetch the index while the PC is there, so scanning works when it is not.
+   *
+   * Resumable: the walk is keyed on the last printing id, so wandering out
+   * of range mid-pull costs the current page, not the whole download.
+   */
+  const pullIndex = useCallback(async () => {
+    setProblem('');
+    try {
+      await state.syncCatalogue((done, total) =>
+        setPulling(total ? Math.round((done / total) * 100) : 0));
+      setIndex(await state.catalogueReady());
+    } catch (err) {
+      setProblem(recordCrash(err, 'fetching the card index', false).message);
+    } finally {
+      setPulling(0);
+    }
+  }, [state]);
   // A phone that has never synced has no collection rows yet, and a picker
   // with nothing in it but "New collection" suggests the default one does not
   // exist. It always does.
@@ -521,6 +641,55 @@ export function ScanScreen({ state }: Props) {
             </View>
           </ScrollView>
         </View>
+      ) : null}
+
+      {/*
+        The index, and whether scanning will work away from the PC.
+
+        Said before it matters rather than after: finding out in a garage
+        that the phone cannot identify anything is finding out too late.
+      */}
+      {!index.ready ? (
+        <Pressable
+          style={styles.queueBar}
+          disabled={offline || pulling > 0}
+          onPress={() => void pullIndex()}
+        >
+          <Text style={styles.queueText}>
+            {pulling > 0
+              ? `Fetching the card index… ${pulling}%`
+              : index.rows > 0
+                ? 'Card index half-fetched — scanning needs all of it'
+                : 'No card index yet — scanning needs your PC'}
+          </Text>
+          <Text style={styles.queueAction}>
+            {pulling > 0 ? '' : offline ? 'Out of range' : 'Get it'}
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {/*
+        The queue, said out loud.
+
+        A pile of unfiled cards that only exists in a database is the same
+        as losing them — you have to know it is there to trust scanning out
+        of range at all, and to know the box is not finished yet.
+      */}
+      {queued > 0 ? (
+        <Pressable
+          style={styles.queueBar}
+          disabled={draining || offline}
+          onPress={() => void drain()}
+        >
+          <Text style={styles.queueText}>
+            {queued} card{queued === 1 ? '' : 's'} waiting for your PC
+          </Text>
+          <Text style={styles.queueAction}>
+            {draining
+              ? 'Filing…'
+              : offline ? 'Out of range' : 'File them now'}
+          </Text>
+        </Pressable>
       ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
@@ -738,6 +907,20 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   target: { color: '#8a8f9c', fontSize: 13, flex: 1 },
   alsoRow: { gap: 6, marginTop: 8 },
+  queueBar: {
+    alignItems: 'center',
+    backgroundColor: '#1d2433',
+    borderColor: '#2f6f9f',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  queueText: { color: '#e4e6eb', fontSize: 13 },
+  queueAction: { color: '#7db8e8', fontSize: 13, fontWeight: '600' },
   alsoLabel: { color: '#8a8f9c', fontSize: 12 },
   alsoChips: { flexDirection: 'row', gap: 6 },
   chip: {

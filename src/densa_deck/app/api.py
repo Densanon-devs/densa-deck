@@ -3802,6 +3802,47 @@ class AppApi:
                 "card_name": card_name, "points": points, "count": len(points)}
 
     @_safe
+    def catalogue_index_page(self, after: str = "", limit: int = 5000) -> dict:
+        """A page of the index a phone needs to identify a card by itself.
+
+        Four fields, because that is all a scan matches on: the printing id
+        to file against, and the name, set code and collector number the OCR
+        actually reads. Everything else about a card — oracle text, prices,
+        legality, art — is irrelevant to "which printing is this" and would
+        be most of the weight.
+
+        For every English printing that is 5.9 MB of text against a 181 MB
+        catalogue, which is the difference between something a phone can hold
+        and something it cannot.
+
+        Rows are lists, not objects. Over a hundred thousand of them, the
+        repeated key names cost more than the data.
+
+        Paged by `printing_id` rather than an offset so a page boundary is
+        stable while the catalogue is being written to — an OFFSET walk over
+        a table taking an ingest skips rows, and a skipped row here is a card
+        the phone can never identify.
+        """
+        limit = max(1, min(int(limit or 5000), 20000))
+        conn = self._get_db().connect()
+        rows = conn.execute(
+            """SELECT printing_id, name, set_code, collector_number
+               FROM card_printings
+               WHERE lang = 'en' AND printing_id > ?
+               ORDER BY printing_id
+               LIMIT ?""",
+            (str(after or ""), limit)).fetchall()
+        total, = conn.execute(
+            "SELECT COUNT(*) FROM card_printings WHERE lang = 'en'").fetchone()
+        return {
+            "rows": [[r[0], r[1], r[2] or "", r[3] or ""] for r in rows],
+            # Empty when the walk is done, so the caller stops on the reply
+            # rather than on a count it has to keep in step with.
+            "next": rows[-1][0] if len(rows) == limit else "",
+            "total": int(total or 0),
+        }
+
+    @_safe
     def get_card_printings(self, card_name: str) -> dict:
         """Every printing of a card, annotated with how many you own.
 

@@ -138,6 +138,51 @@ export const SCHEMA: string[] = [
   // Keyed by day as well as card, so pulling twice writes one row and a
   // later pull ADDS to what is there rather than replacing it. The desktop
   // returns a window; the phone should not forget a day that fell out of it.
+  // Cards photographed with nowhere to send them.
+  //
+  // Identification lives on the PC — the phone has no OCR and no catalogue —
+  // so scanning used to fail outright out of range and the photo was thrown
+  // away. Scanning a box happens where the box is, which is rarely next to
+  // the PC, so every card scanned in a garage was lost work.
+  //
+  // The picture is kept instead, downscaled, and identified when the PC is
+  // reachable again. Measured against the real pipeline, identification is
+  // unchanged down to 1200px on the long edge, so this costs about 80KB a
+  // card rather than the several MB a full-resolution frame weighs.
+  //
+  // The filing target is stored WITH the photo, not read at drain time: by
+  // then you have moved on to another box, and cards must land in the lists
+  // they were scanned into.
+  // The three fields a scan matches on, for every English printing.
+  //
+  // This is what lets the phone identify a card with no PC in reach. It is
+  // deliberately not a copy of the catalogue: no oracle text, no prices, no
+  // legality, no art. Those are most of the weight and none of them answer
+  // "which printing is this". Four fields over ~105,000 printings is a few
+  // megabytes, which a phone can hold; the real catalogue is 181 MB, which
+  // it cannot.
+  `CREATE TABLE IF NOT EXISTS catalogue (
+     printing_id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     set_code TEXT NOT NULL,
+     collector_number TEXT NOT NULL
+   )`,
+  // The exact-key lookup: set code plus collector number is how a scan
+  // identifies a card when the footer reads cleanly, and it is one indexed
+  // hit rather than a walk over a hundred thousand rows.
+  `CREATE INDEX IF NOT EXISTS idx_cat_key
+     ON catalogue(set_code, collector_number)`,
+  // The fallback, when the footer is unreadable but the title is not.
+  `CREATE INDEX IF NOT EXISTS idx_cat_name ON catalogue(name)`,
+  `CREATE TABLE IF NOT EXISTS pending_scans (
+     scan_uid TEXT PRIMARY KEY,
+     image TEXT NOT NULL,
+     captured_at TEXT NOT NULL,
+     collection_uid TEXT NOT NULL DEFAULT '',
+     also_uids TEXT NOT NULL DEFAULT '[]',
+     tries INTEGER NOT NULL DEFAULT 0,
+     note TEXT NOT NULL DEFAULT ''
+   )`,
   `CREATE TABLE IF NOT EXISTS price_points (
      series_key TEXT NOT NULL,
      captured_on TEXT NOT NULL,
@@ -185,6 +230,28 @@ export interface CollectionRow {
 
 /** The desktop's well-known uid for "cards I haven't filed anywhere". */
 export const DEFAULT_COLLECTION_UID = '00000000-0000-4000-8000-00000000d0cc';
+
+/**
+ * The extra lists a queued scan was headed for.
+ *
+ * Defensive because it is read back from storage that outlives the code
+ * that wrote it: a row from an older build, or one corrupted by a crash
+ * mid-write, must not take the whole queue down with it. A scan that
+ * forgets its extra tags is a card filed in one list instead of three;
+ * a throw here is a box of cards nobody can drain.
+ */
+function parseUids(raw: unknown): string[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((u): u is string => typeof u === 'string' && !!u)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 
 export class LocalStore {
   // Written out rather than declared as a constructor parameter property:
@@ -470,6 +537,132 @@ export class LocalStore {
       });
     }
     return out;
+  }
+
+  /**
+   * Write a page of the index.
+   *
+   * Batched into one statement per few hundred rows. A hundred thousand
+   * separate INSERTs through the bridge is a minute of staring at a
+   * progress bar; batched it is a few seconds.
+   */
+  async putCatalogue(
+    rows: Array<[string, string, string, string]>,
+  ): Promise<void> {
+    const BATCH = 400;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const chunk = rows.slice(i, i + BATCH);
+      if (!chunk.length) continue;
+      const holes = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+      await this.db.run(
+        `INSERT INTO catalogue (printing_id, name, set_code, collector_number)
+         VALUES ${holes}
+         ON CONFLICT(printing_id) DO UPDATE SET
+           name = excluded.name,
+           set_code = excluded.set_code,
+           collector_number = excluded.collector_number`,
+        chunk.flat(),
+      );
+    }
+  }
+
+  async catalogueSize(): Promise<number> {
+    const rows = await this.db.all<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM catalogue');
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  /** The exact key a readable footer gives you. */
+  async printingByKey(
+    setCode: string,
+    collectorNumber: string,
+  ): Promise<{ printing_id: string; name: string; set_code: string;
+               collector_number: string } | null> {
+    const rows = await this.db.all<{
+      printing_id: string; name: string;
+      set_code: string; collector_number: string;
+    }>('SELECT * FROM catalogue WHERE set_code = ? AND collector_number = ?',
+      [setCode.toLowerCase(), collectorNumber]);
+    return rows[0] ?? null;
+  }
+
+  /** Every printing of one card, for when only the title read. */
+  async printingsByName(name: string): Promise<Array<{
+    printing_id: string; name: string;
+    set_code: string; collector_number: string;
+  }>> {
+    return this.db.all('SELECT * FROM catalogue WHERE name = ?', [name]);
+  }
+
+  /** Put a photographed card in the queue. */
+  async queueScan(row: {
+    scan_uid: string;
+    image: string;
+    captured_at: string;
+    collection_uid: string;
+    also_uids: string[];
+  }): Promise<void> {
+    await this.db.run(
+      `INSERT INTO pending_scans
+         (scan_uid, image, captured_at, collection_uid, also_uids)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(scan_uid) DO NOTHING`,
+      [row.scan_uid, row.image, row.captured_at, row.collection_uid,
+       JSON.stringify(row.also_uids ?? [])],
+    );
+  }
+
+  /** Everything still waiting, oldest first — the order they were scanned. */
+  async pendingScans(): Promise<Array<{
+    scan_uid: string;
+    image: string;
+    captured_at: string;
+    collection_uid: string;
+    also_uids: string[];
+    tries: number;
+    note: string;
+  }>> {
+    const rows = await this.db.all<{
+      scan_uid: string;
+      image: string;
+      captured_at: string;
+      collection_uid: string;
+      also_uids: string;
+      tries: number;
+      note: string;
+    }>('SELECT * FROM pending_scans');
+    return rows
+      .slice()
+      .sort((a, b) => a.captured_at.localeCompare(b.captured_at))
+      .map((r) => ({
+        ...r,
+        tries: Number(r.tries ?? 0),
+        note: String(r.note ?? ''),
+        also_uids: parseUids(r.also_uids),
+      }));
+  }
+
+  async countPendingScans(): Promise<number> {
+    return (await this.pendingScans()).length;
+  }
+
+  /** It has been dealt with — filed, or given up on. */
+  async dropScan(scanUid: string): Promise<void> {
+    await this.db.run('DELETE FROM pending_scans WHERE scan_uid = ?', [scanUid]);
+  }
+
+  /**
+   * Record that this one has been tried and what came of it.
+   *
+   * Kept so a photo the PC cannot read stops being retried silently on every
+   * reconnect, and so the screen can say WHY one is stuck rather than
+   * leaving a number that never goes down unexplained.
+   */
+  async markScanTried(scanUid: string, note: string): Promise<void> {
+    await this.db.run(
+      'UPDATE pending_scans SET tries = tries + 1, note = ? WHERE scan_uid = ?',
+      [note, scanUid],
+    );
   }
 
   /** Keep the points the desktop just handed over. */

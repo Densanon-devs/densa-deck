@@ -789,6 +789,14 @@ class PhoneBridge:
             return out
         if route == "tier":
             return self._tier_snapshot()
+        # The index the phone matches against when the PC is not there.
+        # Read-only and derived entirely from public card data, so it is not
+        # gated: refusing it would only mean a scanner that cannot work
+        # offline, which is the thing it exists to fix.
+        if route == "catalogue/page":
+            return _unwrap(api.catalogue_index_page(
+                payload.get("after", ""),
+                int(payload.get("limit", 5000) or 5000)))
         if route == "capture":
             return self._handle_capture(payload)
         return {"ok": False, "error": f"unknown route '{route}'"}

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Densa Deck",
     "slug": "densa-deck-companion",
-    "version": "0.18.1",
+    "version": "0.19.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
@@ -10,7 +10,7 @@
       "permissions": [
         "CAMERA"
       ],
-      "versionCode": 61,
+      "versionCode": 62,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F7F7F9"

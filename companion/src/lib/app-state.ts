@@ -15,7 +15,12 @@ import type { CameraSettings } from './camera-settings.ts';
 import { DesktopClient } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
+import { identifyLocally } from './identify.ts';
+import { deviceTextReader } from './ocr.ts';
+import type { TextReader } from './ocr.ts';
 import { stackKey } from './protocol.ts';
+import { defaultFinish, identifyPhoto } from './scanner.ts';
+import type { ScanResult } from './scanner.ts';
 import type {
   BuiltDeck,
   CardDetail,
@@ -61,6 +66,10 @@ export interface AppSnapshot {
 
 const LAST_SYNC_KEY = 'sync.last_at';
 const SCAN_TARGET_KEY = 'scan.collection_uid';
+// Where the index walk got to. Empty means finished — and, before the first
+// pull, means "never started", which is why readiness checks the row count
+// as well.
+const CATALOGUE_CURSOR_KEY = 'catalogue.cursor';
 
 export class AppState {
   private store: LocalStore;
@@ -75,12 +84,204 @@ export class AppState {
   /** This phone's own decks, when one has been wired in. */
   private decks?: DeckStore;
 
+  private readonly textReader: TextReader;
+
   constructor(store: LocalStore, engine: SyncEngine, client: DesktopClient,
-              decks?: DeckStore) {
+              decks?: DeckStore, textReader: TextReader = deviceTextReader) {
     this.store = store;
     this.engine = engine;
     this.client = client;
     this.decks = decks;
+    // Injected so the whole offline scan path is testable under Node, where
+    // the native recogniser cannot exist.
+    this.textReader = textReader;
+  }
+
+  /**
+   * Identify a card without the PC.
+   *
+   * Reads the text on the device, then matches it against the index this
+   * phone pulled down. Exact keys only — see `identify.ts` for why the
+   * fuzzy half deliberately stayed on the desktop.
+   *
+   * Returns null when it cannot place the card, which is the signal to keep
+   * the photo for the PC rather than to guess.
+   */
+  async identifyOffline(imageUri: string): Promise<{
+    printing: { printing_id: string; name: string; set_code: string;
+                collector_number: string };
+    foilHint: boolean;
+  } | null> {
+    const { ready } = await this.catalogueReady();
+    if (!ready) return null;
+    const text = await this.textReader.read(imageUri);
+    if (!text) return null;
+    const out = await identifyLocally(text, this.store);
+    const hit = out.candidates[0];
+    // Only what it is CERTAIN of. Anything less is a photo for the PC, which
+    // has the fuzzy matcher and a person in front of it.
+    return out.autoAddable && hit
+      ? { printing: hit, foilHint: out.identity.foilHint }
+      : null;
+  }
+
+  /**
+   * Pull the card index off the PC.
+   *
+   * Never bundled into the build. The index changes every time a set comes
+   * out, and an app that shipped one would be wrong within weeks and could
+   * only be fixed by shipping another app. The PC already has the real
+   * catalogue and already keeps it current, so this is a copy of the four
+   * fields a scan needs, taken on demand.
+   *
+   * Resumable by design: the walk is keyed on the last printing id, so a
+   * pull interrupted by walking out of range picks up where it stopped
+   * rather than starting the seven megabytes again.
+   */
+  async syncCatalogue(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ rows: number; total: number }> {
+    let after = (await this.store.getMeta(CATALOGUE_CURSOR_KEY)) ?? '';
+    let done = await this.store.catalogueSize();
+    let total = done;
+    for (;;) {
+      const page = await this.client.call<{
+        rows: Array<[string, string, string, string]>;
+        next: string;
+        total: number;
+      }>('catalogue/page', { after, limit: 5000 });
+      const rows = page.rows ?? [];
+      total = page.total ?? total;
+      if (rows.length) {
+        await this.store.putCatalogue(rows);
+        done += rows.length;
+        onProgress?.(Math.min(done, total), total);
+      }
+      after = page.next ?? '';
+      // The cursor is saved AFTER the rows it covers are written, so an
+      // interrupted pull resumes from the last page that actually landed
+      // rather than skipping one.
+      await this.store.setMeta(CATALOGUE_CURSOR_KEY, after);
+      if (!after) break;
+    }
+    return { rows: await this.store.catalogueSize(), total };
+  }
+
+  /** How much of the index this phone is holding. */
+  async catalogueReady(): Promise<{ rows: number; ready: boolean }> {
+    const rows = await this.store.catalogueSize();
+    // A partial pull is not usable: the missing rows are exactly the cards
+    // it would silently fail to identify, and "scanned it, nothing found"
+    // reads as a bad photo rather than a half-downloaded index.
+    const cursor = (await this.store.getMeta(CATALOGUE_CURSOR_KEY)) ?? '';
+    return { rows, ready: rows > 0 && cursor === '' };
+  }
+
+  /**
+   * Keep a photographed card until the PC can look at it.
+   *
+   * The phone cannot identify a card by itself — no OCR, no catalogue — so
+   * out of range this is the only honest thing to do with a picture. The
+   * lists it was headed for travel with it, because by the time it drains
+   * you have moved on to another box.
+   */
+  async queueScan(
+    image: string,
+    collectionUid: string,
+    alsoUids: string[] = [],
+  ): Promise<void> {
+    await this.store.queueScan({
+      scan_uid: this.newUuid(),
+      image,
+      captured_at: new Date().toISOString(),
+      collection_uid: collectionUid,
+      also_uids: alsoUids,
+    });
+  }
+
+  async queuedScans(): Promise<number> {
+    return this.store.countPendingScans();
+  }
+
+  /**
+   * Work through the queue now that the PC is there.
+   *
+   * Files only what the PC is CERTAIN of. Anything less waits for a human,
+   * exactly as it would have live: a wrong card filed silently is worse
+   * than no card, because you will not know to look for it — and that is
+   * more true here, not less, since nobody was watching when it went in.
+   *
+   * One at a time and in the order they were scanned, so a queue that dies
+   * halfway has filed a prefix rather than a scatter.
+   */
+  async drainScans(): Promise<{ filed: number; undecided: number; failed: number }> {
+    let filed = 0;
+    let undecided = 0;
+    let failed = 0;
+    for (const scan of await this.store.pendingScans()) {
+      let reply: ScanResult;
+      try {
+        reply = await identifyPhoto(this.scanClient, scan.image);
+      } catch {
+        // The PC went away again. Stop rather than burn the rest of the
+        // queue against a wall — they are still safe on disk.
+        break;
+      }
+      const top = reply.candidates?.[0];
+      if (reply.auto_addable && top) {
+        await this.addCard({
+          printing_id: top.printing_id,
+          card_name: top.name,
+          finish: defaultFinish(top, reply),
+          collection_uid: scan.collection_uid,
+          also_collection_uids: scan.also_uids,
+        });
+        await this.store.dropScan(scan.scan_uid);
+        filed += 1;
+      } else if (reply.candidates?.length) {
+        await this.store.markScanTried(scan.scan_uid, 'Needs a decision');
+        undecided += 1;
+      } else {
+        await this.store.markScanTried(
+          scan.scan_uid,
+          'Could not read this one',
+        );
+        failed += 1;
+      }
+    }
+    return { filed, undecided, failed };
+  }
+
+  /** The oldest queued photo the PC could not decide, ready to be shown. */
+  async reviewNextScan(): Promise<
+    { scanUid: string; reply: ScanResult } | null
+  > {
+    const [scan] = await this.store.pendingScans();
+    if (!scan) return null;
+    return { scanUid: scan.scan_uid, reply: await identifyPhoto(this.scanClient, scan.image) };
+  }
+
+  /** A human decided. File it and let the photo go. */
+  async fileQueuedScan(
+    scanUid: string,
+    candidate: { printing_id: string; name: string },
+    finish: string,
+  ): Promise<void> {
+    const [scan] = (await this.store.pendingScans())
+      .filter((s) => s.scan_uid === scanUid);
+    await this.addCard({
+      printing_id: candidate.printing_id,
+      card_name: candidate.name,
+      finish,
+      collection_uid: scan?.collection_uid ?? '',
+      also_collection_uids: scan?.also_uids ?? [],
+    });
+    await this.store.dropScan(scanUid);
+  }
+
+  /** Give up on one. The picture goes; nothing is filed. */
+  async discardQueuedScan(scanUid: string): Promise<void> {
+    await this.store.dropScan(scanUid);
   }
 
   /**
@@ -896,11 +1097,12 @@ export function buildAppState(
   uuid: () => string,
   fetchImpl?: typeof fetch,
   decks?: DeckStore,
+  textReader?: TextReader,
 ): AppState {
   const client = new DesktopClient(pairing, fetchImpl ? { fetchImpl } : {});
   // The engine needs the deck store to APPLY deck events; without one it
   // remembers them and does nothing, which is recoverable but means a deck
   // built on the PC never appears here.
   const engine = new SyncEngine(store, client, device, uuid, decks);
-  return new AppState(store, engine, client, decks);
+  return new AppState(store, engine, client, decks, textReader);
 }
