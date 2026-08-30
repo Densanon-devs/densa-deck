@@ -30,7 +30,9 @@ import { AppState, buildAppState } from './src/lib/app-state.ts';
 import type { AppSnapshot } from './src/lib/app-state.ts';
 import type { StackRow } from './src/lib/store.ts';
 import { cameBackToForeground } from './src/lib/permission.ts';
-import type { Phase } from './src/lib/permission.ts';
+// Aliased: this file already has a `Phase`, and it means something
+// completely different — which half of the app is on screen.
+import type { Phase as ForegroundPhase } from './src/lib/permission.ts';
 import { describeConnection } from './src/lib/status.ts';
 import type { Crash } from './src/lib/crash.ts';
 import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
@@ -144,16 +146,21 @@ function Shell() {
    * to sit in, not an error to report.
    */
   useEffect(() => {
-    const phase = { current: 'active' as Phase };
+    // There is nothing to sync until pairing has produced an AppState, and
+    // it lives on the phase rather than in a variable of its own.
+    const ready = phase.kind === 'ready' ? phase.state : null;
+    if (!ready) return;
+
+    const last = { current: 'active' as ForegroundPhase };
     const subscription = ForegroundState.addEventListener('change', (next) => {
-      const previous = phase.current;
-      phase.current = next as Phase;
-      if (cameBackToForeground(previous, next as Phase)) {
-        void state.sync().catch(() => undefined);
+      const previous = last.current;
+      last.current = next as ForegroundPhase;
+      if (cameBackToForeground(previous, next as ForegroundPhase)) {
+        void ready.sync().catch(() => undefined);
       }
     });
     return () => subscription.remove();
-  }, [state]);
+  }, [phase]);
 
   useEffect(() => {
     let live = true;

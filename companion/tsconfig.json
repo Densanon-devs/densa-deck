@@ -17,6 +17,8 @@
     "allowImportingTsExtensions": true
   },
   "include": [
+    "App.tsx",
+    "index.js",
     "src/**/*",
     "tests/**/*"
   ]
