@@ -542,6 +542,28 @@ Mainboard:
               Add automatically when the match is certain
             </label>
           </div>
+
+          <!--
+            Where the run goes.
+
+            Two controls because they are two different things, and one
+            control pretending to be both is how you end up owning four of a
+            card you scanned once. A card is FILED in exactly one place — the
+            stack lives there — and TAGGED into as many lists as you like,
+            because a list is a filter and filters overlap. One pass over a
+            box is usually several answers at once: these are mine, these are
+            for the Modern deck, these are going in the sale binder.
+          -->
+          <div class="filter-group">
+            <label class="filter-label">File into</label>
+            <select id="scan-collection" class="scan-collection"></select>
+            <label class="filter-label scan-tags-label">Also tag as</label>
+            <div id="scan-tags" class="scan-tags"></div>
+            <p class="subtle scan-tags-hint">
+              Tagging never moves a card or counts it twice — the lists just
+              mention it.
+            </p>
+          </div>
         </div>
 
         <div class="panel scan-result-col">

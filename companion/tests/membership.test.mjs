@@ -206,3 +206,110 @@ describe('lists do not outlive their cards', () => {
                      'cleared cards leave no lists behind');
   });
 });
+
+describe('tagging at scan time', () => {
+  /**
+   * One pass over a box is usually several answers at once: these are mine,
+   * these are for the Modern deck, these are going in the sale binder. Scan
+   * time is the only cheap moment to say so — afterwards the cards are back
+   * in the box and the knowledge is gone.
+   *
+   * All of it offline on purpose. Scanning a box happens where the box is,
+   * which is rarely next to the PC.
+   */
+  async function scanned(extras, quantity = 1) {
+    const store = new LocalStore(new MemoryDatabase());
+    await store.init();
+    const state = buildAppState(
+      store,
+      { baseUrl: 'http://100.64.0.1:8792', token: 't' },
+      'phone-test',
+      () => `id-${(seq += 1)}`,
+      () => Promise.reject(new Error('offline on purpose')),
+    );
+    await state.addCard({ ...card, quantity, also_collection_uids: extras });
+    return { store, state };
+  }
+
+  test('a card scanned into two extra lists is in both', async () => {
+    const { state } = await scanned([SET, DECK]);
+    const [stack] = await state.cards();
+    const lists = await state.listsFor(stack.stack_key);
+    assert.ok(lists.includes(SET), lists);
+    assert.ok(lists.includes(DECK), lists);
+  });
+
+  test('and it is still ONE card', async () => {
+    // The whole hazard. A stack is keyed by the list it lives in, so filing
+    // it once per list would claim you own three of a card you scanned once.
+    const { state } = await scanned([SET, DECK]);
+    const stacks = await state.cards();
+    assert.equal(stacks.length, 1, `${stacks.length} stacks from one scan`);
+    assert.equal(stacks[0].quantity, 1);
+  });
+
+  test('the list it is filed in is not tagged again', async () => {
+    // Measured in QUEUED EVENTS, not in the local list: adding a membership
+    // twice is idempotent locally, so it would hide the extra work. Ticking
+    // the filing list is a reasonable thing for a UI to do, and it must cost
+    // the desktop nothing.
+    const both = await scanned([DEFAULT_COLLECTION_UID, SET]);
+    const one = await scanned([SET]);
+    assert.equal(await both.state.pendingCount(),
+      await one.state.pendingCount(),
+      'tagging the list it is already filed in queued extra work');
+    const [stack] = await both.state.cards();
+    assert.ok((await both.state.listsFor(stack.stack_key)).includes(SET));
+  });
+
+  test('scanning with no extras behaves exactly as before', async () => {
+    const { state } = await scanned([]);
+    const stacks = await state.cards();
+    assert.equal(stacks.length, 1);
+    assert.equal(stacks[0].quantity, 1);
+  });
+
+  test('taking one copy back out does not untag the rest', async () => {
+    // The OTHER copies are still in those lists. A slip of the finger must
+    // not quietly empty them.
+    //
+    // Two copies deliberately: undoing the last one removes the card
+    // itself, and a list is right to stop mentioning a card you no longer
+    // own. That is the cascade, not this.
+    const { state } = await scanned([SET], 2);
+    const [stack] = await state.cards();
+    await state.addCard({ ...card, quantity: -1, also_collection_uids: [SET] });
+
+    const lists = await state.listsFor(stack.stack_key);
+    assert.ok(lists.includes(SET), 'undoing one copy emptied the list');
+    const [after] = await state.cards();
+    assert.equal(after.quantity, 1);
+  });
+
+  test('and undoing queues no tag of its own', async () => {
+    // Taking a copy out is not a statement about lists. Sending one would
+    // have the desktop re-apply a tag on the strength of a removal.
+    const { state } = await scanned([SET], 2);
+    const before = await state.pendingCount();
+    await state.addCard({ ...card, quantity: -1, also_collection_uids: [SET] });
+    assert.equal(await state.pendingCount(), before + 1,
+      'undoing one copy queued a membership as well as the removal');
+  });
+
+  test('but the last copy leaving takes its memberships with it', async () => {
+    // A list that mentions a card you do not own is a list that lies.
+    const { state } = await scanned([SET], 1);
+    const [stack] = await state.cards();
+    await state.addCard({ ...card, quantity: -1 });
+
+    assert.deepEqual(await state.listsFor(stack.stack_key), []);
+  });
+
+  test('the tags are queued for the desktop, not just kept locally', async () => {
+    // A tag that never syncs is a list that only exists on one device.
+    const { state } = await scanned([SET, DECK]);
+    const pending = await state.pendingCount();
+    assert.ok(pending >= 3,
+      `expected the add plus two tags to be queued, saw ${pending}`);
+  });
+});

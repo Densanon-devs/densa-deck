@@ -77,6 +77,11 @@ class TestTheSourceIcons:
         folder = RES / f"mipmap-{density}"
         assert not (folder / "ic_launcher.webp").exists()
         assert not (folder / "ic_launcher_round.webp").exists()
+        # The foreground too, and it is the one that actually bit: a
+        # non-clean prebuild wrote ic_launcher_foreground.webp beside the
+        # generated .png and AGP failed the release build on it. Checking
+        # only the other two let that through.
+        assert not (folder / "ic_launcher_foreground.webp").exists()
 
     def test_the_foreground_keeps_clear_of_the_mask(self):
         """Only the middle 66/108 of an adaptive icon survives every mask.

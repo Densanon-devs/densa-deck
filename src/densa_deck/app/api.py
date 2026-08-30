@@ -1872,6 +1872,58 @@ class AppApi:
         """Every list one stack appears in. Drives the desktop's Lists panel."""
         return self._get_collection_store().collections_for_item(int(item_id))
 
+    def _tag_into(self, item_id: int, home_id, also) -> list[str]:
+        """Put one already-filed stack into further lists.
+
+        Tagging, NOT filing. A stack is keyed by which collection it lives in,
+        so filing the same card a second time would mint a SECOND stack and
+        you would own two of a card you scanned once. Memberships are the
+        layer that exists for this: the card never moves, several lists just
+        mention it.
+
+        The home list is skipped rather than refused — `add_copies` has
+        already put the card in it, and asking for it again is a reasonable
+        thing for a UI to do when the same box is ticked in two controls.
+
+        Returns the uids actually tagged, so a caller can say what happened
+        instead of implying more than it did. Never raises: a tag that fails
+        is a worse list, not a lost card, and it must not fail the scan.
+        """
+        store = self._get_collection_store()
+        wanted = []
+        for raw in (also or []):
+            try:
+                cid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if cid > 0 and cid not in wanted:
+                wanted.append(cid)
+        if not wanted:
+            return []
+
+        # None means "the default one", and it has to be resolved before the
+        # comparison or the default would be tagged as though it were extra.
+        try:
+            home = (int(home_id) if home_id is not None
+                    else store.default_collection_id())
+        except Exception:
+            home = None
+
+        tagged = []
+        for cid in wanted:
+            if cid == home:
+                continue
+            try:
+                uid = store.collection_uid(cid)
+                if not uid:
+                    continue                    # a list that no longer exists
+                if store.add_to_collection(int(item_id), cid):
+                    self._log_membership(int(item_id), uid, True)
+                tagged.append(uid)
+            except Exception as exc:
+                self._note_sync_failure("scan-tag", exc)
+        return tagged
+
     @_safe
     def collection_add_to(self, item_id: int, collection_uid: str) -> dict:
         """Put a stack in a collection without taking it out of any other.
@@ -5550,12 +5602,22 @@ class AppApi:
         location: str = "",
         confidence: str = "manual",
         collection_id: int | None = None,
+        also_collection_ids: list | None = None,
     ) -> dict:
         """Add a scanned card and update the running session totals.
 
         `collection_id` says which named collection the run is filing into.
         Omitted, it lands in the default one — a scan must never fail for want
         of a grouping decision.
+
+        `also_collection_ids` are further lists to TAG it into. One pass over
+        a box is often several answers at once — these are mine, these are for
+        the Modern deck, these are going in the sale binder — and doing it at
+        scan time is the only cheap moment: afterwards the cards are back in
+        the box and the knowledge is gone.
+
+        Filed once, tagged many. Filing it into each would mint a separate
+        stack per list and you would own four of a card you scanned once.
         """
         from densa_deck.collection.scanner import ScanCandidate, ScanResult
         db = self._get_db()
@@ -5564,13 +5626,14 @@ class AppApi:
             return {"ok": False, "error": "Unknown printing.", "error_type": "NotFound"}
 
         store = self._get_collection_store()
-        store.add_copies(
+        item = store.add_copies(
             printing_id, card_name or printing["name"],
             quantity=1, oracle_id=printing.get("oracle_id", ""),
             finish=finish, condition=condition, location=location,
             collection_id=None if collection_id is None else int(collection_id),
             reason="scan",
         )
+        tagged = self._tag_into(item.item_id, collection_id, also_collection_ids)
         self._log_stack_delta(
             printing_id, card_name or printing["name"], 1,
             collection_id=collection_id, finish=finish, condition=condition,
@@ -5584,13 +5647,15 @@ class AppApi:
             confidence=confidence,
         )
         entry = session.record(result, added=True, finish=finish)
-        return {"entry": entry, "session": session.to_dict()}
+        return {"entry": entry, "session": session.to_dict(),
+                "tagged_into": tagged}
 
     @_safe
     def scan_adjust(self, printing_id: str, delta: int = 1,
                     finish: str = "nonfoil", condition: str = "NM",
                     location: str = "", card_name: str = "",
-                    collection_id: int | None = None) -> dict:
+                    collection_id: int | None = None,
+                    also_collection_ids: list | None = None) -> dict:
         """Add or take back one copy of a card already filed this run.
 
         Boxes contain playsets, and hands slip. Rescanning the same card four
@@ -5617,13 +5682,17 @@ class AppApi:
         name = card_name or printing["name"]
 
         if delta > 0:
-            store.add_copies(
+            item = store.add_copies(
                 printing_id, name, quantity=1,
                 oracle_id=printing.get("oracle_id", ""), finish=finish,
                 condition=condition, location=location,
                 collection_id=None if collection_id is None else int(collection_id),
                 reason="scan",
             )
+            # "Four of these" has to land in the same lists the first one did,
+            # or the playset is split across groups by an accident of which
+            # button was pressed.
+            self._tag_into(item.item_id, collection_id, also_collection_ids)
             self._log_stack_delta(
                 printing_id, name, 1, collection_id=collection_id,
                 finish=finish, condition=condition, location=location,

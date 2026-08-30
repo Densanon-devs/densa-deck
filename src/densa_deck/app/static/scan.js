@@ -184,21 +184,85 @@
     };
   }
 
+  // ----------------------------------------------------------- collections
+
+  /**
+   * Fill the "file into" list and the "also tag" boxes.
+   *
+   * Both are rebuilt from the same reply, and the filing target is excluded
+   * from the tag boxes: the card is already in whatever it is filed into, so
+   * offering it as an extra tag would be offering a no-op.
+   *
+   * Choices survive a refill. Scanning a box is a long job and a collection
+   * created halfway through must not silently reset where the rest of the
+   * box is going.
+   */
+  async function loadCollections() {
+    const home = e("scan-collection");
+    const tags = e("scan-tags");
+    if (!home || !tags) return;
+
+    const wasHome = home.value;
+    const wasTagged = new Set(pickedTags());
+
+    let list = [];
+    try {
+      const r = await callApi("list_collections");
+      list = (r && r.collections) || [];
+    } catch (err) {
+      return;                  // scanning still works; it lands in the default
+    }
+
+    home.innerHTML = list.map(c =>
+      `<option value="${escape(String(c.collection_id))}">${escape(c.name)}</option>`
+    ).join("");
+    if (wasHome && list.some(c => String(c.collection_id) === wasHome)) {
+      home.value = wasHome;
+    }
+
+    const others = list.filter(c => String(c.collection_id) !== home.value);
+    tags.innerHTML = others.length
+      ? others.map(c => {
+          const id = escape(String(c.collection_id));
+          const on = wasTagged.has(String(c.collection_id)) ? " checked" : "";
+          return `<label><input type="checkbox" data-tag="${id}"${on}>` +
+                 `${escape(c.name)}</label>`;
+        }).join("")
+      : `<span class="subtle scan-tags-empty">No other lists yet — make one ` +
+        `in the Collection tab.</span>`;
+  }
+
+  /** The collection ids ticked in the "also tag" boxes. */
+  function pickedTags() {
+    return Array.from(
+      document.querySelectorAll("#scan-tags input[data-tag]:checked"),
+      el => el.dataset.tag);
+  }
+
   // ---------------------------------------------------------------- commit
 
   async function commit(candidate, finish) {
     const condition = e("scan-condition").value || "NM";
     const location = (e("scan-location").value || "").trim();
+    const home = e("scan-collection");
+    const homeId = home && home.value ? Number(home.value) : null;
+    const tags = pickedTags().map(Number);
     let r;
     try {
       r = await callApi("scan_commit", candidate.printing_id, candidate.name,
                         finish, condition, location,
-                        (state.lastResult && state.lastResult.confidence) || "manual");
+                        (state.lastResult && state.lastResult.confidence) || "manual",
+                        homeId, tags);
     } catch (err) {
       toast("Add failed: " + err.message, "error");
       return;
     }
-    toast(`Added ${candidate.name} (${finish})`, "success");
+    // Says how many lists it went into, because a scanner that files
+    // silently is one you have to go and check.
+    const extra = (r && r.tagged_into && r.tagged_into.length)
+      ? ` — tagged into ${r.tagged_into.length} more`
+      : "";
+    toast(`Added ${candidate.name} (${finish})${extra}`, "success");
     renderSession(r.session);
     // Clear for the next card — continuous scanning is the point.
     e("scan-text").value = "";
@@ -341,12 +405,20 @@
 
     const appraiseBtn = e("scan-appraise-btn");
     if (appraiseBtn) appraiseBtn.addEventListener("click", appraiseSession);
+
+    // Where it files changes what is worth tagging: the card is already in
+    // whatever it is filed into, so that list must drop out of the boxes.
+    const home = e("scan-collection");
+    if (home) home.addEventListener("change", () => { void loadCollections(); });
   }
 
   async function activate() {
     wireOnce();
     await refreshCapabilities();
     await refreshSession();
+    // Refilled every time the tab opens, so a list made halfway through a
+    // box is available for the rest of it.
+    await loadCollections();
     const text = e("scan-text");
     if (text) text.focus();
   }

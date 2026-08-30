@@ -15,6 +15,7 @@ import type { CameraSettings } from './camera-settings.ts';
 import { DesktopClient } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
+import { stackKey } from './protocol.ts';
 import type {
   BuiltDeck,
   CardDetail,
@@ -399,19 +400,54 @@ export class AppState {
     oracle_id?: string;
     location?: string;
     quantity?: number;
+    /**
+     * Further lists to TAG it into, beyond the one it is filed in.
+     *
+     * Filed once, tagged many. Filing it into each would mint a separate
+     * stack per list and you would own four of a card you scanned once —
+     * a stack is keyed by the collection it lives in.
+     */
+    also_collection_uids?: string[];
   }): Promise<void> {
-    await this.engine.editQuantity({
+    const stack = {
       printing_id: card.printing_id,
       card_name: card.card_name,
-      oracle_id: card.oracle_id ?? '',
       finish: card.finish ?? 'nonfoil',
       condition: card.condition ?? 'NM',
       language: 'en',
       location: card.location ?? '',
+    };
+    await this.engine.editQuantity({
+      ...stack,
+      oracle_id: card.oracle_id ?? '',
       collection_uid: card.collection_uid ?? '',
       reason: 'phone-scan',
       delta: card.quantity ?? 1,
     });
+
+    // Tags go in as their own events, addressed by the card's natural key,
+    // so a box scanned with no signal still lands in the right lists once
+    // the phone is back in range.
+    //
+    // Only on the way IN. Taking a copy back out (delta < 0) must not
+    // untag the stack: the other copies are still in those lists, and a
+    // slip of the finger should not quietly empty them.
+    const delta = card.quantity ?? 1;
+    if (delta > 0) {
+      // The local key includes WHERE it is filed — that is what makes two
+      // copies of one card in two collections two stacks — so it cannot be
+      // built from the natural key the sync event carries.
+      const key = stackKey({ ...stack, collection_uid: card.collection_uid ?? '' });
+      for (const uid of card.also_collection_uids ?? []) {
+        if (!uid || uid === card.collection_uid) continue;
+        // Written locally AND queued. Queuing alone would leave the card
+        // looking untagged until a sync round-trip, which is exactly the
+        // thing that has not happened yet when you are scanning a box in
+        // somebody's garage.
+        await this.store.addMembership(key, uid);
+        await this.engine.recordMembership(stack, uid, true);
+      }
+    }
     await this.refreshPending();
   }
 

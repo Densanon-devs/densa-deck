@@ -549,3 +549,105 @@ class TestSingleBannerSurface:
     def test_size_total_is_the_sum(self, api):
         d = _data(api.get_content_status())
         assert d["total_mb"] == sum(i.get("size_mb") or 0 for i in d["items"])
+
+
+class TestScanningIntoSeveralLists:
+    """One pass over a box, several answers at once.
+
+    These are mine, these are for the Modern deck, these are going in the
+    sale binder. Scan time is the only cheap moment to say so — afterwards
+    the cards are back in the box and the knowledge is gone.
+    """
+
+    def _lists(self, api, *names):
+        store = api._get_collection_store()
+        return [store.create_collection(n)["collection_id"] for n in names]
+
+    def _only_stack(self, api):
+        items = _data(api.list_collection())["items"]
+        assert len(items) == 1, f"expected one stack, got {len(items)}"
+        return items[0]
+
+    def _names_for(self, api, item_id):
+        store = api._get_collection_store()
+        return {c["name"] for c in store.collections_for_item(int(item_id))}
+
+    def test_a_card_scanned_into_three_lists_is_still_one_card(self, api_with_printings):
+        """The whole hazard. A stack is keyed by the list it lives in, so
+        filing it three times would mint three stacks and claim you own
+        three of a card you scanned once."""
+        api = api_with_printings
+        modern, sale = self._lists(api, "Modern binder", "For sale")
+
+        _data(api.scan_commit(CMM, "Sol Ring", also_collection_ids=[modern, sale]))
+
+        stack = self._only_stack(api)
+        assert stack["quantity"] == 1, stack
+
+    def test_and_it_is_in_all_of_them(self, api_with_printings):
+        api = api_with_printings
+        modern, sale = self._lists(api, "Modern binder", "For sale")
+        _data(api.scan_commit(CMM, "Sol Ring", also_collection_ids=[modern, sale]))
+
+        names = self._names_for(api, self._only_stack(api)["item_id"])
+        assert {"Modern binder", "For sale"} <= names, names
+
+    def test_the_reply_says_which_lists_it_went_into(self, api_with_printings):
+        """A scanner that files silently is one you have to go and check."""
+        api = api_with_printings
+        modern, sale = self._lists(api, "Modern binder", "For sale")
+        d = _data(api.scan_commit(CMM, "Sol Ring",
+                                  also_collection_ids=[modern, sale]))
+        assert len(d["tagged_into"]) == 2, d.get("tagged_into")
+
+    def test_naming_the_home_list_again_does_not_double_tag(self, api_with_printings):
+        """Two controls can reasonably tick the same box."""
+        api = api_with_printings
+        store = api._get_collection_store()
+        home = store.default_collection_id()
+        modern, = self._lists(api, "Modern binder")
+
+        d = _data(api.scan_commit(CMM, "Sol Ring",
+                                  also_collection_ids=[home, modern]))
+        assert len(d["tagged_into"]) == 1, d.get("tagged_into")
+        assert self._only_stack(api)["quantity"] == 1
+
+    def test_a_list_that_no_longer_exists_does_not_fail_the_scan(self, api_with_printings):
+        """The card is in your hand. Losing it over a stale checkbox would
+        be the worst possible trade."""
+        api = api_with_printings
+        d = _data(api.scan_commit(CMM, "Sol Ring",
+                                  also_collection_ids=[9999, "", None]))
+        assert self._only_stack(api)["quantity"] == 1
+        assert d["tagged_into"] == []
+
+    def test_scanning_none_behaves_exactly_as_before(self, api_with_printings):
+        api = api_with_printings
+        d = _data(api.scan_commit(CMM, "Sol Ring"))
+        assert self._only_stack(api)["quantity"] == 1
+        assert d["tagged_into"] == []
+
+    def test_a_second_copy_lands_in_the_same_lists(self, api_with_printings):
+        '''"Four of these" must not split a playset across groups by an
+        accident of which button was pressed.'''
+        api = api_with_printings
+        modern, = self._lists(api, "Modern binder")
+
+        _data(api.scan_commit(CMM, "Sol Ring", also_collection_ids=[modern]))
+        _data(api.scan_adjust(CMM, 1, card_name="Sol Ring",
+                              also_collection_ids=[modern]))
+
+        stack = self._only_stack(api)
+        assert stack["quantity"] == 2, stack
+        assert "Modern binder" in self._names_for(api, stack["item_id"])
+
+    def test_the_phone_is_told_about_the_tags(self, api_with_printings):
+        """A tag that never syncs is a list that only exists on one device."""
+        from densa_deck.sync.log import KIND_MEMBERSHIP
+        api = api_with_printings
+        modern, = self._lists(api, "Modern binder")
+        _data(api.scan_commit(CMM, "Sol Ring", also_collection_ids=[modern]))
+
+        events, _ = api._get_sync().log.since(0)
+        kinds = [e.kind for e in events]
+        assert KIND_MEMBERSHIP in kinds, kinds

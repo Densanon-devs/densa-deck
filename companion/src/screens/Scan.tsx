@@ -86,6 +86,17 @@ export function ScanScreen({ state }: Props) {
   // between mounting and the stored target arriving would go nowhere
   // nameable.
   const [target, setTarget] = useState(DEFAULT_COLLECTION_UID);
+  /**
+   * Further lists every scanned card is tagged into.
+   *
+   * Separate from `target` because they are different things: a card is
+   * FILED in one place and TAGGED into as many lists as you like. One pass
+   * over a box is usually several answers at once — these are mine, these
+   * are for the Modern deck, these are going in the sale binder — and scan
+   * time is the only cheap moment to say so. Afterwards the cards are back
+   * in the box and the knowledge is gone.
+   */
+  const [alsoTag, setAlsoTag] = useState<string[]>([]);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
   // screen afterwards, because a wrong card is not always obvious in the
@@ -144,6 +155,9 @@ export function ScanScreen({ state }: Props) {
     (uid: string) => {
       if (!uid) return;
       setTarget(uid);
+      // The card is already in whatever it is filed into, so that list
+      // drops out of the extras rather than sitting there as a no-op.
+      setAlsoTag((tags) => tags.filter((t) => t !== uid));
       void state
         .rememberScanTarget(uid)
         .catch(reporting('remembering where to scan', setProblem));
@@ -201,13 +215,18 @@ export function ScanScreen({ state }: Props) {
         card_name: candidate.name,
         finish,
         collection_uid: target,
+        also_collection_uids: alsoTag,
       });
-      setFlash({ name: candidate.name, copy, verb: 'ADDED' });
+      setFlash({
+        name: candidate.name,
+        copy,
+        verb: alsoTag.length ? `ADDED +${alsoTag.length}` : 'ADDED',
+      });
       setLastAdded({ candidate, finish });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
-    [state, target, mode],
+    [state, target, mode, alsoTag],
   );
 
   /** Answer "you own this two ways" by naming the stack. */
@@ -465,6 +484,45 @@ export function ScanScreen({ state }: Props) {
         }}
         showCounts={false}
       />
+
+      {/*
+        Tagging never moves a card or counts it twice — the lists just
+        mention it. Offered only when filing: tag mode already targets one
+        group, and a second tagging control there would be two answers to
+        the same question.
+      */}
+      {mode === 'add' && shelves.length > 1 ? (
+        <View style={styles.alsoRow}>
+          <Text style={styles.alsoLabel}>Also tag</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.alsoChips}>
+              {shelves
+                .filter((c) => c.collection_uid !== target)
+                .map((c) => {
+                  const on = alsoTag.includes(c.collection_uid);
+                  return (
+                    <Pressable
+                      key={c.collection_uid}
+                      style={[styles.chip, on && styles.chipOn]}
+                      onPress={() =>
+                        setAlsoTag((tags) =>
+                          on
+                            ? tags.filter((t) => t !== c.collection_uid)
+                            : [...tags, c.collection_uid],
+                        )
+                      }
+                    >
+                      <Text style={[styles.chipText, on && styles.chipTextOn]}>
+                        {c.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+            </View>
+          </ScrollView>
+        </View>
+      ) : null}
+
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       {/*
@@ -679,6 +737,9 @@ const styles = StyleSheet.create({
   content: { padding: 14, gap: 10, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   target: { color: '#8a8f9c', fontSize: 13, flex: 1 },
+  alsoRow: { gap: 6, marginTop: 8 },
+  alsoLabel: { color: '#8a8f9c', fontSize: 12 },
+  alsoChips: { flexDirection: 'row', gap: 6 },
   chip: {
     borderColor: '#2d3142',
     borderWidth: 1,

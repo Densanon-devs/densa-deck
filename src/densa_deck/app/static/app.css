@@ -2902,3 +2902,25 @@ code {
 
 .editor-legality ul { margin: 4px 0 0; padding-left: 1.1rem; }
 .editor-legality li { padding: 1px 0; }
+
+
+/* Where a scan files, and what else it is tagged into. */
+.scan-collection { width: 100%; }
+.scan-tags-label { margin-top: 10px; }
+.scan-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  /* Bounded: a shop with forty lists must not push the Identify button off
+     the panel, which is the button the whole screen exists for. */
+  max-height: 132px;
+  overflow-y: auto;
+}
+.scan-tags label {
+  align-items: center;
+  display: flex;
+  font-size: 13px;
+  gap: 6px;
+}
+.scan-tags-hint { margin-top: 6px; }
+.scan-tags-empty { font-size: 13px; }
