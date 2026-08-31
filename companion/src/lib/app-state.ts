@@ -77,6 +77,20 @@ const CATALOGUE_CURSOR_KEY = 'catalogue.cursor';
 // two are different lengths and either can be interrupted alone.
 const ORACLE_CURSOR_KEY = 'oracle.cursor';
 
+/**
+ * What free keeps, for a phone with no desktop to ask.
+ *
+ * Mirrors `tiers.py`. Duplicated rather than fetched because the whole
+ * point is that there is nothing to fetch from — and a standalone phone
+ * that guessed "unlimited" would quietly hand out what the desktop sells.
+ */
+const FREE_ALLOWANCES = {
+  saved_decks: 3,
+  suggestions: 2,
+  sets_tracked: 3,
+  collections: 3,
+};
+
 export class AppState {
   private store: LocalStore;
   private engine: SyncEngine;
@@ -92,8 +106,13 @@ export class AppState {
 
   private readonly textReader: TextReader;
 
+  /** Running with no desktop, ever — not merely out of range right now. */
+  private readonly standalone: boolean;
+
   constructor(store: LocalStore, engine: SyncEngine, client: DesktopClient,
-              decks?: DeckStore, textReader: TextReader = deviceTextReader) {
+              decks?: DeckStore, textReader: TextReader = deviceTextReader,
+              standalone = false) {
+    this.standalone = standalone;
     this.store = store;
     this.engine = engine;
     this.client = client;
@@ -429,10 +448,26 @@ export class AppState {
    */
   async tier(refresh = false): Promise<TierSnapshot> {
     if (!refresh && this._tier) return this._tier;
+    // A phone that has never met a desktop is FREE, and there is nothing
+    // uncertain about it: nobody bought Pro for it, there is no licence to
+    // honour, and no desktop will ever answer. Falling back to Pro here
+    // handed a standalone phone unlimited everything.
+    if (this.standalone) {
+      this._tier = {
+        tier: 'free',
+        is_pro: false,
+        allowances: FREE_ALLOWANCES,
+      };
+      return this._tier;
+    }
     try {
       this._tier = await this.client.call<TierSnapshot>('tier', {});
     } catch {
-      this._tier = { tier: 'pro', is_pro: true, allowances: {} };
+      // PAIRED but out of range is a different question, and the answer
+      // stays generous: a wifi drop must not lock a paying user out of
+      // features they own. The last answer the desktop gave wins if there
+      // is one; Pro is the assumption only when there is not.
+      this._tier ??= { tier: 'pro', is_pro: true, allowances: {} };
     }
     return this._tier;
   }
@@ -1440,5 +1475,7 @@ export function buildAppState(
   // remembers them and does nothing, which is recoverable but means a deck
   // built on the PC never appears here.
   const engine = new SyncEngine(store, client, device, uuid, decks);
-  return new AppState(store, engine, client, decks, textReader);
+  // An empty address is what "no desktop" is spelled as; see App.tsx.
+  return new AppState(store, engine, client, decks, textReader,
+                      !pairing.baseUrl);
 }

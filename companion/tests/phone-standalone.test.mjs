@@ -256,3 +256,66 @@ describe('browsing every card, with no PC', () => {
     assert.equal(asked, 1);
   });
 });
+
+describe('a standalone phone is on the free tier', () => {
+  /**
+   * Nobody bought Pro for a phone that has never met a desktop, there is
+   * no licence to honour, and no desktop will ever answer. The unreachable
+   * fallback used to say Pro — which is right for a PAIRED phone whose
+   * wifi dropped, and wrong here: it handed a standalone install unlimited
+   * everything.
+   */
+  async function alone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    return buildAppState(
+      store,
+      // An empty address is how "no desktop" is spelled.
+      { baseUrl: '', token: '' },
+      'phone-1',
+      testUuid,
+      async () => { throw new Error('there is no desktop'); },
+      new DeckStore(db),
+    );
+  }
+
+  test('it reports free rather than assuming Pro', async () => {
+    const snap = await (await alone()).tier();
+    assert.equal(snap.tier, 'free');
+    assert.equal(snap.is_pro, false);
+  });
+
+  test('and knows the free allowances without asking anyone', async () => {
+    const snap = await (await alone()).tier();
+    assert.equal(snap.allowances.collections, 3);
+    assert.equal(snap.allowances.saved_decks, 3);
+  });
+
+  test('so the group limit actually bites with no PC', async () => {
+    // The failure this prevents: a standalone phone quietly handing out
+    // what the desktop sells.
+    const state = await alone();
+    await state.tier();
+    for (let n = 0; n < 3; n += 1) await state.newCollection(`Box ${n}`);
+    await assert.rejects(() => state.newCollection('Box 4'),
+      /Pro keeps as many/);
+  });
+
+  test('a PAIRED phone out of range is still treated as Pro', async () => {
+    // Different question, and the answer stays generous: a wifi drop must
+    // not lock a paying user out of features they own.
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store,
+      { baseUrl: 'https://100.64.0.1:8791', token: 't' },
+      'phone-1',
+      testUuid,
+      async () => { throw new Error('out of range'); },
+      new DeckStore(db),
+    );
+    assert.equal((await state.tier()).is_pro, true);
+  });
+});
