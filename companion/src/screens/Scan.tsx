@@ -445,9 +445,24 @@ export function ScanScreen({ state }: Props) {
         );
       } catch (err) {
         scanner.current.failed();
-        // The phone could not place it and the PC is not there either.
-        // The card in your hand is still real, so the picture is kept for
-        // the PC rather than discarded.
+
+        // On a phone with no PC there is nobody to keep it FOR.
+        //
+        // Queueing here promised "it files itself when you are back in
+        // range" to somebody who has no range to come back to: the queue
+        // would never drain, the photo would sit for ever, and a box
+        // scanned in bad light would quietly become four hundred stored
+        // pictures. If this phone could not read the card, nothing else
+        // is going to — so say so, and let them take another go at it
+        // while the card is still in their hand.
+        if (state.soloForever) {
+          setStatus('Could not read that one. Try more light, fill more of '
+                    + 'the frame, or type the name in from the Cards tab.');
+          return;
+        }
+
+        // There IS a PC, just not right now. The card in your hand is
+        // still real, so the picture is kept for it rather than discarded.
         try {
           // Shrunk before storing, never before sending: the live path
           // hands the PC everything it could have had.
@@ -777,16 +792,33 @@ export function ScanScreen({ state }: Props) {
       {queued > 0 ? (
         <Pressable
           style={styles.queueBar}
-          disabled={draining || offline}
-          onPress={() => void drain()}
+          disabled={draining || (offline && !state.soloForever)}
+          onPress={() => {
+            // With no PC these can never be read, so the only thing left
+            // to do with them is let them go.
+            if (state.soloForever) {
+              void state.discardQueuedScans()
+                .then(() => state.queuedScans().then(setQueued))
+                .catch(() => {});
+              return;
+            }
+            void drain();
+          }}
         >
           <Text style={styles.queueText}>
-            {queued} card{queued === 1 ? '' : 's'} waiting for your PC
+            {state.soloForever
+              // No "waiting for your PC" on a phone that has none — the
+              // wait would never end.
+              ? `${queued} picture${queued === 1 ? '' : 's'} from before that `
+                + 'only a PC could read'
+              : `${queued} card${queued === 1 ? '' : 's'} waiting for your PC`}
           </Text>
           <Text style={styles.queueAction}>
             {draining
               ? 'Filing…'
-              : offline ? 'Out of range' : 'File them now'}
+              : state.soloForever
+                ? 'Discard'
+                : offline ? 'Out of range' : 'File them now'}
           </Text>
         </Pressable>
       ) : null}

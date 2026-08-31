@@ -731,3 +731,69 @@ describe('the deck limit holds with no PC', () => {
     assert.equal((await decks.list()).length, 6);
   });
 });
+
+describe('nothing is kept for a PC that will never come', () => {
+  /**
+   * Seen on a real standalone phone: a scan it could not read said "No PC
+   * — kept the picture. It files itself when you are back in range."
+   *
+   * There is no range to come back to. The queue would never drain, the
+   * photo would sit for ever, and a box scanned in bad light would quietly
+   * become four hundred stored pictures. If this phone cannot read a card,
+   * nothing else is going to.
+   */
+  async function alone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      async () => { throw new Error('no PC'); }, new DeckStore(db),
+    );
+    return { store, state };
+  }
+
+  test('a standalone phone knows it is alone for good', async () => {
+    const { state } = await alone();
+    assert.equal(state.soloForever, true);
+  });
+
+  test('and a phone that is merely out of range does not', async () => {
+    // The difference the message turns on: one wait ends, the other does
+    // not.
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store, { baseUrl: 'https://100.64.0.1:8791', token: 't' }, 'phone-1',
+      testUuid, async () => { throw new Error('out of range'); },
+      new DeckStore(db),
+    );
+    assert.equal(state.soloForever, false);
+  });
+
+  test('queued pictures can be let go of', async () => {
+    // Without this they are stored for ever with no way to clear them
+    // short of wiping the app's data.
+    const { state } = await alone();
+    for (const n of ['a', 'b', 'c']) {
+      await state.queueScan(`data:image/jpeg;base64,${n}`, DEFAULT_COLLECTION_UID);
+    }
+    assert.equal(await state.discardQueuedScans(), 3);
+    assert.equal(await state.queuedScans(), 0);
+  });
+
+  test('discarding an empty queue is not an error', async () => {
+    const { state } = await alone();
+    assert.equal(await state.discardQueuedScans(), 0);
+  });
+
+  test('discarding files nothing into the collection', async () => {
+    // They were never read, so there is nothing to file — and inventing a
+    // card from an unread photo would be the worst possible outcome.
+    const { state } = await alone();
+    await state.queueScan('data:image/jpeg;base64,a', DEFAULT_COLLECTION_UID);
+    await state.discardQueuedScans();
+    assert.deepEqual(await state.cards(), []);
+  });
+});

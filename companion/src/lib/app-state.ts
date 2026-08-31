@@ -143,6 +143,17 @@ export class AppState {
   /** Running with no desktop, ever — not merely out of range right now. */
   private readonly standalone: boolean;
 
+  /**
+   * Whether there is a PC in this phone's life at all.
+   *
+   * Read by anything that would otherwise promise one. "It files itself
+   * when you are back in range" is a reasonable thing to tell someone
+   * whose PC is in the next room and a lie to someone who has none.
+   */
+  get soloForever(): boolean {
+    return this.standalone;
+  }
+
   /** Plain network access, for the one thing that is not the desktop. */
   private readonly plainFetch: typeof fetch;
 
@@ -535,6 +546,19 @@ export class AppState {
       also_collection_uids: scan?.also_uids ?? [],
     });
     await this.store.dropScan(scanUid);
+  }
+
+  /**
+   * Give up on the whole queue.
+   *
+   * For a phone with no PC, where the photos have nothing to be read by:
+   * without this they are stored for ever with no way to clear them
+   * short of clearing the app's data.
+   */
+  async discardQueuedScans(): Promise<number> {
+    const waiting = await this.store.pendingScans();
+    for (const scan of waiting) await this.store.dropScan(scan.scan_uid);
+    return waiting.length;
   }
 
   /** Give up on one. The picture goes; nothing is filed. */

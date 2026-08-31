@@ -154,10 +154,21 @@ class TestWhatReverseMustNotDo:
         paging is stable and a reversed page is the same rows backwards
         rather than a reshuffle.
 
-        Sorted by a column where all three tie — every card was added in the
-        same instant — so the tiebreaker is the only thing deciding.
+        Sorted by a column where all three tie, so the tiebreaker is the
+        only thing deciding.
+
+        The tie is forced rather than assumed. `add_copies` stamps
+        `created_at` per call, so on a slow enough machine the three
+        inserts land in different milliseconds and this passes or fails
+        depending on how busy the box is — which it did, green alone and
+        red in a full run.
         """
         store, db = env
+        with store._connect() as conn:
+            conn.execute(
+                "UPDATE collection_items SET created_at = '2026-01-01T00:00:00Z'")
+            conn.commit()
+
         for way in ("asc", "desc"):
             order = _names(store, db, sort="added", direction=way)
             assert order == sorted(order), way
