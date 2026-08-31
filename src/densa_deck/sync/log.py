@@ -58,6 +58,15 @@ KIND_DECK_DELETE = "deck-delete"
 # game, and one idempotent kind is easier to get right than two.
 KIND_DECK_GAME = "deck-game"
 
+# Something you want but do not own.
+#
+# An exact quantity, not a delta, keyed by the same four fields the desktop
+# keys its table on — card, deck, set, collector number. Quantity 0 is a
+# removal, which is how `wishlist_set` already works, so the two devices do
+# not need a separate "forget" event that could arrive out of order against
+# the add it was meant to undo.
+KIND_WISHLIST = "wishlist"
+
 # Every kind this build knows how to APPLY. Descriptive, never a gate: the
 # comment above is the rule, and an event of an unknown kind from a newer peer
 # has to be stored and forwarded rather than rejected, or an older device in
@@ -76,6 +85,7 @@ KNOWN_KINDS = frozenset({
     KIND_DECK_UPSERT,
     KIND_DECK_DELETE,
     KIND_DECK_GAME,
+    KIND_WISHLIST,
 })
 
 

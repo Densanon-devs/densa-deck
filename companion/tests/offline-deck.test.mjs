@@ -326,28 +326,31 @@ describe('naming a printing on the wishlist', () => {
     return sent;
   }
 
-  test('a picked printing is sent with the card', async () => {
+  test('a picked printing is kept with the card', async () => {
+    // Stored locally now rather than posted to the desktop — a want added
+    // in a shop must survive being in a shop — so the printing has to
+    // survive the trip into the phone's own table.
     const desktop = new FakeDesktop();
-    const sent = recording(desktop);
     const { state } = await makePhone(desktop);
+    desktop.reachable = false;
 
     await state.wishlistAdd('Lightning Bolt', 1,
       { set_code: 'lea', collector_number: '161' });
 
-    const add = sent.find((c) => c.route === 'wishlist/add');
-    assert.equal(add.payload.set_code, 'lea');
-    assert.equal(add.payload.collector_number, '161');
+    const [wish] = await state.handWishes();
+    assert.equal(wish.set_code, 'lea');
+    assert.equal(wish.collector_number, '161');
   });
 
   test('and adding without one still means any copy', async () => {
     const desktop = new FakeDesktop();
-    const sent = recording(desktop);
     const { state } = await makePhone(desktop);
+    desktop.reachable = false;
 
     await state.wishlistAdd('Lightning Bolt', 1);
 
-    const add = sent.find((c) => c.route === 'wishlist/add');
-    assert.equal(add.payload.set_code, '',
+    const [wish] = await state.handWishes();
+    assert.equal(wish.set_code, '',
       'a wish for the card got pinned to a printing');
   });
 });

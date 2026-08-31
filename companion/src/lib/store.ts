@@ -161,6 +161,43 @@ export const SCHEMA: string[] = [
   // "which printing is this". Four fields over ~105,000 printings is a few
   // megabytes, which a phone can hold; the real catalogue is 181 MB, which
   // it cannot.
+  // Things you want but do not own, added BY HAND.
+  //
+  // Distinct from the wishlist derived from your decks, which is computed
+  // from decks minus what you own and needs no storage. A hand-added want
+  // has nowhere to be derived from, so it lived only on the PC — which
+  // meant the one screen you use standing in a shop could not be added to
+  // from the shop.
+  //
+  // Keyed the four ways the desktop keys its table: card, deck, set,
+  // collector number. Naming a printing is a different want from wanting
+  // the card, so the printing is part of the key rather than a detail.
+  `CREATE TABLE IF NOT EXISTS wishlist (
+     card_name TEXT NOT NULL,
+     deck_id TEXT NOT NULL DEFAULT '',
+     set_code TEXT NOT NULL DEFAULT '',
+     collector_number TEXT NOT NULL DEFAULT '',
+     quantity INTEGER NOT NULL DEFAULT 1,
+     notes TEXT NOT NULL DEFAULT '',
+     PRIMARY KEY (card_name, deck_id, set_code, collector_number)
+   )`,
+  // What each CARD is, as opposed to which printing you are holding.
+  //
+  // The printing index answers "which printing is this"; this answers "what
+  // does it do", which is what browsing and deck building need. Seven
+  // fields over ~34,500 cards is about 9 MB — the real catalogue is 181 MB,
+  // and the difference is art URLs, prices, legality tables and the
+  // per-printing rows a phone does not need to read rules off a card.
+  `CREATE TABLE IF NOT EXISTS oracle (
+     oracle_id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     type_line TEXT NOT NULL DEFAULT '',
+     oracle_text TEXT NOT NULL DEFAULT '',
+     mana_cost TEXT NOT NULL DEFAULT '',
+     cmc REAL,
+     color_identity TEXT NOT NULL DEFAULT ''
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_oracle_name ON oracle(name)`,
   `CREATE TABLE IF NOT EXISTS catalogue (
      printing_id TEXT PRIMARY KEY,
      name TEXT NOT NULL,
@@ -242,6 +279,20 @@ export const DEFAULT_COLLECTION_UID = '00000000-0000-4000-8000-00000000d0cc';
  * sends four fields, and a phone that threw on those would strand the whole
  * download over a column it only uses for sorting.
  */
+/** A row of the oracle index as the PC sends it. */
+export type OracleRow =
+  [string, string, string?, string?, string?, (number | null)?, string?];
+
+export interface OracleCard {
+  oracle_id: string;
+  name: string;
+  type_line: string;
+  oracle_text: string;
+  mana_cost: string;
+  cmc: number | null;
+  color_identity: string;
+}
+
 export type CatalogueRow =
   [string, string, string, string, (number | null)?];
 
@@ -435,6 +486,65 @@ export class LocalStore {
     );
   }
 
+  /** Want something, or stop wanting it. Quantity 0 removes the row. */
+  async setWish(row: {
+    card_name: string;
+    deck_id?: string;
+    set_code?: string;
+    collector_number?: string;
+    quantity: number;
+    notes?: string;
+  }): Promise<void> {
+    const name = (row.card_name || '').trim();
+    if (!name) return;
+    const key = [name, row.deck_id ?? '', row.set_code ?? '',
+      row.collector_number ?? ''];
+    if (row.quantity <= 0) {
+      await this.db.run(
+        `DELETE FROM wishlist WHERE card_name = ? AND deck_id = ?
+           AND set_code = ? AND collector_number = ?`, key);
+      return;
+    }
+    await this.db.run(
+      `INSERT INTO wishlist
+         (card_name, deck_id, set_code, collector_number, quantity, notes)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(card_name, deck_id, set_code, collector_number)
+         DO UPDATE SET quantity = excluded.quantity, notes = excluded.notes`,
+      [...key, row.quantity, row.notes ?? ''],
+    );
+  }
+
+  /**
+   * Take a card off the list entirely — every printing that was on there.
+   *
+   * Not the same as setting one row to zero: that clears the name-only row
+   * and leaves a printing-level one sitting there, which reads as the
+   * button having done nothing.
+   */
+  async forgetWish(cardName: string, deckId = ''): Promise<void> {
+    const name = (cardName || '').trim().toLowerCase();
+    if (!name) return;
+    const rows = await this.db.all<{ card_name: string; deck_id: string;
+      set_code: string; collector_number: string }>('SELECT * FROM wishlist');
+    for (const r of rows) {
+      if (r.card_name.trim().toLowerCase() !== name) continue;
+      if (deckId && r.deck_id !== deckId) continue;
+      await this.db.run(
+        `DELETE FROM wishlist WHERE card_name = ? AND deck_id = ?
+           AND set_code = ? AND collector_number = ?`,
+        [r.card_name, r.deck_id, r.set_code, r.collector_number]);
+    }
+  }
+
+  /** Everything wanted by hand. */
+  async wishes(): Promise<Array<{
+    card_name: string; deck_id: string; set_code: string;
+    collector_number: string; quantity: number; notes: string;
+  }>> {
+    return this.db.all('SELECT * FROM wishlist');
+  }
+
   /** Every stack of one printing you own — one per finish/condition. */
   async stacksByPrinting(printingId: string): Promise<StackRow[]> {
     if (!printingId) return [];
@@ -599,6 +709,89 @@ export class LocalStore {
         chunk.flatMap((r) => [r[0], r[1], r[2], r[3], r[4] ?? null]),
       );
     }
+  }
+
+  /** Write a page of the oracle index. */
+  async putOracle(rows: OracleRow[]): Promise<void> {
+    const BATCH = 200;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const chunk = rows.slice(i, i + BATCH);
+      if (!chunk.length) continue;
+      const holes = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+      await this.db.run(
+        `INSERT INTO oracle (oracle_id, name, type_line, oracle_text,
+                             mana_cost, cmc, color_identity)
+         VALUES ${holes}
+         ON CONFLICT(oracle_id) DO UPDATE SET
+           name = excluded.name,
+           type_line = excluded.type_line,
+           oracle_text = excluded.oracle_text,
+           mana_cost = excluded.mana_cost,
+           cmc = excluded.cmc,
+           color_identity = excluded.color_identity`,
+        chunk.flatMap((r) => [r[0], r[1], r[2] ?? '', r[3] ?? '', r[4] ?? '',
+          r[5] ?? null, r[6] ?? '']),
+      );
+    }
+  }
+
+  async oracleSize(): Promise<number> {
+    const rows = await this.db.all<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM oracle');
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  /** Cards whose name contains this, best-first by how early it matches. */
+  async searchOracle(term: string, limit = 50): Promise<OracleCard[]> {
+    const needle = (term || '').trim().toLowerCase();
+    if (!needle) return [];
+    const rows = await this.db.all<OracleCard>('SELECT * FROM oracle');
+    return rows
+      .map((r) => ({ r, at: r.name.toLowerCase().indexOf(needle) }))
+      .filter((x) => x.at >= 0)
+      // A card whose name STARTS with what you typed is what you meant;
+      // one that merely contains it is a coincidence you scroll past.
+      .sort((a, b) => a.at - b.at || a.r.name.localeCompare(b.r.name))
+      .slice(0, limit)
+      .map((x) => x.r);
+  }
+
+  /**
+   * One representative printing per card name.
+   *
+   * Which one hardly matters for a search result — it decides the art and
+   * the set shown, not what the card does — so this takes the first by
+   * printing id rather than sorting 105,000 rows to pick a favourite.
+   */
+  async printingsForNames(
+    names: string[],
+  ): Promise<Map<string, { printing_id: string; set_code: string }>> {
+    const wanted = new Set(names.map((n) => n.trim().toLowerCase()));
+    const out = new Map<string, { printing_id: string; set_code: string }>();
+    if (!wanted.size) return out;
+    const rows = await this.db.all<{
+      printing_id: string; name: string; set_code: string;
+    }>('SELECT * FROM catalogue');
+    for (const r of rows) {
+      const key = r.name.trim().toLowerCase();
+      if (wanted.has(key) && !out.has(key)) {
+        out.set(key, { printing_id: r.printing_id, set_code: r.set_code });
+      }
+    }
+    return out;
+  }
+
+  /** One card by name, exactly. */
+  async oracleByName(name: string): Promise<OracleCard | null> {
+    const needle = (name || '').trim().toLowerCase();
+    if (!needle) return null;
+    const rows = await this.db.all<OracleCard>('SELECT * FROM oracle');
+    return rows.find((r) => r.name.trim().toLowerCase() === needle)
+      // The front half of a "//" card is all that is printed at the top,
+      // and therefore all anyone can type or read off it.
+      ?? rows.find((r) =>
+        (r.name.split('//')[0] ?? '').trim().toLowerCase() === needle)
+      ?? null;
   }
 
   /** Mana value per printing, for sorting a collection by curve. */

@@ -12,7 +12,7 @@ import {
   saveCameraSettings,
 } from './camera-settings.ts';
 import type { CameraSettings } from './camera-settings.ts';
-import { DesktopClient } from './client.ts';
+import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
@@ -20,13 +20,14 @@ import { deviceTextReader } from './ocr.ts';
 import { RepeatGuard } from './scanner.ts';
 import type { TextReader } from './ocr.ts';
 import { stackKey } from './protocol.ts';
-import type { CatalogueRow } from './store.ts';
+import type { CatalogueRow, OracleRow } from './store.ts';
 import { defaultFinish, identifyPhoto } from './scanner.ts';
 import type { ScanResult } from './scanner.ts';
 import type {
   BuiltDeck,
   CardDetail,
   CataloguePrinting,
+  CatalogueCard,
   CatalogueSet,
   DeckResolveReply,
   DesktopDeck,
@@ -72,6 +73,9 @@ const SCAN_TARGET_KEY = 'scan.collection_uid';
 // pull, means "never started", which is why readiness checks the row count
 // as well.
 const CATALOGUE_CURSOR_KEY = 'catalogue.cursor';
+// The oracle walk's own cursor. Separate from the printing one because the
+// two are different lengths and either can be interrupted alone.
+const ORACLE_CURSOR_KEY = 'oracle.cursor';
 
 export class AppState {
   private store: LocalStore;
@@ -179,6 +183,36 @@ export class AppState {
    */
   async manaValues(): Promise<Map<string, number>> {
     return this.store.manaValues();
+  }
+
+  /**
+   * Pull what each CARD is, so browsing works with no PC.
+   *
+   * Separate walk from the printing index because they answer different
+   * questions and are different sizes; same resumable shape.
+   */
+  async syncOracle(
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<{ rows: number; total: number }> {
+    let after = (await this.store.getMeta(ORACLE_CURSOR_KEY)) ?? '';
+    let done = await this.store.oracleSize();
+    let total = done;
+    for (;;) {
+      const page = await this.client.call<{
+        rows: OracleRow[]; next: string; total: number;
+      }>('oracle/page', { after, limit: 3000 });
+      const rows = page.rows ?? [];
+      total = page.total ?? total;
+      if (rows.length) {
+        await this.store.putOracle(rows);
+        done += rows.length;
+        onProgress?.(Math.min(done, total), total);
+      }
+      after = page.next ?? '';
+      await this.store.setMeta(ORACLE_CURSOR_KEY, after);
+      if (!after) break;
+    }
+    return { rows: await this.store.oracleSize(), total };
   }
 
   /** How much of the index this phone is holding. */
@@ -978,10 +1012,28 @@ export class AppState {
   }
 
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {
-    return this.client.call<CardDetail>('cards/detail', {
-      printing_id: printingId,
-      card_name: cardName,
-    });
+    // The PC first: it carries rulings, legality, prices and every printing,
+    // none of which is on the phone. What the phone has is the rules text,
+    // which is the part you are actually reading when you tap a card.
+    try {
+      return await this.client.call<CardDetail>('cards/detail', {
+        printing_id: printingId,
+        card_name: cardName,
+      });
+    } catch {
+      const card = await this.store.oracleByName(cardName);
+      if (!card) throw new Unreachable('That card is not on this phone yet.');
+      return {
+        printing_id: printingId,
+        card_name: card.name,
+        mana_cost: card.mana_cost,
+        cmc: card.cmc ?? 0,
+        type_line: card.type_line,
+        oracle_text: card.oracle_text,
+        color_identity: card.color_identity
+          ? card.color_identity.split(/[^A-Z]+/).filter(Boolean) : [],
+      };
+    }
   }
 
   /**
@@ -999,6 +1051,30 @@ export class AppState {
    * cards, not about the collection.
    */
   async wishlistAdd(
+    cardName: string,
+    quantity = 1,
+    printing?: { set_code?: string; collector_number?: string },
+  ): Promise<void> {
+    // Local first and always. A hand-added want had nowhere local to
+    // live, so the one screen you use standing in a shop could not be
+    // added to FROM the shop.
+    await this.store.setWish({
+      card_name: cardName,
+      quantity,
+      set_code: printing?.set_code ?? '',
+      collector_number: printing?.collector_number ?? '',
+    });
+    await this.engine.recordWish({
+      card_name: cardName,
+      quantity,
+      set_code: printing?.set_code ?? '',
+      collector_number: printing?.collector_number ?? '',
+    });
+    await this.refreshPending();
+  }
+
+  /** The old remote add, replaced above. */
+  private async wishlistAddOnPc(
     cardName: string,
     quantity = 1,
     printing?: { set_code?: string; collector_number?: string },
@@ -1046,8 +1122,40 @@ export class AppState {
     await this.refreshPending();
   }
 
-  async overlaps(): Promise<OverlapsReply> {
-    return this.client.call<OverlapsReply>('overlaps', {});
+  /**
+   * Cards that appear in more than one list.
+   *
+   * Computed here rather than asked for. Every input is already local —
+   * the stacks and the memberships both live on this phone — so needing
+   * the PC for it made a pure read of local data depend on the network.
+   */
+  async overlaps(minCollections = 2): Promise<OverlapsReply> {
+    const stacks = await this.store.listStacks();
+    const names = new Map((await this.store.listCollections())
+      .map((c) => [c.collection_uid, c.name]));
+    const cards = [];
+    for (const stack of stacks) {
+      const lists = await this.store.membershipsFor(stack.stack_key);
+      if (lists.length < minCollections) continue;
+      cards.push({
+        item_id: 0,
+        printing_id: stack.printing_id,
+        card_name: stack.card_name,
+        finish: stack.finish,
+        quantity: stack.quantity,
+        collection_count: lists.length,
+        // Named, not uid'd: this is read by a person deciding which list to
+        // take a card out of.
+        collections: lists.map((uid) => names.get(uid) ?? uid),
+        // More lists want it than you own copies of it — the situation the
+        // screen exists to surface, as opposed to merely being in two.
+        overcommitted: lists.length > stack.quantity,
+      });
+    }
+    return {
+      cards,
+      overcommitted: cards.filter((c) => c.overcommitted).length,
+    };
   }
 
   get scanClient(): DesktopClient {
@@ -1174,19 +1282,59 @@ export class AppState {
     cardName: string,
     quantity = 1,
   ): Promise<void> {
-    await this.client.call('wishlist/acquire', {
+    // Both halves, locally. Filing it without clearing the want leaves
+    // you shopping for a card already in your bag, and doing either half
+    // only on the PC means the shop is the one place it does not work.
+    await this.addCard({
       printing_id: printingId,
       card_name: cardName,
       quantity,
     });
-    // The card is now owned on the PC; pull that down so the phone agrees
-    // rather than showing it as still wanted until the next refresh.
-    await this.sync();
+    await this.store.forgetWish(cardName);
+    await this.engine.recordWish({
+      card_name: cardName, quantity: 0, forget: true,
+    });
+    await this.refreshPending();
+    // Best-effort: the events are on disk whether or not the PC is there.
+    await this.sync().catch(() => undefined);
   }
 
   /** Stop wanting a card, whichever printings were listed. */
   async removeFromWishlist(cardName: string): Promise<void> {
-    await this.client.call('wishlist/remove', { card_name: cardName });
+    await this.store.forgetWish(cardName);
+    await this.engine.recordWish({
+      card_name: cardName, quantity: 0, forget: true,
+    });
+    await this.refreshPending();
+  }
+
+  /** Wants added by hand, which no deck implies. */
+  async handWishes(): Promise<WishlistRow[]> {
+    const owned = await this.store.listStacks();
+    const have = new Map<string, number>();
+    for (const s of owned) {
+      const key = s.card_name.trim().toLowerCase();
+      have.set(key, (have.get(key) ?? 0) + s.quantity);
+    }
+    return (await this.store.wishes())
+      // A want for a card you have since bought is finished, whether or not
+      // anybody pressed the button.
+      .filter((w) => (have.get(w.card_name.trim().toLowerCase()) ?? 0) < w.quantity)
+      .map((w) => ({
+        // `name`/`qty` come from DeckEntry, which a wishlist row extends —
+        // the same shape a deck slot has, so the two lists render through
+        // one component.
+        name: w.card_name,
+        qty: w.quantity,
+        card_name: w.card_name,
+        quantity: w.quantity,
+        quantityAcrossDecks: w.quantity,
+        set_code: w.set_code,
+        collector_number: w.collector_number,
+        // Nothing asked for it but you. That is the difference from a
+        // derived row, and the screen says so.
+        wantedBy: [],
+      }));
   }
 
   async desktopDeck(deckId: string): Promise<DesktopDeckDetail> {
@@ -1223,7 +1371,48 @@ export class AppState {
    * exists" — which is worse than saying it cannot.
    */
   async searchCards(query: CardQuery = {}): Promise<CardSearchReply> {
-    return this.client.call<CardSearchReply>('cards/search', { query });
+    // The PC first, because it searches on far more than a name — rules
+    // text, colours, types, format legality, price. This is the case where
+    // the PC is genuinely better and the phone is the fallback rather than
+    // the fast path.
+    try {
+      return await this.client.call<CardSearchReply>('cards/search', { query });
+    } catch {
+      // No PC. Answer from the phone's own index, which covers the search
+      // people actually do standing over a box: by name.
+      const term = String(query.name ?? '').trim();
+      if (!term) return { cards: [], total: 0, offset: 0, limit: 0 };
+      const found = await this.store.searchOracle(
+        term, Number(query.limit ?? 50));
+      const printings = await this.store.printingsForNames(
+        found.map((c) => c.name));
+      return {
+        cards: found.map((c) => {
+          const p = printings.get(c.name.trim().toLowerCase());
+          return {
+            scryfall_id: '',
+            oracle_id: c.oracle_id,
+            name: c.name,
+            type_line: c.type_line,
+            mana_cost: c.mana_cost,
+            cmc: c.cmc ?? 0,
+            colors: [],
+            color_identity: c.color_identity
+              ? c.color_identity.split(/[^A-Z]+/).filter(Boolean) : [],
+            rarity: '',
+            set_code: p?.set_code ?? '',
+            // A printing id is what art is fetched by, and the art itself
+            // is a Scryfall URL the phone loads directly — so a card found
+            // offline still has a picture the moment there is any network,
+            // without the PC being involved.
+            printing_id: p?.printing_id ?? '',
+          } as CatalogueCard;
+        }),
+        total: found.length,
+        offset: 0,
+        limit: found.length,
+      };
+    }
   }
 
   /** Live figures from the desktop, for when it is reachable. */

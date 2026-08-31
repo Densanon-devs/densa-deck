@@ -161,6 +161,11 @@ export class MemoryDatabase {
       // index appends a second copy of every printing — and the exact-key
       // lookup then answers from whichever duplicate sorted first.
       catalogue: 'printing_id',
+      // Without these the ON CONFLICT never matches, so re-pulling the
+      // oracle index appends a second copy of every card and a wishlist
+      // row written twice becomes two wants.
+      oracle: 'oracle_id',
+      wishlist: ['card_name', 'deck_id', 'set_code', 'collector_number'],
     };
     const key = keys[table];
     if (!key) return undefined;
@@ -271,6 +276,15 @@ export class MemoryDatabase {
     if (/FROM slot_facts/i.test(text)) return [...this._table('slot_facts')];
     if (/FROM price_points/i.test(text)) return [...this._table('price_points')];
     if (/FROM pending_scans/i.test(text)) return [...this._table('pending_scans')];
+    // Wants added by hand. Read whole and filtered in the caller, the way
+    // the real store does it.
+    if (/FROM wishlist/i.test(text)) return [...this._table('wishlist')];
+    // What each CARD is, for browsing with no PC.
+    if (/FROM oracle/i.test(text)) {
+      const rows = this._table('oracle');
+      if (/COUNT\(\*\)/i.test(text)) return [{ n: rows.length }];
+      return [...rows];
+    }
     // The card index the phone pulls off the PC. Two shapes only, and both
     // are the ones the real store issues: a size check, and the exact-key
     // lookup an offline identification turns on.

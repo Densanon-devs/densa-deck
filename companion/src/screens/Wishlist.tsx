@@ -72,7 +72,14 @@ export function WishlistScreen({ state, decks }: Props) {
 
 
   const load = useCallback(async () => {
-    setRows(await state.wishlist(await decks.list()));
+    // Two sources, one list: what your decks imply, and what you added by
+    // hand. The derived half needs no storage; the hand-added half is the
+    // reason there is a wishlist table at all.
+    const derived = await state.wishlist(await decks.list());
+    const byHand = await state.handWishes();
+    const seen = new Set(derived.map((r) => r.card_name.toLowerCase()));
+    setRows([...derived,
+             ...byHand.filter((r) => !seen.has(r.card_name.toLowerCase()))]);
   }, [state, decks]);
 
   /**

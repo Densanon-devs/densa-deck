@@ -465,6 +465,23 @@ class PhoneBridge:
             "explain_card",
             "Explaining a single card is a Pro feature.",
         ),
+        # Building a deck out of your collection is a SUGGESTION engine — it
+        # ranks and picks — which is the analysis half of the app rather
+        # than the collection half. The gate was on the desktop's own
+        # suggestion paths and not on this one, so the phone reached the
+        # same machinery by another door.
+        "group/build-deck": (
+            "deckbuild_suggestions",
+            "Building a deck from your collection picks and ranks cards for "
+            "you, which is a Densa Deck Pro feature. Your groups and every "
+            "card in them stay yours.",
+        ),
+        # A manifest is a produced document, not a view of your own cards.
+        "group/export": (
+            "export_reports",
+            "Exporting a group as a document is a Densa Deck Pro feature. "
+            "You can still browse and edit the group itself.",
+        ),
     }
 
     def handle_api(self, route: str, payload: dict) -> dict:
@@ -793,6 +810,10 @@ class PhoneBridge:
         # Read-only and derived entirely from public card data, so it is not
         # gated: refusing it would only mean a scanner that cannot work
         # offline, which is the thing it exists to fix.
+        if route == "oracle/page":
+            return _unwrap(api.oracle_index_page(
+                payload.get("after", ""),
+                int(payload.get("limit", 3000) or 3000)))
         if route == "catalogue/page":
             return _unwrap(api.catalogue_index_page(
                 payload.get("after", ""),

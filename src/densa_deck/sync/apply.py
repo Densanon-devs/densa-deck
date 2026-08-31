@@ -27,10 +27,36 @@ from densa_deck.sync.log import (
     KIND_DECK_UPSERT,
     KIND_STACK_DELTA,
     KIND_MEMBERSHIP,
+    KIND_WISHLIST,
     KIND_STACK_SET,
     SyncEvent,
     SyncLog,
 )
+
+
+def wishlist_event(*, card_name: str, quantity: int, deck_id: str = "",
+                   deck_name: str = "", notes: str = "", set_code: str = "",
+                   collector_number: str = "", forget: bool = False) -> dict:
+    """The payload for wanting something, or for stopping wanting it.
+
+    Quantity 0 is the removal. Naming a printing is a different want from
+    wanting the card — the Alpha Bolt is not the same object as the
+    tenth-edition one — so the printing is part of the key, not a detail.
+    """
+    return {
+        "card_name": card_name,
+        "quantity": int(quantity),
+        "deck_id": deck_id,
+        "deck_name": deck_name,
+        "notes": notes,
+        "set_code": set_code,
+        "collector_number": collector_number,
+        # "Off the list entirely" is a different statement from "I want zero
+        # of this printing". Taking a card off removes EVERY printing of it
+        # that was on there; a quantity of zero would clear one row and
+        # leave the others, which reads as the button having done nothing.
+        "forget": bool(forget),
+    }
 
 
 def membership_event(*, printing_id: str, collection_uid: str, member: bool,
@@ -103,6 +129,7 @@ class SyncApplier:
             KIND_DECK_UPSERT: self._apply_deck_upsert,
             KIND_DECK_GAME: self._apply_deck_game,
             KIND_DECK_DELETE: self._apply_deck_delete,
+            KIND_WISHLIST: self._apply_wishlist,
         }.get(event.kind)
 
         if handler is None:
@@ -192,6 +219,34 @@ class SyncApplier:
             reason="baseline",
         )
         return {"applied": True, "kind": event.kind, "delta": delta}
+
+    def _apply_wishlist(self, event: SyncEvent) -> dict:
+        """Something wanted, set to an exact quantity.
+
+        An exact set rather than a delta, keyed the same four ways the table
+        is: card, deck, set code, collector number. Quantity 0 removes it,
+        which is what `wishlist_set` already means — so an add and its undo
+        are the same kind of event and cannot arrive in an order that leaves
+        a phantom want behind.
+        """
+        p = event.payload
+        name = (p.get("card_name") or "").strip()
+        if not name:
+            return {"applied": False, "reason": "no card name"}
+        if p.get("forget"):
+            removed = self.store.wishlist_forget(
+                name, deck_id=p.get("deck_id", "") or "")
+            return {"applied": True, "kind": event.kind, "removed": removed}
+        self.store.wishlist_set(
+            name,
+            int(p.get("quantity", 0) or 0),
+            deck_id=p.get("deck_id", "") or "",
+            deck_name=p.get("deck_name", "") or "",
+            notes=p.get("notes", "") or "",
+            set_code=(p.get("set_code") or "").strip(),
+            collector_number=(p.get("collector_number") or "").strip(),
+        )
+        return {"applied": True, "kind": event.kind, "card_name": name}
 
     def _apply_membership(self, event: SyncEvent) -> dict:
         """A stack joining or leaving one list.

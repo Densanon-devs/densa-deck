@@ -1871,6 +1871,27 @@ class AppApi:
             return {"ok": False, "error": f"No card named '{name}'."}
         return _card_to_builder_dict(card, include_full=True)
 
+    def _log_wishlist(self, card_name: str, quantity: int, *,
+                      deck_id: str = "", deck_name: str = "", notes: str = "",
+                      set_code: str = "", collector_number: str = "",
+                      forget: bool = False) -> None:
+        """Tell the other device what is wanted.
+
+        Best-effort, like every other log here: a want that fails to sync is
+        a worse list on the phone, not a lost card, and it must not be able
+        to fail the edit the user actually asked for.
+        """
+        try:
+            from densa_deck.sync.apply import wishlist_event
+            from densa_deck.sync.log import KIND_WISHLIST
+
+            self._get_sync().log.record(KIND_WISHLIST, wishlist_event(
+                card_name=card_name, quantity=int(quantity), deck_id=deck_id,
+                deck_name=deck_name, notes=notes, set_code=set_code,
+                collector_number=collector_number, forget=forget))
+        except Exception as exc:
+            self._note_sync_failure("wishlist", exc)
+
     def _log_membership(self, item_id: int, collection_uid: str,
                         member: bool) -> None:
         """Tell the other device which lists this card is in.
@@ -3892,6 +3913,42 @@ class AppApi:
         }
 
     @_safe
+    def oracle_index_page(self, after: str = "", limit: int = 3000) -> dict:
+        """A page of what each CARD is, for a phone browsing without a PC.
+
+        The printing index answers "which printing is this"; this answers
+        "what does it do". Seven fields over 34,570 oracle cards is 8 MB of
+        text — the whole catalogue is 181 MB, and the difference is almost
+        entirely art URLs, prices, legality tables and per-printing rows the
+        phone does not need to read rules off a card.
+
+        Rows are lists, not objects: at 34,570 of them the repeated key
+        names cost more than several of the fields.
+
+        Paged on oracle_id for the same reason the printing walk is — an
+        OFFSET walk over a table being ingested skips rows, and a skipped
+        row here is a card that cannot be looked up at all.
+        """
+        limit = max(1, min(int(limit or 3000), 10000))
+        conn = self._get_db().connect()
+        rows = conn.execute(
+            """SELECT oracle_id, name, type_line, oracle_text, mana_cost,
+                      cmc, color_identity
+               FROM cards
+               WHERE oracle_id > ?
+               ORDER BY oracle_id
+               LIMIT ?""",
+            (str(after or ""), limit)).fetchall()
+        total, = conn.execute("SELECT COUNT(*) FROM cards").fetchone()
+        return {
+            "rows": [[r[0], r[1], r[2] or "", r[3] or "", r[4] or "",
+                      None if r[5] is None else float(r[5]), r[6] or ""]
+                     for r in rows],
+            "next": rows[-1][0] if len(rows) == limit else "",
+            "total": int(total or 0),
+        }
+
+    @_safe
     def get_card_printings(self, card_name: str) -> dict:
         """Every printing of a card, annotated with how many you own.
 
@@ -5043,11 +5100,17 @@ class AppApi:
         would name it.
         """
         try:
-            return self._get_collection_store().wishlist_set(
+            made = self._get_collection_store().wishlist_set(
                 card_name, int(quantity), deck_id=deck_id,
                 deck_name=deck_name, notes=notes,
                 set_code=(set_code or "").strip(),
                 collector_number=(collector_number or "").strip())
+            self._log_wishlist(
+                card_name, int(quantity), deck_id=deck_id,
+                deck_name=deck_name, notes=notes,
+                set_code=(set_code or "").strip(),
+                collector_number=(collector_number or "").strip())
+            return made
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -5061,6 +5124,7 @@ class AppApi:
         """
         removed = self._get_collection_store().wishlist_forget(
             card_name, deck_id=deck_id)
+        self._log_wishlist(card_name, 0, deck_id=deck_id, forget=True)
         return {"card_name": card_name, "deck_id": deck_id,
                 "rows_removed": removed}
 

@@ -572,3 +572,56 @@ class TestTheFreeAllowances:
         assert len(listed) >= 6
         # And a new one is refused rather than any being removed.
         assert api.create_collection("One more")["ok"] is False
+
+
+class TestEveryProRouteIsGatedOnThePhone:
+    @pytest.fixture
+    def bridge(self, api):
+        from densa_deck.app.phone import PhoneBridge
+
+        return PhoneBridge(api)
+
+    """The gate has to be on the DOOR, not on one of the doors.
+
+    `_tier_allows` is called in exactly one place in the whole API, so a
+    phone route that reaches a Pro feature is gated by `_PRO_ROUTES` or it
+    is not gated at all. This walks the routes rather than naming them, so
+    a new one that reaches Pro machinery has to be classified rather than
+    silently shipped open.
+    """
+
+    PRO_ROUTES = {
+        "analyst/analyze", "analyst/explain",
+        "group/build-deck", "group/export",
+    }
+
+    def test_the_known_pro_routes_are_all_refused_on_free(self, free, bridge):
+        for route in sorted(self.PRO_ROUTES):
+            reply = bridge.handle_api(route, {})
+            assert reply.get("error_type") == "ProRequired", (route, reply)
+
+    def test_each_refusal_says_what_it_would_buy(self, free, bridge):
+        for route in sorted(self.PRO_ROUTES):
+            reply = bridge.handle_api(route, {})
+            assert "Pro" in reply.get("error", ""), route
+
+    def test_and_none_of_them_calls_it_an_error(self, free, bridge):
+        # A paywall is not a fault. Saying "failed" teaches people the app
+        # is broken rather than that the feature is bought.
+        for route in sorted(self.PRO_ROUTES):
+            message = bridge.handle_api(route, {}).get("error", "")
+            assert "failed" not in message.lower(), route
+
+    def test_pro_gets_through_every_one_of_them(self, pro, bridge):
+        for route in sorted(self.PRO_ROUTES):
+            reply = bridge.handle_api(route, {})
+            assert reply.get("error_type") != "ProRequired", (route, reply)
+
+    def test_the_collection_half_is_never_gated(self, free, bridge):
+        """The phone is the collection and the collection is free. A gate
+        here would be the whole product backwards."""
+        for route in ("collection/list", "collections", "wishlist/add",
+                      "group/tag-item", "catalogue/page", "oracle/page",
+                      "tier", "sync/pull"):
+            reply = bridge.handle_api(route, {"card_name": "Sol Ring"})
+            assert reply.get("error_type") != "ProRequired", route

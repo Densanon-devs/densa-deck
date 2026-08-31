@@ -367,6 +367,28 @@ export class SyncEngine {
         await remember();
         return true;
       }
+      case 'wishlist': {
+        // An exact quantity, keyed by card + deck + printing, with 0
+        // meaning removed — so an add and its undo are the same kind of
+        // event and cannot arrive in an order that leaves a phantom want.
+        const p = event.payload as Record<string, unknown>;
+        const name = String(p.card_name ?? '').trim();
+        if (!name) return false;
+        if (p.forget) {
+          await this.store.forgetWish(name, String(p.deck_id ?? ''));
+        } else {
+          await this.store.setWish({
+            card_name: name,
+            deck_id: String(p.deck_id ?? ''),
+            set_code: String(p.set_code ?? ''),
+            collector_number: String(p.collector_number ?? ''),
+            quantity: Number(p.quantity ?? 0),
+            notes: String(p.notes ?? ''),
+          });
+        }
+        await remember();
+        return true;
+      }
       case 'collection-delete':
         await this.store.deleteCollection(
           String(event.payload.collection_uid ?? ''),
@@ -511,6 +533,29 @@ export class SyncEngine {
    * two are the same deck said twice, and dropping the map would make this
    * event unreadable to a build that predates entries.
    */
+  /** Tell the desktop what is wanted, or no longer wanted. */
+  async recordWish(wish: {
+    card_name: string;
+    quantity: number;
+    deck_id?: string;
+    deck_name?: string;
+    set_code?: string;
+    collector_number?: string;
+    notes?: string;
+    forget?: boolean;
+  }): Promise<void> {
+    await this.log('wishlist', {
+      card_name: wish.card_name,
+      quantity: wish.quantity,
+      deck_id: wish.deck_id ?? '',
+      deck_name: wish.deck_name ?? '',
+      set_code: wish.set_code ?? '',
+      collector_number: wish.collector_number ?? '',
+      notes: wish.notes ?? '',
+      forget: !!wish.forget,
+    });
+  }
+
   async recordDeckUpsert(deck: {
     deck_id: string;
     name: string;
