@@ -165,7 +165,11 @@ export const SCHEMA: string[] = [
      printing_id TEXT PRIMARY KEY,
      name TEXT NOT NULL,
      set_code TEXT NOT NULL,
-     collector_number TEXT NOT NULL
+     collector_number TEXT NOT NULL,
+     -- Not used for matching. It is here because a collection is most often
+     -- sorted by mana value, and a phone cannot sort by a number it does
+     -- not hold. One small integer per printing against megabytes of text.
+     cmc REAL
    )`,
   // The exact-key lookup: set code plus collector number is how a scan
   // identifies a card when the footer reads cleanly, and it is one indexed
@@ -230,6 +234,16 @@ export interface CollectionRow {
 
 /** The desktop's well-known uid for "cards I haven't filed anywhere". */
 export const DEFAULT_COLLECTION_UID = '00000000-0000-4000-8000-00000000d0cc';
+
+/**
+ * A row of the card index as the PC sends it.
+ *
+ * The mana value is optional because a desktop from before it was added
+ * sends four fields, and a phone that threw on those would strand the whole
+ * download over a column it only uses for sorting.
+ */
+export type CatalogueRow =
+  [string, string, string, string, (number | null)?];
 
 /**
  * The extra lists a queued scan was headed for.
@@ -547,23 +561,39 @@ export class LocalStore {
    * progress bar; batched it is a few seconds.
    */
   async putCatalogue(
-    rows: Array<[string, string, string, string]>,
+    rows: CatalogueRow[],
   ): Promise<void> {
     const BATCH = 400;
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
       if (!chunk.length) continue;
-      const holes = chunk.map(() => '(?, ?, ?, ?)').join(', ');
+      const holes = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ');
       await this.db.run(
-        `INSERT INTO catalogue (printing_id, name, set_code, collector_number)
+        `INSERT INTO catalogue
+           (printing_id, name, set_code, collector_number, cmc)
          VALUES ${holes}
          ON CONFLICT(printing_id) DO UPDATE SET
            name = excluded.name,
            set_code = excluded.set_code,
-           collector_number = excluded.collector_number`,
-        chunk.flat(),
+           collector_number = excluded.collector_number,
+           cmc = excluded.cmc`,
+        // Padded, so a page from an older desktop that sends four fields
+        // still writes rather than throwing a bind-count error and
+        // stranding the whole download.
+        chunk.flatMap((r) => [r[0], r[1], r[2], r[3], r[4] ?? null]),
       );
     }
+  }
+
+  /** Mana value per printing, for sorting a collection by curve. */
+  async manaValues(): Promise<Map<string, number>> {
+    const rows = await this.db.all<{ printing_id: string; cmc: number | null }>(
+      'SELECT * FROM catalogue');
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      if (r.cmc != null) out.set(r.printing_id, Number(r.cmc));
+    }
+    return out;
   }
 
   async catalogueSize(): Promise<number> {

@@ -7,11 +7,12 @@
  * is a description of the screen.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import {
   FlatList,
   Image,
   Pressable,
+  ScrollView,
   RefreshControl,
   StyleSheet,
   Text,
@@ -26,6 +27,8 @@ import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
+import { SORT_LABELS, directionOf, sortCards } from '../lib/sorting.ts';
+import type { Direction, SortKey } from '../lib/sorting.ts';
 import type { GroupManifest, GroupReview } from '../lib/protocol.ts';
 
 interface Props {
@@ -55,6 +58,33 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
   const [manifest, setManifest] = useState<GroupManifest | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [search, setSearch] = useState('');
+  /**
+   * What the list is ordered by, and which way it runs.
+   *
+   * Two pieces of state rather than one key like 'price_desc', so every
+   * sort reverses — including any added later — instead of each needing its
+   * own twin. Empty direction means "however this sort reads naturally",
+   * which differs per sort.
+   */
+  const [sort, setSort] = useState<SortKey>('name');
+  const [direction, setDirection] = useState<Direction | ''>('');
+  /** Mana values, from the index this phone pulled off the PC. */
+  const [mana, setMana] = useState<Map<string, number>>(new Map());
+
+  // Read once. It is a map over the index already on this phone, not a
+  // fetch, and rebuilding it per keystroke of the search box would walk a
+  // hundred thousand rows for nothing.
+  useEffect(() => {
+    void state.manaValues().then(setMana).catch(() => {});
+  }, [state]);
+
+  // Sorted here rather than in SQL: the rows are already in hand, the list
+  // is capped well below where that matters, and mana value lives in a
+  // different table from the stacks.
+  const ordered = useMemo(
+    () => sortCards(rows, sort, direction, mana),
+    [rows, sort, direction, mana],
+  );
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState('');
   // Which row has its quantity controls out. One at a time: a list of
@@ -208,7 +238,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           header rather than a block above it — stacked they cannot scroll
           and they squeeze the list itself. */}
       <FlatList
-        data={rows}
+        data={ordered}
         ListHeaderComponent={
           <>
       <TextInput
@@ -219,6 +249,47 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
             onChangeText={setSearch}
             autoCorrect={false}
           />
+
+          {/*
+            Sort, and which way round. The arrow shows the direction in
+            force rather than the one a tap would produce, so it never
+            claims to point up over a list running down.
+          */}
+          <View style={styles.sortRow}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={styles.sortChips}>
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                  <Pressable
+                    key={key}
+                    style={[styles.sortChip, sort === key && styles.sortChipOn]}
+                    onPress={() => {
+                      // Changing WHAT you sort by returns to that sort's
+                      // natural direction — carrying a reversal across
+                      // means picking "mana value" after "price" silently
+                      // starts at eight drops, which reads as a bug.
+                      setSort(key);
+                      setDirection('');
+                    }}
+                  >
+                    <Text style={[styles.sortChipText,
+                      sort === key && styles.sortChipTextOn]}>
+                      {SORT_LABELS[key]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </ScrollView>
+            <Pressable
+              style={styles.sortArrow}
+              onPress={() =>
+                setDirection(directionOf(sort, direction) === 'desc'
+                  ? 'asc' : 'desc')}
+            >
+              <Text style={styles.sortArrowText}>
+                {directionOf(sort, direction) === 'desc' ? '↓' : '↑'}
+              </Text>
+            </Pressable>
+          </View>
 
           <ArtWarmer
             queue={warming}
@@ -526,6 +597,26 @@ const styles = StyleSheet.create({
   removeButton: { borderColor: '#e53e3e' },
   removeText: { color: '#e53e3e', fontSize: 13, fontWeight: '600' },
   screen: { flex: 1, backgroundColor: '#0f1117', padding: 12 },
+  sortRow: { alignItems: 'center', flexDirection: 'row', gap: 6, marginTop: 8 },
+  sortChips: { flexDirection: 'row', gap: 6 },
+  sortChip: {
+    borderColor: '#2b3040',
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  sortChipOn: { backgroundColor: '#2f6f9f', borderColor: '#2f6f9f' },
+  sortChipText: { color: '#8a8f9c', fontSize: 12 },
+  sortChipTextOn: { color: '#fff', fontWeight: '600' },
+  sortArrow: {
+    borderColor: '#2b3040',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  sortArrowText: { color: '#e4e6eb', fontSize: 14 },
   search: {
     backgroundColor: '#1a1d27',
     borderColor: '#2d3142',

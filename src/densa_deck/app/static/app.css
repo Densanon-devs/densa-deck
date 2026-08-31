@@ -2937,3 +2937,14 @@ code {
   padding: 8px 10px;
 }
 .scan-last-name { flex: 1; font-size: 13px; }
+
+
+/* Sort, and which way round it runs. */
+.sort-row { display: flex; gap: 6px; }
+.sort-row select { flex: 1; }
+.sort-row button { min-width: 34px; }
+.sort-row button[aria-pressed="true"] {
+  background: #2f6f9f;
+  border-color: #2f6f9f;
+  color: #fff;
+}

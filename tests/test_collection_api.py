@@ -662,10 +662,13 @@ class TestTheIndexThePhonePulls:
     against.
     """
 
-    def test_it_serves_the_four_fields_and_nothing_else(self, api_with_printings):
+    def test_it_serves_the_five_fields_and_nothing_else(self, api_with_printings):
+        """Four for matching, plus the mana value — which matches nothing,
+        but is what a collection is most often sorted by, and a phone cannot
+        sort by a number it does not hold."""
         d = _data(api_with_printings.catalogue_index_page())
         assert d["rows"], d
-        assert all(len(row) == 4 for row in d["rows"]), d["rows"][0]
+        assert all(len(row) == 5 for row in d["rows"]), d["rows"][0]
 
     def test_it_reports_the_total_so_a_phone_can_show_progress(self, api_with_printings):
         d = _data(api_with_printings.catalogue_index_page())

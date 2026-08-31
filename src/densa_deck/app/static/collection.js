@@ -19,7 +19,7 @@
     // Which group the list is scoped to. null is the master collection —
     // every card owned, whatever group it sits in.
     collection_id: null,
-    sort: "name", limit: 60, offset: 0,
+    sort: "name", direction: "", limit: 60, offset: 0,
   };
 
   const state = {
@@ -1320,9 +1320,47 @@
       loadItems(false);
     });
 
+    // Which way the arrow points, and what it means.
+    //
+    // Empty direction is not "ascending" — it is "however this sort reads
+    // naturally", which differs per sort: nobody opens a collection to see
+    // their cheapest card, so value starts high while a curve starts low.
+    // The button shows the direction currently in force so it never claims
+    // to be pointing up while the list runs down.
+    function naturalDirection(key) {
+      return ["value", "unit", "quantity", "added"].includes(key)
+        ? "desc" : "asc";
+    }
+
+    function renderReverse() {
+      const btn = e("collection-reverse");
+      if (!btn) return;
+      const way = state.query.direction || naturalDirection(state.query.sort);
+      const down = way === "desc";
+      btn.textContent = down ? "\u2193" : "\u2191";
+      btn.setAttribute("aria-pressed", down ? "true" : "false");
+      btn.title = down ? "Largest first — click for smallest first"
+                       : "Smallest first — click for largest first";
+    }
+
+    const reverse = e("collection-reverse");
+    if (reverse) reverse.addEventListener("click", () => {
+      const way = state.query.direction || naturalDirection(state.query.sort);
+      state.query.direction = way === "desc" ? "asc" : "desc";
+      state.query.offset = 0;
+      renderReverse();
+      void loadCollection();
+    });
+
     const sort = e("collection-sort");
     if (sort) sort.addEventListener("change", () => {
       state.query.sort = sort.value;
+      // Changing WHAT you sort by drops back to that sort's natural
+      // direction. Carrying a reversal across means picking "mana value"
+      // after "price" silently starts at eight drops, which reads as the
+      // list being broken.
+      state.query.direction = "";
+      renderReverse();
       state.query.offset = 0;
       loadItems(false);
     });
@@ -1411,6 +1449,10 @@
       if (u) u.checked = false;
       const s = e("collection-sort");
       if (s) s.value = "name";
+      // The arrow is part of the filter state, so "clear filters" has to
+      // move it too — otherwise it keeps pointing down over a list that is
+      // now running up.
+      renderReverse();
       // The group too. Leaving the list scoped to a group after "clear
       // filters" is a filter that survived being cleared, which is exactly
       // the kind of thing people then blame on missing cards.

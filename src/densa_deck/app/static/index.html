@@ -414,16 +414,28 @@ Mainboard:
             </div>
             <div class="filter-group">
               <label class="filter-label">Sort by</label>
-              <select id="collection-sort">
-                <option value="name">Name</option>
-                <option value="value_desc">Stack value — high to low</option>
-                <option value="value_asc">Stack value — low to high</option>
-                <option value="unit_desc">Card price — high to low</option>
-                <option value="unit_asc">Card price — low to high</option>
-                <option value="quantity_desc">Most copies</option>
-                <option value="set">Set &amp; number</option>
-                <option value="newest">Recently added</option>
-              </select>
+              <!--
+                One entry per thing you can sort BY, and a separate button
+                for which way round. Direction used to be part of the name —
+                "high to low", "low to high" — which meant every sort needed
+                two entries and most never got their second: there was no
+                fewest-copies, no oldest, and no way to read a set backwards.
+              -->
+              <div class="sort-row">
+                <select id="collection-sort">
+                  <option value="name">Name</option>
+                  <option value="cmc">Mana value</option>
+                  <option value="value">Stack value</option>
+                  <option value="unit">Card price</option>
+                  <option value="quantity">Copies</option>
+                  <option value="rarity">Rarity</option>
+                  <option value="set">Set &amp; number</option>
+                  <option value="added">Date added</option>
+                </select>
+                <button id="collection-reverse" class="btn btn-outline btn-slim"
+                        type="button" aria-pressed="false"
+                        title="Reverse the order">↑</button>
+              </div>
             </div>
             <div class="filter-group">
               <button id="collection-clear-filters" class="btn btn-outline btn-slim">Clear filters</button>

@@ -22,18 +22,92 @@ from densa_deck.collection.prices import (
     _finish_price_sql,
 )
 
-# Sort keys the UI offers. Mapped here rather than accepting raw SQL from the
-# caller — this string is interpolated into a query.
-SORT_OPTIONS = {
-    "name": "ci.card_name COLLATE NOCASE ASC",
-    "value_desc": "stack_value DESC NULLS LAST, ci.card_name COLLATE NOCASE",
-    "value_asc": "stack_value ASC NULLS LAST, ci.card_name COLLATE NOCASE",
-    "unit_desc": "unit_value DESC NULLS LAST, ci.card_name COLLATE NOCASE",
-    "unit_asc": "unit_value ASC NULLS LAST, ci.card_name COLLATE NOCASE",
-    "quantity_desc": "ci.quantity DESC, ci.card_name COLLATE NOCASE",
-    "newest": "ci.created_at DESC, ci.item_id DESC",
-    "set": "p.set_code ASC, CAST(p.collector_number AS INTEGER) ASC",
+# What each sort orders by, and which way round it reads naturally.
+#
+# Direction is a SEPARATE control rather than part of the key. Baked into the
+# name it has to be enumerated — `value_desc`, `value_asc` — which is why
+# half these sorts only ever went one way: there was no `quantity_asc`, no
+# `oldest`, and no way to read a set backwards. Splitting them means every
+# sort reverses, including ones added later.
+#
+# The default direction is the one that answers the obvious question. Nobody
+# opens a collection to see their cheapest card, so value starts high; a
+# curve starts at one mana and counts up.
+#
+# Mapped here rather than accepting raw SQL from the caller — these strings
+# are interpolated into a query.
+SORT_COLUMNS = {
+    "name": ("ci.card_name COLLATE NOCASE", "asc"),
+    "value": ("stack_value", "desc"),
+    "unit": ("unit_value", "desc"),
+    "quantity": ("ci.quantity", "desc"),
+    "added": ("ci.created_at", "desc"),
+    "set": ("p.set_code", "asc"),
+    "cmc": ("c.cmc", "asc"),
+    # Alphabetical rarity is meaningless — "common" before "uncommon" before
+    # "rare" is an accident of spelling. Ranked instead, so reversing it
+    # gives you the mythics.
+    "rarity": ("""CASE LOWER(COALESCE(p.rarity, ''))
+                      WHEN 'common' THEN 1 WHEN 'uncommon' THEN 2
+                      WHEN 'rare' THEN 3 WHEN 'mythic' THEN 4
+                      WHEN 'special' THEN 5 WHEN 'bonus' THEN 6
+                      ELSE 0 END""", "asc"),
 }
+
+# The spellings callers used before direction was separable. Kept working
+# because they are stored in saved views and passed by the phone, and a sort
+# that silently becomes name-order is worse than one that errors.
+SORT_ALIASES = {
+    "value_desc": ("value", "desc"), "value_asc": ("value", "asc"),
+    "unit_desc": ("unit", "desc"), "unit_asc": ("unit", "asc"),
+    "quantity_desc": ("quantity", "desc"), "newest": ("added", "desc"),
+    "oldest": ("added", "asc"),
+}
+
+
+def resolve_order(sort: str, direction: str = "") -> str:
+    """The ORDER BY for a sort key and a direction.
+
+    `direction` wins when given; otherwise the sort's natural one is used.
+    An unknown key falls back to name order rather than raising — this is
+    reached from a dropdown, and a stale saved view should show cards.
+
+    Two rules the reverse must NOT break:
+
+    * Unknowns stay at the bottom. A card with no price is not the cheapest
+      card, and a card whose CMC we cannot read is not a Black Lotus — put
+      them first on reverse and the top of the list becomes the rows the
+      database knows least about.
+    * The tiebreaker never flips. Cards at equal cost stay alphabetical
+      whichever way the list runs, so paging is stable and a reversed list
+      is the same rows in the opposite order rather than a reshuffle.
+    """
+    key = (sort or "name").strip().lower()
+    want = (direction or "").strip().lower()
+    if key in SORT_ALIASES:
+        key, natural = SORT_ALIASES[key]
+        column = SORT_COLUMNS[key][0]
+    elif key in SORT_COLUMNS:
+        column, natural = SORT_COLUMNS[key]
+    else:
+        column, natural = SORT_COLUMNS["name"]
+        key = "name"
+    way = "DESC" if (want or natural) == "desc" else "ASC"
+
+    order = f"{column} {way} NULLS LAST"
+    if key == "set":
+        # Within a set, collector number — reversed too, so the last card of
+        # the last set is genuinely the other end of the list.
+        order += f", CAST(p.collector_number AS INTEGER) {way} NULLS LAST"
+    if key != "name":
+        order += ", ci.card_name COLLATE NOCASE ASC"
+    if key == "added":
+        order += f", ci.item_id {way}"
+    return order
+
+
+# Kept for callers that only ever wanted the default direction.
+SORT_OPTIONS = {key: resolve_order(key) for key in SORT_COLUMNS}
 
 _ITEM_FIELDS = (
     "item_id", "printing_id", "oracle_id", "card_name", "finish", "condition",
@@ -57,6 +131,7 @@ def search_collection(
     max_price: float | None = None,
     unpriced_only: bool = False,
     sort: str = "name",
+    direction: str = "",
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[CollectionItem], int, dict]:
@@ -123,7 +198,7 @@ def search_collection(
             params.append(float(max_price))
 
     where = "WHERE " + " AND ".join(conditions)
-    order = SORT_OPTIONS.get(sort, SORT_OPTIONS["name"])
+    order = resolve_order(sort, direction)
     cols = ", ".join(f"ci.{f}" for f in _ITEM_FIELDS)
 
     conn = _attached(store, card_db)
@@ -131,6 +206,7 @@ def search_collection(
         total = conn.execute(
             f"""SELECT COUNT(*) FROM collection_items ci
                 LEFT JOIN cards.card_printings p ON p.printing_id = ci.printing_id
+                LEFT JOIN cards.cards c ON c.oracle_id = p.oracle_id
                 {where}""",
             params,
         ).fetchone()[0]
@@ -143,6 +219,7 @@ def search_collection(
                     COUNT(CASE WHEN ({unit}) IS NULL THEN 1 END)
                 FROM collection_items ci
                 LEFT JOIN cards.card_printings p ON p.printing_id = ci.printing_id
+                LEFT JOIN cards.cards c ON c.oracle_id = p.oracle_id
                 {where}""",
             params,
         ).fetchone()
@@ -155,6 +232,7 @@ def search_collection(
                        ({adj_unit} * ci.quantity) AS stack_value
                 FROM collection_items ci
                 LEFT JOIN cards.card_printings p ON p.printing_id = ci.printing_id
+                LEFT JOIN cards.cards c ON c.oracle_id = p.oracle_id
                 {where}
                 ORDER BY {order}
                 LIMIT ? OFFSET ?""",

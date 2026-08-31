@@ -20,6 +20,7 @@ import { deviceTextReader } from './ocr.ts';
 import { RepeatGuard } from './scanner.ts';
 import type { TextReader } from './ocr.ts';
 import { stackKey } from './protocol.ts';
+import type { CatalogueRow } from './store.ts';
 import { defaultFinish, identifyPhoto } from './scanner.ts';
 import type { ScanResult } from './scanner.ts';
 import type {
@@ -147,7 +148,7 @@ export class AppState {
     let total = done;
     for (;;) {
       const page = await this.client.call<{
-        rows: Array<[string, string, string, string]>;
+        rows: CatalogueRow[];
         next: string;
         total: number;
       }>('catalogue/page', { after, limit: 5000 });
@@ -166,6 +167,18 @@ export class AppState {
       if (!after) break;
     }
     return { rows: await this.store.catalogueSize(), total };
+  }
+
+  /**
+   * Mana value per printing, for sorting a collection by curve.
+   *
+   * From the index this phone pulled off the PC, so it answers with no
+   * signal — which is the situation the whole index exists for. A printing
+   * the index does not cover has no mana value, and `sortCards` sinks it
+   * rather than treating it as zero.
+   */
+  async manaValues(): Promise<Map<string, number>> {
+    return this.store.manaValues();
   }
 
   /** How much of the index this phone is holding. */

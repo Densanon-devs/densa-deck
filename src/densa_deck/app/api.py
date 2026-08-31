@@ -3621,7 +3621,13 @@ class AppApi:
 
         Keys: name_like, finish, condition, location, collection_id,
         set_code, rarity, min_price, max_price, unpriced_only, sort,
-        limit (capped at 300), offset.
+        direction, limit (capped at 300), offset.
+
+        `direction` is separate from `sort` on purpose: every sort reverses,
+        including ones added later, rather than each needing its own
+        `_asc`/`_desc` twin. Omitted, each sort uses the direction that
+        answers the obvious question — nobody opens a collection to find
+        their cheapest card.
 
         Omitting `collection_id` searches the MASTER collection — every card
         owned, whatever grouping it sits in. Passing one narrows to that
@@ -3652,6 +3658,7 @@ class AppApi:
             max_price=_opt_float(query.get("max_price")),
             unpriced_only=bool(query.get("unpriced_only")),
             sort=query.get("sort") or "name",
+            direction=query.get("direction") or "",
             limit=limit,
             offset=offset,
         )
@@ -3805,11 +3812,15 @@ class AppApi:
     def catalogue_index_page(self, after: str = "", limit: int = 5000) -> dict:
         """A page of the index a phone needs to identify a card by itself.
 
-        Four fields, because that is all a scan matches on: the printing id
-        to file against, and the name, set code and collector number the OCR
-        actually reads. Everything else about a card — oracle text, prices,
-        legality, art — is irrelevant to "which printing is this" and would
-        be most of the weight.
+        Five fields: the printing id to file against, the name, set code
+        and collector number the OCR reads, and the mana value — which is
+        not used for matching at all, but is what a collection is most often
+        sorted by, and a phone cannot sort by a number it does not hold.
+        One small integer per printing is a rounding error against the text.
+
+        Everything else about a card — oracle text, prices, legality, art —
+        is irrelevant to "which printing is this" and would be most of the
+        weight.
 
         For every English printing that is 5.9 MB of text against a 181 MB
         catalogue, which is the difference between something a phone can hold
@@ -3826,16 +3837,20 @@ class AppApi:
         limit = max(1, min(int(limit or 5000), 20000))
         conn = self._get_db().connect()
         rows = conn.execute(
-            """SELECT printing_id, name, set_code, collector_number
-               FROM card_printings
-               WHERE lang = 'en' AND printing_id > ?
-               ORDER BY printing_id
+            """SELECT p.printing_id, p.name, p.set_code, p.collector_number,
+                      c.cmc
+               FROM card_printings p
+               LEFT JOIN cards c ON c.oracle_id = p.oracle_id
+               WHERE p.lang = 'en' AND p.printing_id > ?
+               ORDER BY p.printing_id
                LIMIT ?""",
             (str(after or ""), limit)).fetchall()
         total, = conn.execute(
             "SELECT COUNT(*) FROM card_printings WHERE lang = 'en'").fetchone()
         return {
-            "rows": [[r[0], r[1], r[2] or "", r[3] or ""] for r in rows],
+            "rows": [[r[0], r[1], r[2] or "", r[3] or "",
+                      None if r[4] is None else float(r[4])]
+                     for r in rows],
             # Empty when the walk is done, so the caller stops on the reply
             # rather than on a count it has to keep in step with.
             "next": rows[-1][0] if len(rows) == limit else "",
