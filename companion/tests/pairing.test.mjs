@@ -16,6 +16,8 @@ import {
   loadPairing,
   savePairing,
   withLanFallback,
+  isStandalone,
+  setStandalone,
 } from '../src/lib/pairing.ts';
 import { LocalStore } from '../src/lib/store.ts';
 import { FakeDesktop, MemoryDatabase, resetUuid, testUuid } from './harness.mjs';
@@ -204,5 +206,49 @@ describe('reaching the desktop', () => {
       },
     );
     await assert.rejects(() => client.call('sync/hello'), Unreachable);
+  });
+});
+
+describe('choosing to run without a PC, and changing your mind', () => {
+  /**
+   * Standalone is a decision, not a skip, so it is remembered — an app
+   * that works fine alone should not ask to be paired on every launch.
+   *
+   * And it has to be reversible from inside the app, because the only way
+   * in used to be the connection strip, which a standalone phone does not
+   * show.
+   */
+  function store() {
+    const meta = new Map();
+    return {
+      meta,
+      async getMeta(key) { return meta.get(key); },
+      async setMeta(key, value) { meta.set(key, value); },
+    };
+  }
+
+  test('a fresh phone has not chosen either way', async () => {
+    assert.equal(await isStandalone(store()), false);
+  });
+
+  test('choosing it is remembered', async () => {
+    const s = store();
+    await setStandalone(s, true);
+    assert.equal(await isStandalone(s), true);
+  });
+
+  test('and it can be turned back off to pair', async () => {
+    const s = store();
+    await setStandalone(s, true);
+    await setStandalone(s, false);
+    assert.equal(await isStandalone(s), false);
+  });
+
+  test('a value from some other version is not read as yes', async () => {
+    // Anything but the exact marker means "not chosen", so a half-written
+    // or renamed key cannot silently lock someone out of pairing.
+    const s = store();
+    await s.setMeta('app.standalone', 'true');
+    assert.equal(await isStandalone(s), false);
   });
 });

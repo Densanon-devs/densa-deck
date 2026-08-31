@@ -272,21 +272,27 @@ function Shell() {
         different situations to be in while filing a box of cards.
       */}
       {/*
-        Hidden entirely when there is no PC to have a connection to.
-        A permanent "No PC" warning on a phone deliberately run alone is
-        not a status, it is a nag about a decision already made.
+        A phone deliberately run alone gets no connection STATUS — a
+        permanent "No PC" warning is a nag about a decision already made —
+        but it still needs the way in, which is where adding a PC lives.
+        So the strip stays and stops claiming anything: no tone, no dot,
+        just the door.
       */}
-      {phase.kind === 'ready' && !solo.current ? (
+      {phase.kind === 'ready' ? (
         <Pressable
-          style={[styles.banner, styles[`banner_${status.tone}`]]}
+          style={[styles.banner,
+            styles[`banner_${solo.current ? 'idle' : status.tone}`]]}
           onPress={() => setShowConnection((open) => !open)}
         >
-          <View style={[styles.dot, styles[`dot_${status.tone}`]]} />
-          <Text style={[styles.bannerText, styles[`text_${status.tone}`]]}>
-            {status.headline}
+          {solo.current ? null : (
+            <View style={[styles.dot, styles[`dot_${status.tone}`]]} />
+          )}
+          <Text style={[styles.bannerText,
+            styles[`text_${solo.current ? 'idle' : status.tone}`]]}>
+            {solo.current ? 'This phone only' : status.headline}
           </Text>
           <Text style={styles.bannerHint}>
-            {showConnection ? 'Close' : 'Details'}
+            {showConnection ? 'Close' : 'Settings'}
           </Text>
         </Pressable>
       ) : null}
@@ -296,6 +302,16 @@ function Shell() {
         {phase.kind === 'ready' && showConnection ? (
           <ConnectionScreen
             state={phase.state}
+            standalone={solo.current}
+            onConnectPc={async () => {
+              // Leaving standalone is a decision too, so the flag goes
+              // BEFORE the pairing screen — otherwise cancelling out of
+              // pairing would drop back to a phone that had quietly
+              // forgotten it was standalone and start asking again.
+              if (store) await setStandalone(store, false);
+              setShowConnection(false);
+              setPhase({ kind: 'pairing' });
+            }}
             onClose={() => setShowConnection(false)}
           />
         ) : null}

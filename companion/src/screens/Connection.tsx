@@ -24,9 +24,21 @@ import { reporting } from './report.ts';
 interface Props {
   state: AppState;
   onClose: () => void;
+  /**
+   * Running with no PC, deliberately.
+   *
+   * The screen changes shape rather than greying things out: on a
+   * standalone phone the diagnostics are about a machine that does not
+   * exist, and the only thing worth offering is the way to get one.
+   */
+  standalone?: boolean;
+  /** Go and pair with a desktop. Absent when there is already one. */
+  onConnectPc?: () => void;
 }
 
-export function ConnectionScreen({ state, onClose }: Props) {
+export function ConnectionScreen({
+  state, onClose, standalone = false, onConnectPc,
+}: Props) {
   const [reports, setReports] = useState<EndpointReport[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
@@ -88,15 +100,38 @@ export function ConnectionScreen({ state, onClose }: Props) {
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <Text style={styles.title}>Connection</Text>
+        <Text style={styles.title}>Settings</Text>
         <Pressable onPress={onClose}>
           <Text style={styles.close}>Done</Text>
         </Pressable>
       </View>
 
       <Text style={styles.summary}>
-        {describeConnection(snapshot ?? { connection: 'unknown', pendingEdits: 0 }).text}
+        {standalone
+          ? 'This phone is running on its own. Your collection, decks and '
+            + 'groups all live here.'
+          : describeConnection(
+            snapshot ?? { connection: 'unknown', pendingEdits: 0 }).text}
       </Text>
+
+      {/*
+        The way back to a desktop, and the only PC-related thing a
+        standalone phone should be shown. Framed as what it ADDS rather
+        than what is missing: nothing here is broken without one.
+      */}
+      {standalone && onConnectPc ? (
+        <View style={styles.pcOffer}>
+          <Text style={styles.pcTitle}>Add a PC</Text>
+          <Text style={styles.summary}>
+            A desktop adds deck analysis, card suggestions and combo
+            detection, and it fetches the card index in seconds instead of
+            minutes. Everything already on this phone stays exactly as it is.
+          </Text>
+          <Pressable style={styles.pcButton} onPress={onConnectPc}>
+            <Text style={styles.pcButtonText}>Connect a PC</Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {/*
         Both sides' totals, side by side. Not a diagnostic curiosity: when the
@@ -104,7 +139,12 @@ export function ConnectionScreen({ state, onClose }: Props) {
         app is correct and the app still looks wrong, and this is the only
         place that can say which is which.
       */}
-      {counts ? (
+      {/*
+        Everything below is about reaching a desktop. On a phone with none,
+        it is diagnostics for a machine that does not exist — a wall of
+        red about a problem the user does not have.
+      */}
+      {!standalone && counts ? (
         <View style={styles.tally}>
           <Text style={styles.tallyRow}>
             This phone: <Text style={styles.tallyNum}>{counts.phone}</Text> cards
@@ -161,7 +201,7 @@ export function ConnectionScreen({ state, onClose }: Props) {
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
-      {reports === null ? (
+      {standalone ? null : reports === null ? (
         <Text style={styles.muted}>Trying every address…</Text>
       ) : (
         reports.map((report) => (
@@ -193,7 +233,7 @@ export function ConnectionScreen({ state, onClose }: Props) {
         </View>
       ) : null}
 
-      {reports && !anyOk ? (
+      {!standalone && reports && !anyOk ? (
         <View style={styles.advice}>
           <Text style={styles.adviceTitle}>Nothing answered</Text>
           <Text style={styles.muted}>
@@ -219,17 +259,19 @@ export function ConnectionScreen({ state, onClose }: Props) {
         </View>
       ) : null}
 
-      <Pressable
-        style={styles.button}
-        disabled={busy}
-        onPress={() => {
-          void run().catch(reporting('checking the connection', setProblem));
-        }}
-      >
-        <Text style={styles.buttonText}>
-          {busy ? 'Trying…' : 'Try again'}
-        </Text>
-      </Pressable>
+      {!standalone ? (
+        <Pressable
+          style={styles.button}
+          disabled={busy}
+          onPress={() => {
+            void run().catch(reporting('checking the connection', setProblem));
+          }}
+        >
+          <Text style={styles.buttonText}>
+            {busy ? 'Trying…' : 'Try again'}
+          </Text>
+        </Pressable>
+      ) : null}
 
       <Text style={styles.footnote}>
         Your collection is on this phone either way. Nothing here is lost while
@@ -243,6 +285,23 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0f1117' },
   content: { padding: 16, gap: 14 },
   header: { flexDirection: 'row', alignItems: 'center' },
+  pcOffer: {
+    borderColor: '#2b3040',
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 8,
+    marginTop: 16,
+    padding: 14,
+  },
+  pcTitle: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
+  pcButton: {
+    alignItems: 'center',
+    borderColor: '#2f6f9f',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingVertical: 11,
+  },
+  pcButtonText: { color: '#7db8e8', fontSize: 15, fontWeight: '600' },
   title: { color: '#e4e6eb', fontSize: 22, fontWeight: '700', flex: 1 },
   close: { color: '#e53e3e', fontSize: 16, fontWeight: '600' },
   tally: {
