@@ -16,7 +16,12 @@ import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
+import { downloadedChunks } from './bulk-download.ts';
+import { chooseSource } from './index-source.ts';
+import type { IndexSource } from './index-source.ts';
 import { deviceTextReader } from './ocr.ts';
+import { bulkSources, readBulk, toOracleRow, toPrintingRow } from './scryfall.ts';
+import type { BulkSource } from './scryfall.ts';
 import { RepeatGuard } from './scanner.ts';
 import type { TextReader } from './ocr.ts';
 import { stackKey } from './protocol.ts';
@@ -109,9 +114,15 @@ export class AppState {
   /** Running with no desktop, ever — not merely out of range right now. */
   private readonly standalone: boolean;
 
+  /** Plain network access, for the one thing that is not the desktop. */
+  private readonly plainFetch: typeof fetch;
+
   constructor(store: LocalStore, engine: SyncEngine, client: DesktopClient,
               decks?: DeckStore, textReader: TextReader = deviceTextReader,
-              standalone = false) {
+              standalone = false, plainFetch?: typeof fetch) {
+    // Scryfall is reached DIRECTLY, not through the desktop client — that
+    // one carries a pairing token to a machine that may not exist.
+    this.plainFetch = plainFetch ?? fetch;
     this.standalone = standalone;
     this.store = store;
     this.engine = engine;
@@ -232,6 +243,89 @@ export class AppState {
       if (!after) break;
     }
     return { rows: await this.store.oracleSize(), total };
+  }
+
+  /**
+   * Get the card index, from whichever source is available.
+   *
+   * The PC when it is there and Scryfall when it is not — a preference,
+   * not a fallback. The PC is enormously faster (7 MB over the LAN in
+   * under a second, against 74 MB from the internet that has to be
+   * inflated and parsed here) but it must never be REQUIRED, because a
+   * phone-only owner has no PC to offload to and scanning is the first
+   * thing they try.
+   *
+   * Both indexes, because they answer different questions: which printing
+   * is which, and what each card does.
+   */
+  async fetchIndex(
+    onProgress?: (p: { source: IndexSource; done: number; total: number;
+                       stage: string }) => void,
+    // The bytes of a bulk file, as a seam. The real one reaches a native
+    // filesystem that cannot exist under Node, and the cursor handling
+    // around it is worth testing.
+    chunks: (url: string) => AsyncIterable<Uint8Array> = downloadedChunks,
+  ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
+    const source = chooseSource({
+      desktopAvailable: await this.desktopAvailable(),
+    });
+
+    if (source === 'desktop') {
+      const printings = await this.syncCatalogue((done, total) =>
+        onProgress?.({ source, done, total, stage: 'printings' }));
+      const oracle = await this.syncOracle((done, total) =>
+        onProgress?.({ source, done, total, stage: 'cards' }));
+      return { printings: printings.rows, oracle: oracle.rows, source };
+    }
+
+    const sources = await bulkSources(this.plainFetch);
+    // Printings first: it is the one scanning turns on, so a download
+    // interrupted halfway still leaves the scanner working.
+    const printings = await this.pullBulk(
+      sources.default_cards, toPrintingRow,
+      (rows) => this.store.putCatalogue(rows as CatalogueRow[]),
+      CATALOGUE_CURSOR_KEY, chunks,
+      (done, total) => onProgress?.({ source, done, total, stage: 'printings' }),
+    );
+    const oracle = await this.pullBulk(
+      sources.oracle_cards, toOracleRow,
+      (rows) => this.store.putOracle(rows as OracleRow[]),
+      ORACLE_CURSOR_KEY, chunks,
+      (done, total) => onProgress?.({ source, done, total, stage: 'cards' }),
+    );
+    return { printings, oracle, source };
+  }
+
+  /** One bulk file, inflated in pieces and written in batches. */
+  private async pullBulk<T>(
+    source: BulkSource,
+    pick: (card: Record<string, unknown>) => T | null,
+    write: (rows: T[]) => Promise<void>,
+    cursorKey: string,
+    chunks: (url: string) => AsyncIterable<Uint8Array>,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<number> {
+    const rows = await readBulk(
+      chunks(source.url), pick, write,
+      (p) => onProgress(p.bytes, source.bytes || p.bytes),
+    );
+    // The cursor belongs to the DESKTOP walk, which is resumable page by
+    // page. A bulk file is all-or-nothing, so finishing one means the walk
+    // has nothing left to resume — and leaving a stale cursor behind would
+    // make `catalogueReady` call a complete index half-fetched.
+    await this.store.setMeta(cursorKey, '');
+    return rows;
+  }
+
+  /** Whether a desktop is paired AND answering right now. */
+  private async desktopAvailable(): Promise<boolean> {
+    if (this.standalone) return false;
+    try {
+      await this.client.call('tier', {});
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** How much of the index this phone is holding. */
@@ -1469,6 +1563,10 @@ export function buildAppState(
   fetchImpl?: typeof fetch,
   decks?: DeckStore,
   textReader?: TextReader,
+  // Plain network access for Scryfall, kept separate from the desktop
+  // client — that one carries a pairing token to a machine that may not
+  // exist.
+  plainFetch?: typeof fetch,
 ): AppState {
   const client = new DesktopClient(pairing, fetchImpl ? { fetchImpl } : {});
   // The engine needs the deck store to APPLY deck events; without one it
@@ -1477,5 +1575,5 @@ export function buildAppState(
   const engine = new SyncEngine(store, client, device, uuid, decks);
   // An empty address is what "no desktop" is spelled as; see App.tsx.
   return new AppState(store, engine, client, decks, textReader,
-                      !pairing.baseUrl);
+                      !pairing.baseUrl, plainFetch);
 }

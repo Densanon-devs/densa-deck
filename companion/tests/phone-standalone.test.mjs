@@ -9,6 +9,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { gzipSync } from 'node:zlib';
 import { beforeEach, describe, test } from 'node:test';
 
 import { MemoryDatabase, FakeDesktop, testUuid, resetUuid } from './harness.mjs';
@@ -31,6 +32,11 @@ const INDEX = [
 function serving(desktop) {
   const inner = desktop.handle.bind(desktop);
   desktop.handle = (route, payload) => {
+    // Whether a desktop is THERE is decided by asking it something cheap,
+    // so the fake has to answer that or every test looks unpaired.
+    if (route === 'tier') {
+      return { tier: 'pro', is_pro: true, allowances: {} };
+    }
     if (route === 'catalogue/page') {
       return {
         rows: INDEX.filter((r) => r[0] > (payload.after ?? '')),
@@ -317,5 +323,191 @@ describe('a standalone phone is on the free tier', () => {
       new DeckStore(db),
     );
     assert.equal((await state.tier()).is_pro, true);
+  });
+});
+
+describe('getting the index with no PC in the world', () => {
+  /**
+   * The rule you set: it must work on its own, and offload to a PC if it
+   * ever meets one. So the source is a preference rather than a fallback —
+   * the desktop when it is there because it is enormously faster, Scryfall
+   * when it is not because a phone-only owner has nothing to offload to.
+   */
+  async function phone({ desktop, plainFetch }) {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store,
+      desktop
+        ? { baseUrl: 'https://100.64.0.1:8791', token: desktop.token }
+        : { baseUrl: '', token: '' },
+      'phone-1',
+      testUuid,
+      desktop ? desktop.fetchImpl : async () => { throw new Error('no PC'); },
+      new DeckStore(db),
+      // textReader, then the plain fetch Scryfall is reached through.
+      undefined,
+      plainFetch,
+    );
+    return { store, state };
+  }
+
+  test('a paired, reachable PC is used — it is far faster', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { state } = await phone({
+      desktop,
+      plainFetch: async () => { throw new Error('Scryfall should not be asked'); },
+    });
+
+    const out = await state.fetchIndex();
+    assert.equal(out.source, 'desktop');
+    assert.equal(out.printings, 2);
+  });
+
+  test('and a phone with no PC at all goes to Scryfall instead', async () => {
+    // The whole point: never-paired must still end up able to scan.
+    let askedScryfall = 0;
+    const { state } = await phone({
+      desktop: null,
+      plainFetch: async () => {
+        askedScryfall += 1;
+        // Far enough to prove the choice; the reading itself is covered
+        // against real Scryfall bytes in scryfall.test.mjs.
+        throw new Error('reached Scryfall');
+      },
+    });
+
+    await assert.rejects(() => state.fetchIndex(), /reached Scryfall/);
+    assert.equal(askedScryfall, 1);
+  });
+
+  test('a paired phone that is merely OUT OF RANGE also falls back',
+    async () => {
+      // Out of range is not "no PC" — but waiting for one to come back is
+      // not an answer either when the index is what scanning needs.
+      const desktop = serving(new FakeDesktop());
+      desktop.reachable = false;
+      let askedScryfall = 0;
+      const { state } = await phone({
+        desktop,
+        plainFetch: async () => {
+          askedScryfall += 1;
+          throw new Error('reached Scryfall');
+        },
+      });
+
+      await assert.rejects(() => state.fetchIndex());
+      assert.equal(askedScryfall, 1);
+    });
+});
+
+describe('a whole Scryfall pull, end to end', () => {
+  /**
+   * The bytes are faked; everything else is real — the bulk metadata, the
+   * gzip, the line splitting, the row extraction and the writes. What this
+   * is really here for is the cursor: a Scryfall pull is all-or-nothing,
+   * and a cursor left over from an interrupted DESKTOP walk would make a
+   * complete index read as half-fetched for ever.
+   */
+  const CARDS = [
+    { id: 'p-sol', oracle_id: 'o-sol', name: 'Sol Ring', set: 'cmm',
+      collector_number: '410', cmc: 1, type_line: 'Artifact',
+      oracle_text: 'Add two.', mana_cost: '{1}', color_identity: [],
+      lang: 'en', games: ['paper'], digital: false },
+    { id: 'p-bolt', oracle_id: 'o-bolt', name: 'Lightning Bolt', set: 'lea',
+      collector_number: '161', cmc: 1, type_line: 'Instant',
+      oracle_text: 'Deal 3.', mana_cost: '{R}', color_identity: ['R'],
+      lang: 'en', games: ['paper'], digital: false },
+  ];
+  const GZ = gzipSync(
+    CARDS.map((c) => JSON.stringify(c)).join(String.fromCharCode(10))
+    + String.fromCharCode(10));
+
+  // The oracle file carries a card the printings file does not, so a pull
+  // that read the wrong file for either index shows up as a missing card
+  // rather than passing on identical bytes.
+  const ORACLE_ONLY = {
+    ...CARDS[0], id: 'p-only', oracle_id: 'o-only', name: 'Oracle Only',
+  };
+  const ORACLE_GZ = gzipSync(
+    [...CARDS, ORACLE_ONLY].map((c) => JSON.stringify(c))
+      .join(String.fromCharCode(10)) + String.fromCharCode(10));
+
+  async function* fakeChunks(url) {
+    const bytes = url.includes('/o.jsonl') ? ORACLE_GZ : GZ;
+    // Deliberately small, so line boundaries land mid-chunk.
+    for (let i = 0; i < bytes.length; i += 32) {
+      yield new Uint8Array(bytes.subarray(i, i + 32));
+    }
+  }
+
+  async function phone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store,
+      { baseUrl: '', token: '' },
+      'phone-1',
+      testUuid,
+      async () => { throw new Error('no PC'); },
+      new DeckStore(db),
+      undefined,
+      async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { type: 'oracle_cards', jsonl_download_uri: 'https://x/o.jsonl.gz',
+              compressed_size: GZ.length, updated_at: 'now' },
+            { type: 'default_cards', jsonl_download_uri: 'https://x/d.jsonl.gz',
+              compressed_size: GZ.length, updated_at: 'now' },
+          ],
+        }),
+      }),
+    );
+    return { store, state };
+  }
+
+  test('both indexes are filled with no PC anywhere', async () => {
+    const { store, state } = await phone();
+    const out = await state.fetchIndex(undefined, fakeChunks);
+
+    assert.equal(out.source, 'scryfall');
+    // Each index from its OWN file: the oracle one carries a third card.
+    assert.equal(await store.catalogueSize(), 2);
+    assert.equal(await store.oracleSize(), 3);
+    assert.ok(await store.oracleByName('Oracle Only'),
+      'the oracle index was filled from the wrong file');
+  });
+
+  test('and the phone can then identify a card by itself', async () => {
+    const { store, state } = await phone();
+    await state.fetchIndex(undefined, fakeChunks);
+    const hit = await store.printingByKey('cmm', '410');
+    assert.equal(hit.name, 'Sol Ring');
+  });
+
+  test('the index counts as READY afterwards', async () => {
+    // The cursor belongs to the desktop's page-by-page walk. Left behind,
+    // a complete Scryfall index reads as half-fetched and the scanner
+    // refuses to use it.
+    const { store, state } = await phone();
+    await store.setMeta('catalogue.cursor', 'p-somewhere');
+    await store.setMeta('oracle.cursor', 'o-somewhere');
+
+    await state.fetchIndex(undefined, fakeChunks);
+    assert.deepEqual(await state.catalogueReady(), { rows: 2, ready: true });
+  });
+
+  test('progress is reported against the compressed size', async () => {
+    const seen = [];
+    const { state } = await phone();
+    await state.fetchIndex((p) => seen.push(p), fakeChunks);
+    assert.ok(seen.length > 1);
+    assert.ok(seen.some((p) => p.stage === 'printings'));
+    assert.ok(seen.some((p) => p.stage === 'cards'));
+    assert.ok(seen.every((p) => p.source === 'scryfall'));
   });
 });

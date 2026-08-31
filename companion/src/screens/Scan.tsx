@@ -110,6 +110,8 @@ export function ScanScreen({ state }: Props) {
   const [index, setIndex] = useState<{ rows: number; ready: boolean }>(
     { rows: 0, ready: false });
   const [pulling, setPulling] = useState(0);
+  /** Which half is downloading, and from where. */
+  const [indexStage, setIndexStage] = useState('');
   const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
@@ -556,14 +558,23 @@ export function ScanScreen({ state }: Props) {
    */
   const pullIndex = useCallback(async () => {
     setProblem('');
+    setPulling(1);
     try {
-      await state.syncCatalogue((done, total) =>
-        setPulling(total ? Math.round((done / total) * 100) : 0));
+      const out = await state.fetchIndex(({ source, done, total, stage }) => {
+        setPulling(total ? Math.max(1, Math.round((done / total) * 100)) : 1);
+        setIndexStage(source === 'scryfall'
+          ? `Downloading ${stage} from Scryfall`
+          : `Fetching ${stage} from your PC`);
+      });
       setIndex(await state.catalogueReady());
+      setStatus(out.source === 'scryfall'
+        ? 'Card index downloaded. Scanning now works with no PC at all.'
+        : 'Card index fetched from your PC.');
     } catch (err) {
       setProblem(recordCrash(err, 'fetching the card index', false).message);
     } finally {
       setPulling(0);
+      setIndexStage('');
     }
   }, [state]);
   // A phone that has never synced has no collection rows yet, and a picker
@@ -718,26 +729,23 @@ export function ScanScreen({ state }: Props) {
       {!index.ready ? (
         <Pressable
           style={styles.queueBar}
-          disabled={offline || pulling > 0}
+          disabled={pulling > 0}
           onPress={() => void pullIndex()}
         >
           <Text style={styles.queueText}>
             {pulling > 0
-              ? `Fetching the card index… ${pulling}%`
+              ? `${indexStage || 'Fetching the card index'}… ${pulling}%`
               : index.rows > 0
                 ? 'Card index half-fetched — scanning needs all of it'
-                : offline
-                  // Scanning does not need the PC. Getting the card index
-                  // once does, and saying otherwise tells people the
-                  // feature is online-only when the whole point is that it
-                  // is not.
-                  ? 'Scanning needs the card index. Connect to your PC once '
-                    + 'to fetch it — after that it works anywhere.'
-                  : 'Fetch the card index once, then scanning works with no '
-                    + 'PC at all.'}
+                // No PC is no longer a reason not to offer this. It comes
+                // from the desktop when there is one and from Scryfall when
+                // there is not, so the button works either way and only the
+                // wait differs.
+                : 'Get the card index once, then scanning works offline '
+                  + 'forever.'}
           </Text>
           <Text style={styles.queueAction}>
-            {pulling > 0 ? '' : offline ? '' : 'Get it'}
+            {pulling > 0 ? '' : 'Get it'}
           </Text>
         </Pressable>
       ) : null}
