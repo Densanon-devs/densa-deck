@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { AppSnapshot, AppState } from '../lib/app-state.ts';
+import type { TierSnapshot } from '../lib/protocol.ts';
 import type { EndpointReport } from '../lib/client.ts';
 import { checkArtReachable } from '../lib/images.ts';
 import type { ArtReach } from '../lib/images.ts';
@@ -46,10 +47,45 @@ interface Props {
   onDisconnectPc?: () => void;
 }
 
+/**
+ * What free keeps, in one sentence.
+ *
+ * Read from the allowances the tier actually reported rather than written
+ * out, so raising a limit changes this line instead of leaving it stating
+ * last month's policy.
+ */
+function allowanceLine(tier: TierSnapshot): string {
+  const decks = tier.allowances?.saved_decks;
+  const groups = tier.allowances?.collections;
+  const parts: string[] = [];
+  if (typeof decks === 'number' && decks >= 0) {
+    parts.push(`${decks} saved deck${decks === 1 ? '' : 's'}`);
+  }
+  if (typeof groups === 'number' && groups >= 0) {
+    parts.push(`${groups} group${groups === 1 ? '' : 's'} of your own`);
+  }
+  return parts.length
+    ? `Keeps ${parts.join(' and ')}. Scanning, filing and your whole `
+      + 'collection are unlimited.'
+    : 'Scanning, filing and your whole collection are unlimited.';
+}
+
 export function ConnectionScreen({
   state, onClose, standalone = false, onConnectPc, onDisconnectPc,
 }: Props) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  /**
+   * Which tier this phone is on, and what that allows.
+   *
+   * Shown because it was invisible: the limits are only met by bumping
+   * into them, and "why did it stop me at three" is a question the app
+   * should answer before it is asked rather than after.
+   */
+  const [tier, setTier] = useState<TierSnapshot | null>(null);
+
+  useEffect(() => {
+    void state.tier().then(setTier).catch(() => {});
+  }, [state]);
   const [reports, setReports] = useState<EndpointReport[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
@@ -124,6 +160,34 @@ export function ConnectionScreen({
           : describeConnection(
             snapshot ?? { connection: 'unknown', pendingEdits: 0 }).text}
       </Text>
+
+      {/*
+        What this phone may do. First, because it explains every limit
+        below it, and because a paying customer opening settings on a
+        phone that thinks it is free wants to see that immediately.
+      */}
+      {tier ? (
+        <View style={[styles.tierBox, tier.is_pro && styles.tierBoxPro]}>
+          <Text style={[styles.tierName, tier.is_pro && styles.tierNamePro]}>
+            {tier.is_pro ? 'Densa Deck Pro' : 'Free'}
+          </Text>
+          <Text style={styles.muted}>
+            {tier.is_pro
+              ? 'Unlimited decks and groups, plus analysis and suggestions '
+                + 'whenever your PC is in reach.'
+              : allowanceLine(tier)}
+          </Text>
+          {!tier.is_pro ? (
+            <Text style={styles.muted}>
+              {standalone
+                ? 'Pro is activated on the desktop app. Connect a PC to use it '
+                  + 'here.'
+                : 'Activate Pro on your desktop and this phone picks it up on '
+                  + 'the next sync.'}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
 
       {/*
         The way back to a desktop, and the only PC-related thing a
@@ -331,6 +395,17 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0f1117' },
   content: { padding: 16, gap: 14 },
   header: { flexDirection: 'row', alignItems: 'center' },
+  tierBox: {
+    borderColor: '#2b3040',
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 6,
+    marginTop: 16,
+    padding: 14,
+  },
+  tierBoxPro: { borderColor: '#2f6b3f' },
+  tierName: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
+  tierNamePro: { color: '#68d391' },
   disconnect: {
     alignItems: 'center',
     borderTopColor: '#2b3040',

@@ -636,8 +636,35 @@ export class AppState {
    */
   async saveDeck(deck: Deck): Promise<void> {
     if (!this.decks) return;
+    await this.refuseIfOverDeckLimit(deck.deck_id);
     await this.decks.save(deck);
     await this.engine.recordDeckUpsert(deck);
+  }
+
+  /**
+   * Stop at the deck the tier allows, and not before.
+   *
+   * Checked HERE as well as on the desktop, because decks are made
+   * locally: a phone that only learned the limit when a sync was rejected
+   * would learn it long after the deck was built, and a standalone phone
+   * would never learn it at all — which is exactly what happened, four
+   * decks deep, on a free phone with no PC.
+   *
+   * Editing a deck you already have is ALWAYS allowed. The limit counts
+   * decks, not saves, and one that stopped you improving what you have
+   * would teach the wrong thing about what Pro buys.
+   */
+  private async refuseIfOverDeckLimit(deckId: string): Promise<void> {
+    const allowed = (await this.tier()).allowances?.saved_decks;
+    if (typeof allowed !== 'number' || allowed < 0) return;
+    const existing = await this.decks!.list();
+    if (existing.some((d) => d.deck_id === deckId)) return;
+    if (existing.length < allowed) return;
+    throw new Error(
+      `Free keeps ${allowed} decks, and you are using them. Densa Deck Pro `
+      + 'keeps as many as you build — versions, win/loss and all. Nothing '
+      + 'has been lost; delete one to make room.',
+    );
   }
 
   /** Delete a deck here, and tell the desktop. */

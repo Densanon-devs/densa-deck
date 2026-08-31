@@ -603,3 +603,84 @@ describe('a download survives leaving the screen', () => {
     assert.equal(state.fetchingIndex, false);
   });
 });
+
+describe('the deck limit holds with no PC', () => {
+  /**
+   * Reported: four decks made on a standalone phone, then again after
+   * clearing all data. Free keeps three.
+   *
+   * The limit lived only on the desktop. Decks are made LOCALLY, so a
+   * phone with no PC never met the check at all — it was not holding on
+   * to Pro, it had simply never been told there was a limit.
+   */
+  async function alone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const decks = new DeckStore(db);
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      async () => { throw new Error('no PC'); }, decks,
+    );
+    return { state, decks };
+  }
+
+  const deck = (id) => ({
+    deck_id: id, name: `Deck ${id}`, format: 'commander',
+    entries: [{ name: 'Sol Ring', qty: 1 }], commander: [],
+    updated_at: new Date(0).toISOString(),
+  });
+
+  test('three decks save', async () => {
+    const { state, decks } = await alone();
+    for (let n = 0; n < 3; n += 1) await state.saveDeck(deck(`d${n}`));
+    assert.equal((await decks.list()).length, 3);
+  });
+
+  test('and the fourth is refused, in words rather than silence', async () => {
+    const { state } = await alone();
+    for (let n = 0; n < 3; n += 1) await state.saveDeck(deck(`d${n}`));
+    await assert.rejects(() => state.saveDeck(deck('d4')), /Pro keeps as many/);
+  });
+
+  test('editing one you already have always works', async () => {
+    // The limit counts decks, not saves. One that stopped you improving
+    // what you have teaches the wrong thing about what Pro buys.
+    const { state, decks } = await alone();
+    for (let n = 0; n < 3; n += 1) await state.saveDeck(deck(`d${n}`));
+    await state.saveDeck({ ...deck('d1'), name: 'Renamed' });
+    const saved = await decks.list();
+    assert.equal(saved.find((d) => d.deck_id === 'd1').name, 'Renamed');
+  });
+
+  test('deleting one makes room again', async () => {
+    const { state } = await alone();
+    for (let n = 0; n < 3; n += 1) await state.saveDeck(deck(`d${n}`));
+    await state.removeDeck('d0');
+    await state.saveDeck(deck('d4'));
+  });
+
+  test('nothing is refused once Pro is reported', async () => {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const decks = new DeckStore(db);
+    const state = buildAppState(
+      store, { baseUrl: 'https://100.64.0.1:8791', token: 't' }, 'phone-1',
+      testUuid,
+      async () => ({
+        ok: true, status: 200,
+        // -1 is what the desktop actually sends for unlimited, and it is
+        // a number — so a check that only tested "is it a number" would
+        // treat Pro as a limit of minus one and refuse everything.
+        json: async () => ({
+          tier: 'pro', is_pro: true,
+          allowances: { saved_decks: -1, collections: -1 },
+        }),
+      }),
+      decks,
+    );
+    for (let n = 0; n < 6; n += 1) await state.saveDeck(deck(`d${n}`));
+    assert.equal((await decks.list()).length, 6);
+  });
+});
