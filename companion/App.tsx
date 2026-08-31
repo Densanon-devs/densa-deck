@@ -82,13 +82,17 @@ type Phase =
   | { kind: 'ready'; state: AppState; decks: DeckStore };
 
 /**
- * The tabs, and which of them are about a desktop.
+ * The tabs, and which of them belong to the desktop half of the app.
  *
  * A phone deliberately run alone should not be shown a tab whose entire
  * content is the machine it does not have — that is an advert wearing a
  * tab's clothes, and it takes a fifth of the bar.
+ *
+ * `overlaps` is here by product decision rather than technical necessity:
+ * it computes locally and would work standalone, but reconciling one card
+ * against several lists is desk work, so it lives on the PC side.
  */
-const PC_TABS: ReadonlySet<Tab> = new Set(['pc']);
+const PC_TABS: ReadonlySet<Tab> = new Set(['pc', 'overlaps']);
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'collection', label: 'Cards' },
@@ -126,6 +130,7 @@ function Shell() {
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
   const [store, setStore] = useState<LocalStore | null>(null);
   const [tab, setTab] = useState<Tab>('collection');
+
   const [openDeck, setOpenDeck] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [fatal, setFatal] = useState<Crash | null>(null);
@@ -141,6 +146,14 @@ function Shell() {
   // the subscription below is installed once and would otherwise close over
   // the value as it was at pairing time.
   const solo = useRef(false);
+
+  // Going standalone while sitting on a desktop tab would leave a blank
+  // screen with no tab to press to get off it. Declared after `solo` on
+  // purpose — reading a binding from further down the render body works
+  // until somebody reorders two lines.
+  useEffect(() => {
+    if (solo.current && PC_TABS.has(tab)) setTab('collection');
+  }, [tab, phase]);
 
   const connect = useCallback(async (local: LocalStore, pairing: Pairing,
                                      decks?: DeckStore) => {
@@ -405,7 +418,8 @@ function Shell() {
           )
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'pc' ? (
+        {phase.kind === 'ready' && !showConnection && !solo.current
+          && tab === 'pc' ? (
           <PcDecksScreen
             state={phase.state}
             decks={phase.decks}
@@ -419,7 +433,8 @@ function Shell() {
           />
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'overlaps' ? (
+        {phase.kind === 'ready' && !showConnection && !solo.current
+          && tab === 'overlaps' ? (
           <OverlapsScreen state={phase.state} />
         ) : null}
 
