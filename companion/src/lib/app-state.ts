@@ -102,6 +102,15 @@ const CATALOGUE_CURSOR_KEY = 'catalogue.cursor';
 const ORACLE_CURSOR_KEY = 'oracle.cursor';
 
 /**
+ * The cursor value that means "a bulk download is part-way through".
+ *
+ * Not a printing id, so it can never collide with a real desktop-walk
+ * cursor, and non-empty so every existing readiness check treats it as
+ * unfinished without being taught anything new.
+ */
+const BULK_IN_PROGRESS = 'bulk:in-progress';
+
+/**
  * What free keeps, for a phone with no desktop to ask.
  *
  * Mirrors `tiers.py`. Duplicated rather than fetched because the whole
@@ -356,14 +365,22 @@ export class AppState {
     chunks: (url: string) => AsyncIterable<Uint8Array>,
     onProgress: (done: number, total: number) => void,
   ): Promise<number> {
+    // Marked as in progress BEFORE a single row is written.
+    //
+    // Readiness is "rows, and no walk left to finish", and a bulk pull
+    // never set the cursor at all — so the moment the first batch landed,
+    // a download barely started reported itself COMPLETE. That hid the
+    // progress bar mid-download, which is how it was noticed, and it let
+    // scanning run against a fraction of the index, which is how it would
+    // have been noticed much later and much worse.
+    await this.store.setMeta(cursorKey, BULK_IN_PROGRESS);
     const rows = await readBulk(
       chunks(source.url), pick, write,
       (p) => onProgress(p.bytes, source.bytes || p.bytes),
     );
-    // The cursor belongs to the DESKTOP walk, which is resumable page by
-    // page. A bulk file is all-or-nothing, so finishing one means the walk
-    // has nothing left to resume — and leaving a stale cursor behind would
-    // make `catalogueReady` call a complete index half-fetched.
+    // Cleared only on the way out. A bulk file is all-or-nothing — there
+    // is no page to resume from — so an interrupted one leaves the marker
+    // behind and the index stays honestly unfinished.
     await this.store.setMeta(cursorKey, '');
     return rows;
   }

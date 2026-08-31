@@ -737,7 +737,13 @@ export function ScanScreen({ state }: Props) {
         Said before it matters rather than after: finding out in a garage
         that the phone cannot identify anything is finding out too late.
       */}
-      {!index.ready ? (
+      {/*
+        Shown while a fetch is running even once the rows look sufficient:
+        the bar is the only thing saying the download is still going, and
+        hiding it the moment the index passes for ready is what made a pull
+        look like it had died on a tab switch.
+      */}
+      {!index.ready || pulling > 0 ? (
         <Pressable
           style={styles.queueBar}
           disabled={pulling > 0}

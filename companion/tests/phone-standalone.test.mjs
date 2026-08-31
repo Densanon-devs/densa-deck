@@ -489,6 +489,53 @@ describe('a whole Scryfall pull, end to end', () => {
     assert.equal(hit.name, 'Sol Ring');
   });
 
+  test('a pull in progress does NOT count as ready', async () => {
+    /*
+     * Reported as the progress bar vanishing on a tab switch. The cause
+     * was worse than the symptom: readiness is "rows, and no walk left to
+     * finish", and a bulk pull never set a cursor — so the moment the
+     * first batch landed, a download barely started called itself
+     * complete. The bar hid because the app believed it was done, and
+     * scanning would have run against a fraction of the index.
+     */
+    const { store, state } = await phone();
+    const seen = [];
+
+    async function* watched(url) {
+      for await (const piece of fakeChunks(url)) {
+        // Sampled DURING the printings file, which is the one readiness
+        // is judged on.
+        if (url.includes('/d.jsonl')) {
+          seen.push(await store.getMeta('catalogue.cursor'));
+        }
+        yield piece;
+      }
+    }
+
+    await state.fetchIndex(undefined, watched);
+    assert.ok(seen.length > 0, 'the printings file was never read');
+    assert.ok(seen.every((c) => c === 'bulk:in-progress'),
+      `a pull in flight left the cursor as ${JSON.stringify(seen[0])}, so a `
+      + 'half-downloaded index would report itself complete');
+    // And cleared once it really is done.
+    assert.equal(await store.getMeta('catalogue.cursor'), '');
+  });
+
+  test('an interrupted pull leaves the index honestly unfinished', async () => {
+    // A bulk file is all-or-nothing: there is no page to resume from, so
+    // what was written must not pass for a whole index.
+    const { store, state } = await phone();
+    async function* dies(url) {
+      const it = fakeChunks(url);
+      const first = await it.next();
+      if (!first.done) yield first.value;
+      throw new Error('the connection dropped');
+    }
+    await assert.rejects(() => state.fetchIndex(undefined, dies));
+    assert.equal((await state.catalogueReady()).ready, false);
+    assert.equal(await store.getMeta('catalogue.cursor'), 'bulk:in-progress');
+  });
+
   test('the index counts as READY afterwards', async () => {
     // The cursor belongs to the desktop's page-by-page walk. Left behind,
     // a complete Scryfall index reads as half-fetched and the scanner
