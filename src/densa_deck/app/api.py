@@ -402,6 +402,40 @@ class AppApi:
 
         return free_allowance(name)
 
+    def _collection_slot_refused(self) -> dict | None:
+        """Is there room for another grouping?
+
+        Counts groupings YOU made. The main collection is created for you
+        and cannot be opted out of, so charging it against the allowance
+        would quietly make three into two.
+
+        Only ever refuses a NEW one. A collection that already exists stays,
+        is still usable, and can still be renamed or emptied — this shipped
+        with no limit at all, so somebody may already have ten, and taking
+        them away would be deleting a user's own organisation to sell them
+        something.
+        """
+        allowed = self._allowance("collections")
+        if allowed < 0:
+            return None
+        store = self._get_collection_store()
+        default = store.default_collection_id()
+        mine = [c for c in store.list_collections()
+                if c.get("collection_id") != default]
+        if len(mine) < allowed:
+            return None
+        return {
+            "ok": False,
+            "error": (
+                f"Free keeps {allowed} groups of your own alongside your main "
+                f"collection, and you are using {'it' if allowed == 1 else 'them'}"
+                ". Densa Deck Pro keeps as many as you sort into. Nothing has "
+                "been lost — every group you have still works."
+            ),
+            "error_type": "ProRequired",
+            "feature": "collections",
+        }
+
     def _deck_slot_refused(self, deck_id: str) -> dict | None:
         """Is there room to save this deck, or is it one too many?
 
@@ -5137,7 +5171,20 @@ class AppApi:
     @_safe
     def create_collection(self, name: str, kind: str = "collection",
                           notes: str = "") -> dict:
-        """Make a new grouping. Returns the existing one if the name is taken."""
+        """Make a new grouping. Returns the existing one if the name is taken.
+
+        Naming one you already have is not a new grouping, so it is checked
+        against the limit only when it would actually create something —
+        otherwise typing an existing name would be refused for using a slot
+        it already occupies.
+        """
+        wanted = (name or "").strip().lower()
+        taken = any((c.get("name") or "").strip().lower() == wanted
+                    for c in self._get_collection_store().list_collections())
+        if not taken:
+            refused = self._collection_slot_refused()
+            if refused is not None:
+                return refused
         try:
             made = self._get_collection_store().create_collection(
                 name, kind=kind, notes=notes)

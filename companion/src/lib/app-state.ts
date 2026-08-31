@@ -718,22 +718,60 @@ export class AppState {
    * telling the PC later would leave a window where a card is filed under a
    * collection that no longer exists on one device.
    */
+  /**
+   * Organising is a phone job, and it does not need the PC.
+   *
+   * These went through the desktop while `newCollection` did not, so you
+   * could MAKE a list standing over a box and then not rename or delete it
+   * until you were back at the machine. The engine has always been able to
+   * do both locally and tell the PC afterwards; this was simply calling
+   * the wrong door.
+   */
   async deleteCollection(collectionUid: string): Promise<void> {
-    await this.client.call('collection/delete', {
-      collection_uid: collectionUid,
-    });
-    await this.sync();
+    await this.engine.deleteCollection(collectionUid);
+    await this.refreshPending();
+    // Best-effort push. Being out of range is a state, not a failure — the
+    // event is on disk either way.
+    await this.sync().catch(() => undefined);
   }
 
   async renameCollection(collectionUid: string, name: string): Promise<void> {
-    await this.client.call('collection/rename', {
-      collection_uid: collectionUid,
-      name,
-    });
-    await this.sync();
+    await this.engine.renameCollection(collectionUid, name);
+    await this.refreshPending();
+    await this.sync().catch(() => undefined);
   }
 
+  /**
+   * Make a grouping, if this tier has room for one.
+   *
+   * Checked HERE rather than only on the desktop, because groups are made
+   * locally and offline: a limit only the PC knows is one the phone
+   * discovers by having a sync rejected, long after the user made the group
+   * and put forty cards in it.
+   *
+   * The allowance comes from the last tier snapshot the phone was given, so
+   * an unpaired or never-synced phone has no number and is not restricted —
+   * refusing on a value it has never been told would lock a paying user out
+   * of their own phone.
+   */
   async newCollection(name: string): Promise<string> {
+    const allowed = this._tier?.allowances?.collections;
+    if (typeof allowed === 'number' && allowed >= 0) {
+      // The main collection is made for you and cannot be opted out of, so
+      // it does not spend a slot — counting it would quietly make three
+      // into two.
+      const mine = (await this.store.listCollections())
+        .filter((c) => c.collection_uid !== DEFAULT_COLLECTION_UID);
+      const taken = mine.some(
+        (c) => c.name.trim().toLowerCase() === name.trim().toLowerCase());
+      if (!taken && mine.length >= allowed) {
+        throw new Error(
+          `Free keeps ${allowed} groups alongside your main collection. `
+          + 'Densa Deck Pro keeps as many as you sort into — every group '
+          + 'you have still works.',
+        );
+      }
+    }
     const uid = await this.engine.createCollection(name);
     await this.refreshPending();
     return uid;
@@ -850,6 +888,46 @@ export class AppState {
     collectionUid: string,
     finish = '',
   ): Promise<TagResult> {
+    // Answered from this phone's own record of what it owns. Tagging is
+    // pure organisation — nothing is bought, sold or counted — and the
+    // memberships live here anyway, so needing the PC for it made a job
+    // done standing over a box depend on being at a desk.
+    const owned = (await this.store.stacksByPrinting(printingId))
+      .filter((s) => !finish || s.finish === finish);
+
+    if (!owned.length) {
+      return {
+        printing_id: printingId, tagged: 0, owned: 0, candidates: [],
+        collection_uid: collectionUid,
+      };
+    }
+    if (owned.length > 1) {
+      // A foil and a nonfoil are different objects worth different money,
+      // and which one goes in the bundle is a question only the person
+      // holding it can answer.
+      return {
+        printing_id: printingId, tagged: 0,
+        owned: owned.reduce((n, s) => n + s.quantity, 0),
+        candidates: owned.map((s) => ({
+          item_id: 0,
+          stack_key: s.stack_key,
+          card_name: s.card_name,
+          finish: s.finish,
+          condition: s.condition,
+          quantity: s.quantity,
+        })),
+        collection_uid: collectionUid,
+      };
+    }
+    return this.tagStack(owned[0]!.stack_key, collectionUid);
+  }
+
+  /** The old desktop-side tag, kept for nothing — see tagIntoGroup. */
+  private async tagIntoGroupOnPc(
+    printingId: string,
+    collectionUid: string,
+    finish = '',
+  ): Promise<TagResult> {
     return this.client.call<TagResult>('group/tag-scanned', {
       printing_id: printingId,
       collection_uid: collectionUid,
@@ -858,19 +936,45 @@ export class AppState {
   }
 
   /** Answer the "you own this two ways" question by naming the stack. */
-  async tagStack(itemId: number, collectionUid: string): Promise<TagResult> {
-    return this.client.call<TagResult>('group/tag-item', {
-      item_id: itemId,
+  /**
+   * Put a stack in a group, and take it back out.
+   *
+   * Local first, PC second — which is the whole point of a filter. The
+   * membership tables and the sync event for them already existed and were
+   * used by the collection screen; the scanner reached past them to the
+   * desktop, so tagging a bundle worked at a desk and failed over a box.
+   *
+   * Addressed by `stack_key`, not the desktop's row id: local ids do not
+   * travel, and the PC's do not exist here.
+   */
+  async tagStack(stackKey: string, collectionUid: string): Promise<TagResult> {
+    const stack = await this.store.stackByKey(stackKey);
+    if (!stack) {
+      // Not a failure: "you do not own this card" is real information when
+      // you are picking a bundle out of a pile.
+      return {
+        printing_id: '', tagged: 0, owned: 0, candidates: [],
+        collection_uid: collectionUid,
+      };
+    }
+    const already = (await this.listsFor(stackKey)).includes(collectionUid);
+    await this.setListMembership(stack, collectionUid, true);
+    return {
+      printing_id: stack.printing_id,
+      stack_key: stack.stack_key,
+      card_name: stack.card_name,
+      tagged: already ? 0 : 1,
+      already_in: already,
+      owned: stack.quantity,
+      candidates: [],
       collection_uid: collectionUid,
-    });
+    };
   }
 
   /** Take a stack back out of a group. The card itself is untouched. */
-  async untagStack(itemId: number, collectionUid: string): Promise<void> {
-    await this.client.call('group/untag-item', {
-      item_id: itemId,
-      collection_uid: collectionUid,
-    });
+  async untagStack(stackKey: string, collectionUid: string): Promise<void> {
+    const stack = await this.store.stackByKey(stackKey);
+    if (stack) await this.setListMembership(stack, collectionUid, false);
   }
 
   async cardDetail(printingId: string, cardName: string): Promise<CardDetail> {

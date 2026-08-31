@@ -518,3 +518,136 @@ describe('saying how many of them there are', () => {
     assert.equal((await state.cards())[0].quantity, 1);
   });
 });
+
+describe('the phone does its own job first', () => {
+  /**
+   * The rule: the phone is the collection and never waits on the PC. Where
+   * the PC does a job better, the phone does its own version first so the
+   * action always succeeds immediately, and the PC is the upgrade for what
+   * the phone could not do.
+   *
+   * Before this, every scan paid a network round trip before it could file
+   * anything — so a box filed at the speed of the wifi rather than the
+   * speed of the camera, and a slow PC was worse than no PC.
+   */
+  const FOOTER = 'Sol Ring\n0410/0500 U\nCMM • EN';
+
+  test('a card the phone can place is filed without asking the PC',
+    async () => {
+      const desktop = serving(new FakeDesktop());
+      const { state } = await makePhone(desktop, readerOf(FOOTER));
+      await state.syncCatalogue();
+
+      let askedPc = 0;
+      const inner = desktop.handle.bind(desktop);
+      desktop.handle = (route, payload) => {
+        if (route === 'capture') askedPc += 1;
+        return inner(route, payload);
+      };
+
+      const out = await state.identifyOffline('file:///card.jpg');
+      assert.equal(out.printing.printing_id, 'p-sol');
+      assert.equal(askedPc, 0, 'it went to the PC for a card it already knew');
+    });
+
+  test('and the PC is still asked for one it cannot place', async () => {
+    // Exact keys only on the phone. A card whose footer will not read is
+    // exactly what the PC's fuzzy matcher is for, so it must still get it.
+    const desktop = serving(new FakeDesktop());
+    const { state } = await makePhone(desktop, readerOf('smudged nonsense'));
+    await state.syncCatalogue();
+    assert.equal(await state.identifyOffline('file:///card.jpg'), null);
+  });
+});
+
+describe('organising never needs the PC', () => {
+  /**
+   * Tagging is pure organisation — nothing is bought, sold or counted — and
+   * the memberships live on the phone anyway. Routing it through the
+   * desktop made a job done standing over a box depend on being at a desk,
+   * while the collection screen did the same thing locally.
+   */
+  async function withCard(desktop) {
+    const { store, state } = await makePhone(desktop);
+    await state.addCard({
+      printing_id: 'p-sol', card_name: 'Sol Ring',
+      collection_uid: DEFAULT_COLLECTION_UID,
+    });
+    return { store, state };
+  }
+
+  test('a card can be tagged into a group with the PC gone', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { state } = await withCard(desktop);
+    desktop.reachable = false;
+
+    const out = await state.tagIntoGroup('p-sol', SET);
+    assert.equal(out.tagged, 1);
+    const [stack] = await state.cards();
+    assert.ok((await state.listsFor(stack.stack_key)).includes(SET));
+  });
+
+  test('and untagged again', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { state } = await withCard(desktop);
+    desktop.reachable = false;
+
+    const [stack] = await state.cards();
+    await state.tagStack(stack.stack_key, SET);
+    await state.untagStack(stack.stack_key, SET);
+
+    const lists = await state.listsFor(stack.stack_key);
+    assert.equal(lists.includes(SET), false, lists);
+    // The card is still FILED where it lives. A filter cannot destroy what
+    // it filters, so untagging one group must not evict it from its home.
+    assert.ok(lists.includes(DEFAULT_COLLECTION_UID), lists);
+  });
+
+  test('a card you do not own reports that rather than failing', async () => {
+    const desktop = serving(new FakeDesktop());
+    const { state } = await makePhone(desktop);
+    desktop.reachable = false;
+
+    const out = await state.tagIntoGroup('p-never-owned', SET);
+    assert.equal(out.owned, 0);
+    assert.equal(out.tagged, 0);
+  });
+
+  test('owning it two ways asks which, rather than guessing', async () => {
+    // A foil and a nonfoil are different objects worth different money.
+    const desktop = serving(new FakeDesktop());
+    const { state } = await makePhone(desktop);
+    for (const finish of ['nonfoil', 'foil']) {
+      await state.addCard({
+        printing_id: 'p-sol', card_name: 'Sol Ring', finish,
+        collection_uid: DEFAULT_COLLECTION_UID,
+      });
+    }
+    desktop.reachable = false;
+
+    const out = await state.tagIntoGroup('p-sol', SET);
+    assert.equal(out.candidates.length, 2);
+    assert.equal(out.tagged, 0, 'it tagged one without being told which');
+    assert.ok(out.candidates.every((c) => c.stack_key),
+      'a candidate with no stack key cannot be chosen offline');
+  });
+
+  test('renaming and deleting a group work with the PC gone', async () => {
+    // `newCollection` was already local, so these being remote meant you
+    // could MAKE a list over a box and not rename it until you got home.
+    const desktop = serving(new FakeDesktop());
+    const { store, state } = await makePhone(desktop);
+    const uid = await state.newCollection('Shoebox');
+    desktop.reachable = false;
+
+    await state.renameCollection(uid, 'Trade binder');
+    assert.equal(
+      (await store.listCollections()).find((c) => c.collection_uid === uid).name,
+      'Trade binder');
+
+    await state.deleteCollection(uid);
+    assert.equal(
+      (await store.listCollections()).some((c) => c.collection_uid === uid),
+      false);
+  });
+});

@@ -379,6 +379,8 @@ export interface TierSnapshot {
     saved_decks?: number;
     suggestions?: number;
     sets_tracked?: number;
+    /** Groups of your own, on top of the main collection. */
+    collections?: number;
   };
 }
 
@@ -399,16 +401,27 @@ export interface DeckResolveReply {
  * question only you can answer.
  */
 export interface TagCandidate {
+  /** The desktop's row id. Meaningless on this phone; kept for its replies. */
   item_id: number;
+  /**
+   * How the PHONE names this stack.
+   *
+   * Tagging is answered locally now, and a local row id cannot travel while
+   * the desktop's does not exist here — so the natural key is what both
+   * sides can actually agree on.
+   */
+  stack_key?: string;
   card_name: string;
   finish: string;
   condition: string;
-  location: string;
+  location?: string;
   quantity: number;
 }
 
 export interface TagResult {
   printing_id: string;
+  /** Which stack was tagged, as this phone names it. Undo needs it. */
+  stack_key?: string;
   item_id?: number;
   card_name?: string;
   /** 1 when this call put it in the group, 0 when it was already there. */

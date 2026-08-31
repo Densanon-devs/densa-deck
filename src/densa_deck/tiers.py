@@ -104,10 +104,26 @@ FEATURE_TIERS: dict[str, Tier] = {
 # suggestion list that is quietly worse on free would teach people the
 # feature is bad rather than that it is limited.
 
-# One saved deck, with its full history and its whole win/loss record. The
-# limit is on how MANY decks, not on what you may do with one — a deck you
-# cannot version is not a taste of version history.
-FREE_SAVED_DECKS = 1
+# Three saved decks, each with its full history and its whole win/loss
+# record. The limit is on how MANY decks, not on what you may do with one —
+# a deck you cannot version is not a taste of version history.
+#
+# Three rather than one because one deck is not a habit. A person with a
+# single deck never finds out what comparing two versions is worth, which is
+# the thing they would be paying for.
+FREE_SAVED_DECKS = 3
+
+# Three groupings of your own, on top of the main collection.
+#
+# The main one does not count: it is created for you and cannot be opted out
+# of, so charging it against the allowance would quietly make this two.
+#
+# Groups are pure organisation over cards you already own — no analysis, no
+# catalogue — so this is the most generous of the counts on purpose. Three
+# is enough for a real workflow (a trade binder, a deck's pile, and the box
+# you are sorting) and runs out exactly when someone is organising enough to
+# be getting their money's worth.
+FREE_COLLECTIONS = 3
 
 # Two of the eight cards the panel would suggest, in the same order Pro sees.
 FREE_SUGGESTIONS = 2
@@ -125,6 +141,7 @@ def free_allowance(name: str) -> int:
         "saved_decks": FREE_SAVED_DECKS,
         "suggestions": FREE_SUGGESTIONS,
         "sets_tracked": FREE_SETS_TRACKED,
+        "collections": FREE_COLLECTIONS,
     }.get(name, -1)
 
 

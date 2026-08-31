@@ -834,6 +834,11 @@ class PhoneBridge:
                     "saved_decks": free_allowance("saved_decks"),
                     "suggestions": free_allowance("suggestions"),
                     "sets_tracked": free_allowance("sets_tracked"),
+                    # The phone creates groups locally and offline, so it
+                    # needs the number to enforce it itself — a limit only
+                    # the desktop knows is one the phone discovers by having
+                    # a sync rejected, long after the user made the group.
+                    "collections": free_allowance("collections"),
                 },
             }
         except Exception:

@@ -435,6 +435,22 @@ export class LocalStore {
     );
   }
 
+  /** Every stack of one printing you own — one per finish/condition. */
+  async stacksByPrinting(printingId: string): Promise<StackRow[]> {
+    if (!printingId) return [];
+    return this.db.all<StackRow>(
+      'SELECT * FROM stacks WHERE printing_id = ? AND quantity > 0',
+      [printingId]);
+  }
+
+  /** One stack by its key, or null. */
+  async stackByKey(stackKey: string): Promise<StackRow | null> {
+    if (!stackKey) return null;
+    const rows = await this.db.all<StackRow>(
+      'SELECT * FROM stacks WHERE stack_key = ?', [stackKey]);
+    return rows[0] ?? null;
+  }
+
   // -------------------------------------------------- membership (filters)
 
   /** Put a stack in a list without taking it out of any other. */

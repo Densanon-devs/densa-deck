@@ -278,8 +278,15 @@ class TestDuplicatingADeck:
         assert out["ok"] is False
 
     def test_a_copy_costs_a_deck_slot_on_free(self, api, monkeypatch):
-        """A duplicate is a new deck, so the one-deck limit applies to it."""
+        """A duplicate is a new deck, so the deck limit applies to it."""
+        from densa_deck.tiers import FREE_SAVED_DECKS
+
         self._saved(api)
+        # Fill the remaining slots, so the copy is the one over the line
+        # rather than one the allowance had room for.
+        for n in range(FREE_SAVED_DECKS):
+            api.save_deck_version(f"filler{n}", f"Filler {n}",
+                                  "1 Sol Ring", "commander", "")
         monkeypatch.setenv("MTG_ENGINE_TIER", "free")
         out = api.duplicate_deck("d")
         out = out.get("data", out)

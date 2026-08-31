@@ -32,6 +32,11 @@ DECK = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Island\n"
 EDITED = "Commander:\n1 Sol Ring\n\nMainboard:\n1 Brainstorm\n29 Island\n"
 
 
+def _data(envelope):
+    assert envelope["ok"] is True, envelope.get("error")
+    return envelope.get("data", envelope)
+
+
 @pytest.fixture
 def free(monkeypatch):
     """A free installation.
@@ -89,27 +94,44 @@ def _save(api, deck_id, text=DECK):
     return _body(api.save_deck_version(deck_id, deck_id, text, "commander", ""))
 
 
-class TestOneDeckIsARealDeck:
-    """The free deck has to be a whole deck, or the taste is worthless."""
+def _fill_deck_slots(api):
+    """Save exactly as many decks as free allows, and return the count."""
+    from densa_deck.tiers import FREE_SAVED_DECKS
+
+    for n in range(FREE_SAVED_DECKS):
+        assert _save(api, f"deck{n}")["version_number"] == 1, n
+    return FREE_SAVED_DECKS
+
+
+class TestTheFreeDecksAreRealDecks:
+    """Each free deck has to be a whole deck, or the taste is worthless.
+
+    Counted from `FREE_SAVED_DECKS` rather than written out, so raising the
+    allowance moves these with it instead of leaving tests that assert last
+    month's policy.
+    """
 
     def test_the_first_deck_saves(self, free, api):
         assert _save(api, "first")["version_number"] == 1
 
-    def test_the_second_does_not(self, free, api):
-        _save(api, "first")
-        refused = _save(api, "second")
+    def test_every_allowed_deck_saves(self, free, api):
+        assert _fill_deck_slots(api) >= 1
+
+    def test_the_one_after_does_not(self, free, api):
+        _fill_deck_slots(api)
+        refused = _save(api, "one-too-many")
         assert refused["ok"] is False
         assert refused["error_type"] == "ProRequired"
 
     def test_and_says_what_it_would_buy(self, free, api):
-        _save(api, "first")
-        refused = _save(api, "second")
+        _fill_deck_slots(api)
+        refused = _save(api, "one-too-many")
         assert "Pro" in refused["error"]
         assert "lost" in refused["error"], "it must say the draft is safe"
 
-    def test_editing_the_one_deck_still_works(self, free, api):
+    def test_editing_a_deck_you_have_still_works(self, free, api):
         """The limit counts DECKS, not saves. A limit that stopped you
-        improving the deck you have teaches the wrong thing about Pro."""
+        improving the decks you have teaches the wrong thing about Pro."""
         _save(api, "first")
         again = _save(api, "first", EDITED)
         assert again["version_number"] == 2
@@ -126,11 +148,11 @@ class TestOneDeckIsARealDeck:
         api.record_deck_game("first", "loss")
         assert _body(api.get_deck_record("first"))["record"]["record"] == "1-1"
 
-    def test_deleting_the_deck_frees_the_slot(self, free, api):
-        _save(api, "first")
-        assert _save(api, "second")["ok"] is False
-        api.delete_deck("first")
-        assert _save(api, "second")["version_number"] == 1
+    def test_deleting_a_deck_frees_the_slot(self, free, api):
+        _fill_deck_slots(api)
+        assert _save(api, "one-too-many")["ok"] is False
+        api.delete_deck("deck0")
+        assert _save(api, "one-too-many")["version_number"] == 1
 
     def test_pro_keeps_as_many_as_it_likes(self, pro, api):
         for n in range(4):
@@ -143,6 +165,12 @@ class TestTheEditorHoleIsClosed:
     around the gate."""
 
     def test_the_builder_save_obeys_the_same_limit(self, free, api):
+        from densa_deck.tiers import FREE_SAVED_DECKS
+
+        # One slot short, so the next builder save is the last allowed one
+        # and the one after it is the refusal being tested.
+        for n in range(FREE_SAVED_DECKS - 1):
+            _save(api, f"deck{n}")
         first = _body(api.save_builder_as_deck("a", "A", "commander", DECK, ""))
         assert first.get("ok") is not False
         second = _body(api.save_builder_as_deck("b", "B", "commander", DECK, ""))
@@ -156,9 +184,11 @@ class TestTheEditorHoleIsClosed:
         assert made["version_number"] == 1
 
     def test_both_doors_lead_to_the_same_count(self, free, api):
-        _save(api, "editor")
+        # Filled through the EDITOR, refused at the BUILDER: the two doors
+        # share one count, which is the hole this class exists for.
+        _fill_deck_slots(api)
         refused = _body(api.save_builder_as_deck("builder", "B", "commander", DECK, ""))
-        assert refused["ok"] is False, "the builder ignored the editor's deck"
+        assert refused["ok"] is False, "the builder ignored the editor's decks"
 
 
 class TestSuggestionsAreFewerNotWorse:
@@ -357,7 +387,13 @@ class TestThePhoneIsNotAWayRound:
         snap = bridge.handle_api("tier", {})
         assert snap["tier"] == "free"
         assert snap["is_pro"] is False
-        assert snap["allowances"]["saved_decks"] == 1
+        # Read from the constant: the phone must be told the CURRENT
+        # allowance, and a hard-coded 1 here would pass while the phone
+        # showed last month's policy.
+        from densa_deck.tiers import FREE_SAVED_DECKS
+
+        assert snap["allowances"]["saved_decks"] == FREE_SAVED_DECKS
+        assert snap["allowances"]["collections"] == 3
 
     def test_and_gets_the_answer_beside_its_capabilities(self, free, bridge):
         """So activating Pro on the desktop reaches the phone without
@@ -459,3 +495,80 @@ class TestTheCardPanelSplitsDownTheMiddle:
         out = self._panel(aristocrats)
         assert out.get("withheld", 0) == 0
         assert len(out["suggestions"]) > 2
+
+
+class TestTheFreeAllowances:
+    """What free keeps, and what it refuses.
+
+    Every one of these is a COUNT, never a crippled version of the thing —
+    a suggestion list that is quietly worse on free teaches people the
+    feature is bad rather than that it is limited.
+    """
+
+    def test_free_keeps_three_decks(self, free):
+        from densa_deck.tiers import free_allowance
+        assert free_allowance("saved_decks") == 3
+
+    def test_and_three_groups_of_your_own(self, free):
+        from densa_deck.tiers import free_allowance
+        assert free_allowance("collections") == 3
+
+    def test_a_third_deck_is_allowed(self, free, api):
+        """One deck is not a habit: nobody with a single deck finds out
+        what comparing two versions is worth."""
+        for n in range(3):
+            r = api.save_deck_version(f"d{n}", f"Deck {n}",
+                                           "1 Sol Ring", "commander", "")
+            assert r["ok"] is True, (n, r.get("error"))
+
+    def test_a_fourth_deck_is_refused(self, free, api):
+        for n in range(3):
+            api.save_deck_version(f"d{n}", f"Deck {n}", "1 Sol Ring",
+                                       "commander", "")
+        r = api.save_deck_version("d3", "Deck 3", "1 Sol Ring",
+                                       "commander", "")
+        assert r["ok"] is False and r["error_type"] == "ProRequired"
+
+    def test_editing_a_deck_you_have_is_always_allowed(self, free, api):
+        """The limit counts decks, not saves. A limit that stopped you
+        improving what you have teaches the wrong thing about Pro."""
+        for n in range(3):
+            api.save_deck_version(f"d{n}", f"Deck {n}", "1 Sol Ring",
+                                       "commander", "")
+        r = api.save_deck_version("d1", "Deck 1", "2 Sol Ring",
+                                       "commander", "")
+        assert r["ok"] is True, r.get("error")
+
+    def test_three_groups_then_a_fourth_is_refused(self, free, api):
+        for n in range(3):
+            r = api.create_collection(f"Box {n}")
+            assert r["ok"] is True, (n, r.get("error"))
+        r = api.create_collection("Box 4")
+        assert r["ok"] is False and r["feature"] == "collections", r
+
+    def test_the_main_collection_does_not_use_a_slot(self, free, api):
+        """It is made for you and cannot be opted out of, so charging it
+        against the allowance would quietly make three into two."""
+        api.get_collection_status()          # forces the default to exist
+        for n in range(3):
+            assert api.create_collection(f"Box {n}")["ok"] is True, n
+
+    def test_naming_one_you_already_have_is_not_a_new_group(self, free, api):
+        # It returns the existing one rather than creating anything, so it
+        # must not be refused for occupying a slot it already occupies.
+        for n in range(3):
+            api.create_collection(f"Box {n}")
+        r = api.create_collection("Box 1")
+        assert r["ok"] is True, r.get("error")
+
+    def test_groups_made_before_the_limit_existed_are_kept(self, free, api):
+        """This shipped with no limit at all, so somebody may already have
+        ten. Taking them away would be deleting a user's own organisation
+        to sell them something."""
+        store = api._get_collection_store()
+        for n in range(6):
+            store.create_collection(f"Old {n}")
+        listed = _data(api.list_collections())["collections"]
+        assert len(listed) >= 6
+        # And a new one is refused rather than any being removed.
+        assert api.create_collection("One more")["ok"] is False

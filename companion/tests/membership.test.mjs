@@ -313,3 +313,72 @@ describe('tagging at scan time', () => {
       `expected the add plus two tags to be queued, saw ${pending}`);
   });
 });
+
+describe('how many groups free keeps', () => {
+  /**
+   * Groups are made locally and offline, so the phone has to know the
+   * limit itself. A limit only the PC knows is one the user discovers by
+   * having a sync rejected — long after they made the group and put forty
+   * cards in it.
+   */
+  async function phoneOn(allowances) {
+    const store = new LocalStore(new MemoryDatabase());
+    await store.init();
+    const state = buildAppState(
+      store,
+      { baseUrl: 'http://100.64.0.1:8792', token: 't' },
+      'phone-test',
+      () => `id-${(seq += 1)}`,
+      async () => ({ status: 200, json: async () => ({ ok: true,
+        tier: 'free', is_pro: false, allowances }) }),
+    );
+    await state.tier(true);
+    return state;
+  }
+
+  test('three of your own are allowed', async () => {
+    const state = await phoneOn({ collections: 3 });
+    for (let n = 0; n < 3; n += 1) {
+      assert.ok(await state.newCollection(`Box ${n}`), `box ${n}`);
+    }
+  });
+
+  test('and the fourth is refused, in words rather than a stack trace',
+    async () => {
+      const state = await phoneOn({ collections: 3 });
+      for (let n = 0; n < 3; n += 1) await state.newCollection(`Box ${n}`);
+      await assert.rejects(() => state.newCollection('Box 4'),
+        /Pro keeps as many/);
+    });
+
+  test('the main collection does not spend a slot', async () => {
+    // It is made for you and cannot be opted out of.
+    const state = await phoneOn({ collections: 3 });
+    for (let n = 0; n < 3; n += 1) await state.newCollection(`Box ${n}`);
+    const all = await state.collections();
+    assert.equal(all.length, 4, 'the default should be there as well');
+  });
+
+  test('naming one you already have is not a new group', async () => {
+    const state = await phoneOn({ collections: 3 });
+    for (let n = 0; n < 3; n += 1) await state.newCollection(`Box ${n}`);
+    assert.ok(await state.newCollection('Box 1'));
+  });
+
+  test('a phone that has never been told a number is not restricted',
+    async () => {
+      // Refusing on a value it has never been given would lock a paying
+      // user out of their own phone.
+      const state = await phoneOn({});
+      for (let n = 0; n < 6; n += 1) {
+        assert.ok(await state.newCollection(`Box ${n}`), n);
+      }
+    });
+
+  test('and Pro is not restricted either', async () => {
+    const state = await phoneOn({ collections: -1 });
+    for (let n = 0; n < 6; n += 1) {
+      assert.ok(await state.newCollection(`Box ${n}`), n);
+    }
+  });
+});

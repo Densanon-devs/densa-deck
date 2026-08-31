@@ -115,9 +115,12 @@ export function ScanScreen({ state }: Props) {
   // The green flash is gone in under a second. What was filed has to stay on
   // screen afterwards, because a wrong card is not always obvious in the
   // moment and the alternative is finding it weeks later in the collection.
-  const [tagged, setTagged] = useState<{ itemId: number; name: string } | null>(
-    null,
-  );
+  // Keyed the way the PHONE names a stack. The desktop's row id cannot be
+  // used to undo a tag the phone applied locally, and offline there is no
+  // desktop row id at all.
+  const [tagged, setTagged] = useState<
+    { stackKey: string; name: string } | null
+  >(null);
   const [lastAdded, setLastAdded] = useState<{
     candidate: ScanCandidate;
     finish: string;
@@ -230,7 +233,9 @@ export function ScanScreen({ state }: Props) {
           copy,
           verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
         });
-        setTagged(out.item_id ? { itemId: out.item_id, name: candidate.name } : null);
+        setTagged(out.stack_key
+          ? { stackKey: out.stack_key, name: candidate.name }
+          : null);
         setResult(null);
         setTimeout(() => setFlash(null), 950);
         return;
@@ -259,13 +264,14 @@ export function ScanScreen({ state }: Props) {
     async (candidate: TagCandidate) => {
       setChoosing(null);
       try {
-        const out = await state.tagStack(candidate.item_id, target);
+        const out = await state.tagStack(candidate.stack_key ?? '', target);
         setFlash({
           name: candidate.card_name,
           copy: 1,
           verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
         });
-        setTagged({ itemId: candidate.item_id, name: candidate.card_name });
+        setTagged({ stackKey: candidate.stack_key ?? '',
+                    name: candidate.card_name });
         setTimeout(() => setFlash(null), 950);
       } catch (err) {
         setProblem(recordCrash(err, 'tagging it', false).message);
@@ -279,7 +285,7 @@ export function ScanScreen({ state }: Props) {
     if (!tagged) return;
     setProblem('');
     try {
-      await state.untagStack(tagged.itemId, target);
+      await state.untagStack(tagged.stackKey, target);
       guard.current.reset();
       setStatus(`Took ${tagged.name} back out of the group`);
       setTagged(null);
@@ -348,6 +354,44 @@ export function ScanScreen({ state }: Props) {
       busyRef.current = true;
       setBusy(true);
       setStatus('Reading...');
+      // Local first, PC second.
+      //
+      // The phone can place a card by itself now, and doing that before
+      // asking the PC means a scan never waits on a network round trip to
+      // succeed — which is the difference between a box that files at the
+      // speed of the camera and one that files at the speed of the wifi.
+      //
+      // The PC is still better: it has the fuzzy name matcher and the whole
+      // catalogue, so anything the phone cannot place EXACTLY still goes to
+      // it. This is a fast path, not a replacement.
+      try {
+        const local = await state.identifyOffline(base64);
+        if (local) {
+          const decision = guard.current.consider(
+            local.printing.name, Date.now());
+          if (!decision.file) {
+            setStatus('Same card still in frame');
+            return;
+          }
+          await state.addCard({
+            printing_id: local.printing.printing_id,
+            card_name: local.printing.name,
+            finish: local.foilHint ? 'foil' : 'nonfoil',
+            collection_uid: target,
+            also_collection_uids: alsoTag,
+          });
+          setFlash({
+            name: local.printing.name, copy: decision.copy, verb: 'ADDED',
+          });
+          setTimeout(() => setFlash(null), 950);
+          setStatus('Added — next card');
+          return;
+        }
+      } catch {
+        // The recogniser or the index let us down. The PC is the answer to
+        // that, and it is the next thing tried.
+      }
+
       try {
         const reply = await identifyPhoto(state.scanClient, base64);
         scanner.current.succeeded();
@@ -386,47 +430,9 @@ export function ScanScreen({ state }: Props) {
         );
       } catch (err) {
         scanner.current.failed();
-        // The PC is not there. Try to place the card here instead: the
-        // phone reads the text with ML Kit and matches it against the index
-        // pulled off the PC earlier. Exact footer keys only — see
-        // identify.ts — so this either knows the card or admits it does not.
-        try {
-          const local = await state.identifyOffline(base64);
-          if (local) {
-            // Through the SAME guard the online path uses. Without it the
-            // auto loop files a card once per capture for as long as it
-            // sits in frame — the exact bug RepeatGuard was written for,
-            // reintroduced by taking a different route to addCard.
-            const decision = guard.current.consider(
-              local.printing.name, Date.now());
-            if (!decision.file) {
-              setStatus('Same card still in frame');
-              return;
-            }
-            const finish = local.foilHint ? 'foil' : 'nonfoil';
-            await state.addCard({
-              printing_id: local.printing.printing_id,
-              card_name: local.printing.name,
-              finish,
-              collection_uid: target,
-              also_collection_uids: alsoTag,
-            });
-            setFlash({
-              name: local.printing.name,
-              copy: decision.copy,
-              verb: 'ADDED',
-            });
-            setTimeout(() => setFlash(null), 950);
-            setStatus('Filed without your PC — next card');
-            return;
-          }
-        } catch {
-          // Fall through to the queue. A recogniser that failed is not a
-          // reason to lose the card.
-        }
-
-        // Could not place it here either. The card in your hand is still
-        // real, so the picture is kept for the PC rather than discarded.
+        // The phone could not place it and the PC is not there either.
+        // The card in your hand is still real, so the picture is kept for
+        // the PC rather than discarded.
         try {
           // Shrunk before storing, never before sending: the live path
           // hands the PC everything it could have had.

@@ -1539,29 +1539,39 @@ class TestBuilder:
         finally:
             api.close()
 
-    def test_save_builder_as_deck_free_tier_gets_one_deck(self, api_with_cards, monkeypatch):
-        """Free keeps ONE deck now, rather than none.
+    def test_save_builder_as_deck_free_tier_gets_its_allowance(
+            self, api_with_cards, monkeypatch):
+        """Free keeps a COUNT of decks, rather than none.
 
         This used to assert that every free save was refused. That was a
         locked door, and it was also a lie: the check lived here and the
         endpoint it delegates to had none, so saving from the Decks tab
         walked straight around it. The limit is a deck count now, applied
         where the writing happens.
+
+        Counted from the constant, so raising the allowance moves this test
+        with it rather than leaving it asserting last month's policy.
         """
+        from densa_deck.tiers import FREE_SAVED_DECKS
+
         monkeypatch.setenv("MTG_ENGINE_TIER", "free")
         text = "Commander:\n1 Sol Ring\n\nMainboard:\n30 Forest\n"
 
-        first = api_with_cards.save_builder_as_deck(
-            deck_id="test", name="Test", format_="commander", decklist_text=text,
-        )
-        assert first.get("ok") is not False, first
-        assert first["data"]["version_number"] == 1
+        for n in range(FREE_SAVED_DECKS):
+            made = api_with_cards.save_builder_as_deck(
+                deck_id=f"test-{n}", name=f"Test {n}", format_="commander",
+                decklist_text=text,
+            )
+            assert made.get("ok") is not False, (n, made)
+            assert made["data"]["version_number"] == 1
 
-        second = api_with_cards.save_builder_as_deck(
-            deck_id="test-2", name="Two", format_="commander", decklist_text=text,
+        over = api_with_cards.save_builder_as_deck(
+            deck_id="one-too-many", name="Too many", format_="commander",
+            decklist_text=text,
         )
-        assert second["ok"] is False
-        assert second.get("error_type") == "ProRequired"
+        assert over["ok"] is False
+        assert over.get("error_type") == "ProRequired"
+
 
     def test_save_builder_as_deck_pro_writes_version(self, api_with_cards, monkeypatch):
         monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
