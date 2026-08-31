@@ -34,11 +34,22 @@ interface Props {
   standalone?: boolean;
   /** Go and pair with a desktop. Absent when there is already one. */
   onConnectPc?: () => void;
+  /**
+   * Forget the paired desktop and go back to choosing.
+   *
+   * There was no way to do this from inside the app at all, and
+   * uninstalling does not do it either: Android's auto-backup restores the
+   * app's data on reinstall, pairing included. So a phone whose desktop
+   * had revoked it came back paired to a machine that would never answer,
+   * with nothing to press.
+   */
+  onDisconnectPc?: () => void;
 }
 
 export function ConnectionScreen({
-  state, onClose, standalone = false, onConnectPc,
+  state, onClose, standalone = false, onConnectPc, onDisconnectPc,
 }: Props) {
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const [reports, setReports] = useState<EndpointReport[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
@@ -273,6 +284,41 @@ export function ConnectionScreen({
         </Pressable>
       ) : null}
 
+      {/*
+        Letting go of a desktop.
+        
+        Two taps, because it is not undoable without the PC in front of
+        you — but it takes nothing away: the collection, decks and groups
+        are this phone's own and stay exactly as they are. Said out loud,
+        because "disconnect" reads like "delete" to anyone who has not
+        been told otherwise.
+      */}
+      {!standalone && onDisconnectPc ? (
+        <View style={styles.disconnect}>
+          {confirmingDisconnect ? (
+            <>
+              <Text style={styles.muted}>
+                Your collection, decks and groups stay on this phone. You
+                will lose deck analysis and suggestions until you connect a
+                PC again.
+              </Text>
+              <Pressable style={styles.danger} onPress={onDisconnectPc}>
+                <Text style={styles.dangerText}>
+                  Yes, disconnect this PC
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => setConfirmingDisconnect(false)}>
+                <Text style={styles.close}>Keep it</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable onPress={() => setConfirmingDisconnect(true)}>
+              <Text style={styles.dangerQuiet}>Disconnect this PC</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
+
       <Text style={styles.footnote}>
         Your collection is on this phone either way. Nothing here is lost while
         the PC is out of reach — edits wait and go across when it comes back.
@@ -285,6 +331,24 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0f1117' },
   content: { padding: 16, gap: 14 },
   header: { flexDirection: 'row', alignItems: 'center' },
+  disconnect: {
+    alignItems: 'center',
+    borderTopColor: '#2b3040',
+    borderTopWidth: 1,
+    gap: 10,
+    marginTop: 22,
+    paddingTop: 16,
+  },
+  danger: {
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    borderColor: '#8c2f2f',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingVertical: 11,
+  },
+  dangerText: { color: '#e08b8b', fontSize: 15, fontWeight: '600' },
+  dangerQuiet: { color: '#8a8f9c', fontSize: 14 },
   pcOffer: {
     borderColor: '#2b3040',
     borderRadius: 10,

@@ -252,3 +252,54 @@ describe('choosing to run without a PC, and changing your mind', () => {
     assert.equal(await isStandalone(s), false);
   });
 });
+
+describe('starting over from inside the app', () => {
+  /**
+   * Uninstalling does NOT reset this app. Android's auto-backup saves its
+   * data and restores it on reinstall, pairing included — so a phone whose
+   * desktop had revoked it came back paired to a machine that would never
+   * answer, with nothing in the app to press.
+   *
+   * Disconnecting has to clear BOTH the pairing and the standalone choice,
+   * or the next launch skips the question instead of asking it.
+   */
+  function store() {
+    const meta = new Map();
+    return {
+      meta,
+      async getMeta(key) { return meta.get(key); },
+      async setMeta(key, value) { meta.set(key, value); },
+    };
+  }
+
+  test('forgetting the PC leaves no pairing behind', async () => {
+    const s = store();
+    await savePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+    await forgetPairing(s);
+    assert.equal(await loadPairing(s), null);
+  });
+
+  test('and clearing the standalone choice too means the app ASKS again',
+    async () => {
+      // Either one left behind sends the next launch straight past the
+      // question — one into a dead pairing, the other into standalone.
+      const s = store();
+      await savePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+      await setStandalone(s, true);
+
+      await forgetPairing(s);
+      await setStandalone(s, false);
+
+      assert.equal(await loadPairing(s), null);
+      assert.equal(await isStandalone(s), false);
+    });
+
+  test('the device id survives it', async () => {
+    // Sync is meaningless without a stable answer to "who am I": a phone
+    // that forgot would look like a new peer and re-send its history.
+    const s = store();
+    const before = await deviceId(s, () => 'made-up-id');
+    await forgetPairing(s);
+    assert.equal(await deviceId(s, () => 'a-different-id'), before);
+  });
+});

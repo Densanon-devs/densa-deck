@@ -40,6 +40,7 @@ import type { Pairing } from './src/lib/client.ts';
 import { DeckStore } from './src/lib/decks.ts';
 import {
   deviceId,
+  forgetPairing,
   isStandalone,
   loadPairing,
   savePairing,
@@ -303,6 +304,18 @@ function Shell() {
           <ConnectionScreen
             state={phase.state}
             standalone={solo.current}
+            onDisconnectPc={async () => {
+              // Forget the desktop AND the standalone choice, so the next
+              // screen is the one that asks — which is the state a fresh
+              // install would have been in if Android's auto-backup had
+              // not restored the old pairing over it.
+              if (store) {
+                await forgetPairing(store);
+                await setStandalone(store, false);
+              }
+              setShowConnection(false);
+              setPhase({ kind: 'pairing' });
+            }}
             onConnectPc={async () => {
               // Leaving standalone is a decision too, so the flag goes
               // BEFORE the pairing screen — otherwise cancelling out of
