@@ -84,7 +84,16 @@ export interface AppSnapshot {
 }
 
 export interface IndexFetch {
-  source: IndexSource;
+  /**
+   * Null until it is known.
+   *
+   * Deciding needs a round trip — asking the desktop whether it is there,
+   * then asking Scryfall where today's files are — and that is one to two
+   * seconds of a button that looks like it did nothing. So the fetch
+   * announces itself the instant it starts and fills in the source when
+   * it has one.
+   */
+  source: IndexSource | null;
   /** Which half: printings or cards. */
   stage: string;
   done: number;
@@ -310,6 +319,12 @@ export class AppState {
     chunks?: (url: string) => AsyncIterable<Uint8Array>,
   ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
     if (this.indexRun) return this.indexRun;
+    // Before anything asynchronous, so the screen changes on the tap
+    // rather than a second or two later — which is long enough that
+    // somebody presses it again, and again.
+    this.emit({
+      indexFetch: { source: null, stage: 'starting', done: 0, total: 0 },
+    });
     this.indexRun = this.fetchIndex(
       (p) => this.emit({ indexFetch: p }),
       chunks,

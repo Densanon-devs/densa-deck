@@ -117,11 +117,15 @@ export function ScanScreen({ state }: Props) {
   const pulling = indexFetch?.total
     ? Math.max(1, Math.round((indexFetch.done / indexFetch.total) * 100))
     : indexFetch ? 1 : 0;
-  const indexStage = indexFetch
-    ? (indexFetch.source === 'scryfall'
-      ? `Downloading ${indexFetch.stage} from Scryfall`
-      : `Fetching ${indexFetch.stage} from your PC`)
-    : '';
+  const indexStage = !indexFetch
+    ? ''
+    // The source is not known until a round trip decides it, and claiming
+    // one before then would name the wrong place half the time.
+    : indexFetch.source === null
+      ? 'Starting…'
+      : indexFetch.source === 'scryfall'
+        ? `Downloading ${indexFetch.stage} from Scryfall`
+        : `Fetching ${indexFetch.stage} from your PC`;
   const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
@@ -766,7 +770,9 @@ export function ScanScreen({ state }: Props) {
         >
           <Text style={styles.queueText}>
             {pulling > 0
-              ? `${indexStage || 'Fetching the card index'}… ${pulling}%`
+              // The percentage lives on the right now, so it is not said
+              // twice in one row.
+              ? (indexStage || 'Fetching the card index')
               : index.rows > 0
                 ? 'Card index half-fetched — scanning needs all of it'
                 // No PC is no longer a reason not to offer this. It comes
@@ -776,9 +782,19 @@ export function ScanScreen({ state }: Props) {
                 : 'Get the card index once, then scanning works offline '
                   + 'forever.'}
           </Text>
-          <Text style={styles.queueAction}>
-            {pulling > 0 ? '' : 'Get it'}
-          </Text>
+          {/*
+            An actual button, not a word at the end of a sentence. It read
+            as a label, which is why it was not obvious it could be
+            pressed — and once pressed it went quiet for a second or two,
+            so it got pressed again.
+          */}
+          {pulling > 0 ? (
+            <Text style={styles.queueAction}>{`${pulling}%`}</Text>
+          ) : (
+            <View style={styles.queueButton}>
+              <Text style={styles.queueButtonText}>Get it</Text>
+            </View>
+          )}
         </Pressable>
       ) : null}
 
@@ -1080,6 +1096,14 @@ const styles = StyleSheet.create({
   // rather than wrapping — which is what "those two parts are
   // overlapping" looks like on a narrow phone.
   queueText: { color: '#e4e6eb', flex: 1, fontSize: 13, marginRight: 10 },
+  queueButton: {
+    backgroundColor: '#2f6f9f',
+    borderRadius: 8,
+    flexShrink: 0,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  queueButtonText: { color: '#fff', fontSize: 13, fontWeight: '700' },
   queueAction: {
     color: '#7db8e8',
     flexShrink: 0,

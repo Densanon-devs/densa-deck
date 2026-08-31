@@ -797,3 +797,81 @@ describe('nothing is kept for a PC that will never come', () => {
     assert.deepEqual(await state.cards(), []);
   });
 });
+
+describe('the fetch says something the instant it is asked', () => {
+  /**
+   * Reported: "Get it" did not look like a button, and pressing it did
+   * nothing for a couple of seconds — so it got pressed again.
+   *
+   * The wait is real work: deciding the source means asking the desktop
+   * whether it is there and then asking Scryfall where today's files
+   * live. What was wrong is that none of it was visible, so the fetch now
+   * announces itself before any of it starts.
+   */
+  const CARD = {
+    id: 'p-sol', oracle_id: 'o-sol', name: 'Sol Ring', set: 'cmm',
+    collector_number: '410', cmc: 1, type_line: 'Artifact',
+    oracle_text: 'Add two.', mana_cost: '{1}', color_identity: [],
+    lang: 'en', games: ['paper'], digital: false,
+  };
+  const GZ = gzipSync(JSON.stringify(CARD) + String.fromCharCode(10));
+
+  async function phone(onBulkLookup) {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    return buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      async () => { throw new Error('no PC'); }, new DeckStore(db), undefined,
+      async () => {
+        await onBulkLookup?.();
+        return {
+          ok: true, status: 200,
+          json: async () => ({ data: [
+            { type: 'oracle_cards', jsonl_download_uri: 'https://x/o.jsonl.gz',
+              compressed_size: GZ.length, updated_at: 'n' },
+            { type: 'default_cards', jsonl_download_uri: 'https://x/d.jsonl.gz',
+              compressed_size: GZ.length, updated_at: 'n' },
+          ] }),
+        };
+      },
+    );
+  }
+
+  test('the app is told before any network happens', async () => {
+    // The bulk lookup is held open, so the only thing that can have been
+    // announced by then is the announcement made before it started.
+    let release = () => {};
+    const held = new Promise((resolve) => { release = resolve; });
+    const state = await phone(() => held);
+
+    let firstSeen = null;
+    state.subscribe((snap) => {
+      if (firstSeen === null && snap.indexFetch) firstSeen = snap.indexFetch;
+    });
+
+    async function* chunks() { yield new Uint8Array(GZ); }
+    const run = state.startIndexFetch(chunks);
+
+    assert.ok(firstSeen, 'the button would sit silent until the network answered');
+    assert.equal(firstSeen.stage, 'starting');
+    assert.equal(firstSeen.source, null,
+      'it named a source before one had been decided');
+
+    release();
+    await run;
+  });
+
+  test('and the source is filled in once it is known', async () => {
+    const state = await phone();
+    const stages = [];
+    state.subscribe((snap) => {
+      if (snap.indexFetch) stages.push(snap.indexFetch.source);
+    });
+    async function* chunks() { yield new Uint8Array(GZ); }
+    await state.startIndexFetch(chunks);
+
+    assert.equal(stages[0], null);
+    assert.ok(stages.includes('scryfall'), stages.join(','));
+  });
+});
