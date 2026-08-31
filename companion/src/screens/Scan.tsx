@@ -726,10 +726,18 @@ export function ScanScreen({ state }: Props) {
               ? `Fetching the card index… ${pulling}%`
               : index.rows > 0
                 ? 'Card index half-fetched — scanning needs all of it'
-                : 'No card index yet — scanning needs your PC'}
+                : offline
+                  // Scanning does not need the PC. Getting the card index
+                  // once does, and saying otherwise tells people the
+                  // feature is online-only when the whole point is that it
+                  // is not.
+                  ? 'Scanning needs the card index. Connect to your PC once '
+                    + 'to fetch it — after that it works anywhere.'
+                  : 'Fetch the card index once, then scanning works with no '
+                    + 'PC at all.'}
           </Text>
           <Text style={styles.queueAction}>
-            {pulling > 0 ? '' : offline ? 'Out of range' : 'Get it'}
+            {pulling > 0 ? '' : offline ? '' : 'Get it'}
           </Text>
         </Pressable>
       ) : null}
@@ -1010,8 +1018,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  queueText: { color: '#e4e6eb', fontSize: 13 },
-  queueAction: { color: '#7db8e8', fontSize: 13, fontWeight: '600' },
+  // `flex: 1` on the label and no shrink on the action. Without it a long
+  // message cannot give ground, so it runs underneath the action text
+  // rather than wrapping — which is what "those two parts are
+  // overlapping" looks like on a narrow phone.
+  queueText: { color: '#e4e6eb', flex: 1, fontSize: 13, marginRight: 10 },
+  queueAction: {
+    color: '#7db8e8',
+    flexShrink: 0,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   alsoLabel: { color: '#8a8f9c', fontSize: 12 },
   alsoChips: { flexDirection: 'row', gap: 6 },
   chip: {

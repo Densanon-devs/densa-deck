@@ -136,14 +136,18 @@ BEHAVIOUR = {
     # box. Either one absent is silent — the deck still opens, it is just
     # wrong about which card is in it.
     "deck slot resolver route": "decks/resolve",
-    # Tagging goes over the wire; a phone that shipped the toggle without the
-    # route would offer a mode that silently does nothing.
-    "tag-into-group route": "group/tag-scanned",
+    # Tagging is answered LOCALLY now — it is pure organisation over cards
+    # the phone already knows about — so the wire route is no longer the
+    # thing to look for. What has to be in the app is the local write.
+    "tag-into-group locally": "stacksByPrinting",
     "build-from-collection route": "group/build-deck",
     "PC deck list route": "decks/list",
     "deck save-to-PC route": "decks/save",
     "group review route": "group/review",
-    "bought-it route": "wishlist/acquire",
+    # Buying one files it AND clears the want, both locally, so the shop is
+    # not the one place the button does not work. The route it used to call
+    # is gone; the behaviour is the local forget.
+    "bought-it clears the want": "forgetWish",
     # The zoomed card is a real overlay, not a panel at the bottom of the
     # page. Inline it sat below a grid that keeps growing — tap a card,
     # scroll on, sixty more results load, and the thing you opened is further

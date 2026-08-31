@@ -20,6 +20,28 @@ export async function savePairing(
   await store.setMeta(PAIRING_KEY, JSON.stringify(pairing));
 }
 
+/**
+ * Whether this phone has been told to run without a PC.
+ *
+ * Remembered, because the alternative is being asked to pair on every
+ * launch by an app that works fine without one — which reads as nagging
+ * rather than as a supported way to own it.
+ */
+const STANDALONE_KEY = 'app.standalone';
+
+export async function isStandalone(store: {
+  getMeta(key: string): Promise<string | null | undefined>;
+}): Promise<boolean> {
+  return (await store.getMeta(STANDALONE_KEY)) === 'yes';
+}
+
+export async function setStandalone(
+  store: { setMeta(key: string, value: string): Promise<void> },
+  on: boolean,
+): Promise<void> {
+  await store.setMeta(STANDALONE_KEY, on ? 'yes' : '');
+}
+
 export async function loadPairing(store: LocalStore): Promise<Pairing | null> {
   const raw = await store.getMeta(PAIRING_KEY);
   if (!raw) return null;

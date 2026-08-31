@@ -72,3 +72,29 @@ describe('saying WHY it is not', () => {
     }
   });
 });
+
+describe('a phone that has never had a PC', () => {
+  /**
+   * Standalone is a supported way to own this app, not a degraded mode —
+   * so the app has to OPEN without a desktop. It did not: no pairing sent
+   * you to the pairing screen and left you there, which made the phone's
+   * main job conditional on the accessory.
+   */
+  test('nothing is analysed, and that is not an error', () => {
+    const reach = { connection: 'offline', paired: false };
+    assert.equal(canAnalyse(reach), false);
+    assert.equal(barrier(reach), 'unpaired');
+    assert.doesNotMatch(explainBarrier('unpaired'), /error|failed/i);
+  });
+
+  test('and it is told its collection still works', () => {
+    // The one thing a standalone user needs to know: they have not lost
+    // anything by not owning a desktop.
+    assert.match(explainBarrier('unpaired'), /collection works without it/i);
+  });
+
+  test('pairing later turns analysis on without anything else changing', () => {
+    assert.equal(canAnalyse({ connection: 'connected', paired: false }), false);
+    assert.equal(canAnalyse({ connection: 'connected', paired: true }), true);
+  });
+});

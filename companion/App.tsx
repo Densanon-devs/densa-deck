@@ -12,7 +12,7 @@
  * exactly that until this file learned to open them.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
 import {
   AppState as ForegroundState,
   Pressable,
@@ -38,7 +38,13 @@ import type { Crash } from './src/lib/crash.ts';
 import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts';
 import type { Pairing } from './src/lib/client.ts';
 import { DeckStore } from './src/lib/decks.ts';
-import { deviceId, loadPairing, savePairing } from './src/lib/pairing.ts';
+import {
+  deviceId,
+  isStandalone,
+  loadPairing,
+  savePairing,
+  setStandalone,
+} from './src/lib/pairing.ts';
 import { openDeviceDatabase } from './src/lib/sqlite.ts';
 import { uuid } from './src/lib/uuid.ts';
 import { LocalStore } from './src/lib/store.ts';
@@ -58,6 +64,16 @@ import { WishlistScreen } from './src/screens/Wishlist.tsx';
 installGlobalErrorTrap();
 
 type Tab = 'collection' | 'decks' | 'pc' | 'overlaps' | 'wishlist' | 'scan';
+
+/**
+ * The pairing for a phone with no PC.
+ *
+ * An address that cannot resolve rather than a special case threaded
+ * through the client: every call then fails the way being out of range
+ * already fails, which is a path the whole app is built to sit on. A
+ * second "no desktop" mode would be a second set of bugs.
+ */
+const ALONE: Pairing = { baseUrl: '', token: '' };
 
 type Phase =
   | { kind: 'starting' }
@@ -111,8 +127,14 @@ function Shell() {
     [],
   );
 
+  // Whether this phone is deliberately running without a PC. A ref, because
+  // the subscription below is installed once and would otherwise close over
+  // the value as it was at pairing time.
+  const solo = useRef(false);
+
   const connect = useCallback(async (local: LocalStore, pairing: Pairing,
                                      decks?: DeckStore) => {
+    solo.current = !pairing.baseUrl;
     const device = await deviceId(local, uuid);
     // The deck store goes in HERE rather than only to the screens, so decks
     // and results arriving from the PC are applied rather than remembered
@@ -120,7 +142,7 @@ function Shell() {
     const state = buildAppState(local, pairing, device, uuid, undefined, decks);
     state.subscribe((next) => {
       setSnapshot(next);
-      if (next.connection === 'unpaired') {
+      if (next.connection === 'unpaired' && !solo.current) {
         // The desktop revoked this phone; there is nothing to retry, so say
         // so and send the user back to pairing rather than looping.
         setPhase({ kind: 'pairing', reason: next.lastError });
@@ -174,6 +196,18 @@ function Shell() {
 
         const pairing = await loadPairing(local);
         if (!pairing) {
+          // Standalone is a CHOICE, and it is remembered. Asking to pair on
+          // every launch of an app that works without a PC is nagging.
+          if (await isStandalone(local)) {
+            const soloDb = await openDeviceDatabase();
+            const soloDecks = new DeckStore(soloDb);
+            setPhase({
+              kind: 'ready',
+              state: await connect(local, ALONE, soloDecks),
+              decks: soloDecks,
+            });
+            return;
+          }
           setPhase({ kind: 'pairing' });
           return;
         }
@@ -261,6 +295,22 @@ function Shell() {
         {phase.kind === 'pairing' ? (
           <PairScreen
             reason={phase.reason}
+            onStandalone={async () => {
+              if (!store) {
+                throw new Error(
+                  'The local collection is not open yet. Give it a moment '
+                    + 'and try again.',
+                );
+              }
+              await setStandalone(store, true);
+              const database = await openDeviceDatabase();
+              const deckStore = new DeckStore(database);
+              setPhase({
+                kind: 'ready',
+                state: await connect(store, ALONE, deckStore),
+                decks: deckStore,
+              });
+            }}
             onPaired={async (pairing) => {
               // Returning quietly used to make a real failure — the database
               // never opened — look like a button that does nothing.

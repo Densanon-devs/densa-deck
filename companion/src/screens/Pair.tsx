@@ -25,11 +25,20 @@ import { CameraGate, CameraView } from './Camera.tsx';
 interface Props {
   /** May be async: whatever it throws is shown rather than discarded. */
   onPaired: (pairing: Pairing) => void | Promise<void>;
+  /**
+   * Carry on with no PC at all.
+   *
+   * Not a "skip" and not "later". The phone IS the collection — scanning,
+   * filing, grouping, decks and the wishlist are all its own — and a
+   * desktop adds analysis on top. An app that could not be opened without
+   * one would be calling its main job an accessory.
+   */
+  onStandalone?: () => void | Promise<void>;
   /** Rendered when the desktop has revoked this phone. */
   reason?: string;
 }
 
-export function PairScreen({ onPaired, reason }: Props) {
+export function PairScreen({ onPaired, onStandalone, reason }: Props) {
   const [typed, setTyped] = useState('');
   const [problem, setProblem] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -131,6 +140,32 @@ export function PairScreen({ onPaired, reason }: Props) {
         Your phone needs to be on the same Tailscale network as your PC. Nothing
         is sent anywhere else — this talks to your computer directly.
       </Text>
+
+      {/*
+        The other way in. Scanning, filing, grouping, decks and the
+        wishlist are the phone's own work; a PC adds analysis on top of
+        them. Refusing to open without one would be calling the app's main
+        job an accessory — and it is a decision, not a "skip", so it says
+        what you get rather than what you are putting off.
+      */}
+      {onStandalone ? (
+        <>
+          <Pressable
+            style={styles.alone}
+            onPress={() => {
+              void onStandalone();
+            }}
+          >
+            <Text style={styles.aloneText}>Use without a PC</Text>
+          </Pressable>
+          <Text style={styles.note}>
+            Your collection, decks and groups all live on this phone. A PC
+            adds deck analysis and suggestions later — you can connect one
+            whenever you like.
+          </Text>
+        </>
+      ) : null}
+
       <Text style={styles.version}>Densa Deck companion {VERSION}</Text>
     </View>
   );
@@ -215,6 +250,15 @@ const styles = StyleSheet.create({
   problem: { color: '#e53e3e', lineHeight: 20 },
   progress: { color: '#ecc94b', lineHeight: 20 },
   note: { color: '#8a8f9c', fontSize: 12, lineHeight: 18, marginTop: 'auto' },
+  alone: {
+    alignItems: 'center',
+    borderColor: '#2b3040',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 18,
+    paddingVertical: 12,
+  },
+  aloneText: { color: '#e4e6eb', fontSize: 15, fontWeight: '600' },
   version: { color: '#4a4f5c', fontSize: 11 },
   scanner: { height: 320, borderRadius: 12, overflow: 'hidden' },
   cancel: {
