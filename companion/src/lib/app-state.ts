@@ -70,6 +70,25 @@ export interface AppSnapshot {
    * that someone debugging their own setup wants to know which happened.
    */
   via?: Via;
+  /**
+   * A card-index download in flight, or null.
+   *
+   * In the SNAPSHOT rather than in the Scan screen, because it outlives
+   * that screen. Driven from component state, switching tabs unmounted the
+   * screen and the progress vanished — the download itself carried on with
+   * nowhere to report, and coming back showed a fresh "Get it" button that
+   * would have started a second one. Losing a third of a 74 MB download to
+   * changing tabs is not a thing anybody should have to know to avoid.
+   */
+  indexFetch?: IndexFetch | null;
+}
+
+export interface IndexFetch {
+  source: IndexSource;
+  /** Which half: printings or cards. */
+  stage: string;
+  done: number;
+  total: number;
 }
 
 const LAST_SYNC_KEY = 'sync.last_at';
@@ -103,6 +122,7 @@ export class AppState {
   private listeners = new Set<(s: AppSnapshot) => void>();
   private snapshot: AppSnapshot = {
     connection: 'unknown',
+    indexFetch: null,
     pendingEdits: 0,
   };
 
@@ -258,6 +278,37 @@ export class AppState {
    * Both indexes, because they answer different questions: which printing
    * is which, and what each card does.
    */
+  /**
+   * Start a card-index download, and let the whole app watch it.
+   *
+   * Idempotent on purpose: a second tap while one is running joins the one
+   * in flight rather than starting another. Two concurrent pulls of the
+   * same 74 MB would both write the same rows, cost twice the data, and
+   * race each other's cursor.
+   */
+  async startIndexFetch(
+    chunks?: (url: string) => AsyncIterable<Uint8Array>,
+  ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
+    if (this.indexRun) return this.indexRun;
+    this.indexRun = this.fetchIndex(
+      (p) => this.emit({ indexFetch: p }),
+      chunks,
+    ).finally(() => {
+      this.indexRun = null;
+      this.emit({ indexFetch: null });
+    });
+    return this.indexRun;
+  }
+
+  /** Whether one is already running, for a screen deciding what to show. */
+  get fetchingIndex(): boolean {
+    return this.indexRun !== null;
+  }
+
+  private indexRun: Promise<{
+    printings: number; oracle: number; source: IndexSource;
+  }> | null = null;
+
   async fetchIndex(
     onProgress?: (p: { source: IndexSource; done: number; total: number;
                        stage: string }) => void,

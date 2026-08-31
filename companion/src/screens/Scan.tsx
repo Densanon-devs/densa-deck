@@ -35,7 +35,7 @@ import {
   View,
 } from 'react-native';
 
-import type { AppState, Connection } from '../lib/app-state.ts';
+import type { AppState, Connection, IndexFetch } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
 import {
   DEFAULT_CAMERA_SETTINGS,
@@ -82,6 +82,7 @@ export function ScanScreen({ state }: Props) {
     DEFAULT_CAMERA_SETTINGS,
   );
   const [connection, setConnection] = useState<Connection>('unknown');
+  const [indexFetch, setIndexFetch] = useState<IndexFetch | null>(null);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
   // Starts at the default rather than empty: a card filed in the moment
   // between mounting and the stored target arriving would go nowhere
@@ -109,9 +110,18 @@ export function ScanScreen({ state }: Props) {
    */
   const [index, setIndex] = useState<{ rows: number; ready: boolean }>(
     { rows: 0, ready: false });
-  const [pulling, setPulling] = useState(0);
-  /** Which half is downloading, and from where. */
-  const [indexStage, setIndexStage] = useState('');
+  // Read from the snapshot, so a download started here and left behind is
+  // still shown on the way back.
+  // A percentage only once there is a size to measure against; 1 stands
+  // for "started" so the bar is never a stationary zero.
+  const pulling = indexFetch?.total
+    ? Math.max(1, Math.round((indexFetch.done / indexFetch.total) * 100))
+    : indexFetch ? 1 : 0;
+  const indexStage = indexFetch
+    ? (indexFetch.source === 'scryfall'
+      ? `Downloading ${indexFetch.stage} from Scryfall`
+      : `Fetching ${indexFetch.stage} from your PC`)
+    : '';
   const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
@@ -178,7 +188,10 @@ export function ScanScreen({ state }: Props) {
       .catch((err) => recordCrash(err, 'camera settings', false));
     void state.scanTarget().then(setTarget).catch(reporting('scan target', setProblem));
     void loadCollections().catch(reporting('your collections', setProblem));
-    return state.subscribe((snapshot) => setConnection(snapshot.connection));
+    return state.subscribe((snapshot) => {
+      setConnection(snapshot.connection);
+      setIndexFetch(snapshot.indexFetch ?? null);
+    });
   }, [state, loadCollections]);
 
   const chooseTarget = useCallback(
@@ -556,25 +569,23 @@ export function ScanScreen({ state }: Props) {
    * Resumable: the walk is keyed on the last printing id, so wandering out
    * of range mid-pull costs the current page, not the whole download.
    */
+  /**
+   * Start the download, or join the one already going.
+   *
+   * The progress lives in the app snapshot rather than here, so leaving
+   * this screen no longer throws away a download in flight — which cost a
+   * third of a 74 MB pull the first time somebody changed tabs.
+   */
   const pullIndex = useCallback(async () => {
     setProblem('');
-    setPulling(1);
     try {
-      const out = await state.fetchIndex(({ source, done, total, stage }) => {
-        setPulling(total ? Math.max(1, Math.round((done / total) * 100)) : 1);
-        setIndexStage(source === 'scryfall'
-          ? `Downloading ${stage} from Scryfall`
-          : `Fetching ${stage} from your PC`);
-      });
+      const out = await state.startIndexFetch();
       setIndex(await state.catalogueReady());
       setStatus(out.source === 'scryfall'
         ? 'Card index downloaded. Scanning now works with no PC at all.'
         : 'Card index fetched from your PC.');
     } catch (err) {
       setProblem(recordCrash(err, 'fetching the card index', false).message);
-    } finally {
-      setPulling(0);
-      setIndexStage('');
     }
   }, [state]);
   // A phone that has never synced has no collection rows yet, and a picker

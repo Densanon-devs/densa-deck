@@ -80,6 +80,15 @@ type Phase =
   | { kind: 'pairing'; reason?: string }
   | { kind: 'ready'; state: AppState; decks: DeckStore };
 
+/**
+ * The tabs, and which of them are about a desktop.
+ *
+ * A phone deliberately run alone should not be shown a tab whose entire
+ * content is the machine it does not have — that is an advert wearing a
+ * tab's clothes, and it takes a fifth of the bar.
+ */
+const PC_TABS: ReadonlySet<Tab> = new Set(['pc']);
+
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'collection', label: 'Cards' },
   { id: 'decks', label: 'Decks' },
@@ -262,7 +271,12 @@ function Shell() {
         checked" look identical when both are silence, and they are entirely
         different situations to be in while filing a box of cards.
       */}
-      {phase.kind === 'ready' ? (
+      {/*
+        Hidden entirely when there is no PC to have a connection to.
+        A permanent "No PC" warning on a phone deliberately run alone is
+        not a status, it is a nag about a decision already made.
+      */}
+      {phase.kind === 'ready' && !solo.current ? (
         <Pressable
           style={[styles.banner, styles[`banner_${status.tone}`]]}
           onPress={() => setShowConnection((open) => !open)}
@@ -392,7 +406,8 @@ function Shell() {
 
       {phase.kind === 'ready' ? (
         <View style={[styles.tabs, { paddingBottom: frame.paddingBottom + 6 }]}>
-          {TABS.map((entry) => (
+          {TABS.filter((entry) => !solo.current || !PC_TABS.has(entry.id))
+            .map((entry) => (
             <Pressable
               key={entry.id}
               style={styles.tab}

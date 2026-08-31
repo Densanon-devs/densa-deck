@@ -511,3 +511,95 @@ describe('a whole Scryfall pull, end to end', () => {
     assert.ok(seen.every((p) => p.source === 'scryfall'));
   });
 });
+
+describe('a download survives leaving the screen', () => {
+  /**
+   * Reported: the pull reached about 30%, the user changed tabs, and on
+   * coming back the progress was gone. The download was driven from the
+   * Scan screen's own state, so unmounting it threw the progress away —
+   * and the fresh "Get it" button that appeared would have started a
+   * SECOND 74 MB download alongside the first.
+   */
+  const CARD = {
+    id: 'p-sol', oracle_id: 'o-sol', name: 'Sol Ring', set: 'cmm',
+    collector_number: '410', cmc: 1, type_line: 'Artifact',
+    oracle_text: 'Add two.', mana_cost: '{1}', color_identity: [],
+    lang: 'en', games: ['paper'], digital: false,
+  };
+  const GZ = gzipSync(JSON.stringify(CARD) + String.fromCharCode(10));
+
+  async function phone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      async () => { throw new Error('no PC'); },
+      new DeckStore(db), undefined,
+      async () => ({
+        ok: true, status: 200,
+        json: async () => ({ data: [
+          { type: 'oracle_cards', jsonl_download_uri: 'https://x/o.jsonl.gz',
+            compressed_size: GZ.length, updated_at: 'n' },
+          { type: 'default_cards', jsonl_download_uri: 'https://x/d.jsonl.gz',
+            compressed_size: GZ.length, updated_at: 'n' },
+        ] }),
+      }),
+    );
+    return state;
+  }
+
+  test('progress is broadcast to the whole app, not held in a screen',
+    async () => {
+      const state = await phone();
+      const seen = [];
+      state.subscribe((snap) => {
+        if (snap.indexFetch) seen.push(snap.indexFetch);
+      });
+
+      async function* chunks() { yield new Uint8Array(GZ); }
+      await state.startIndexFetch(chunks);
+
+      assert.ok(seen.length > 0, 'nothing outside the screen ever heard');
+      assert.ok(seen.some((p) => p.stage === 'printings'));
+    });
+
+  test('and it is cleared when the download finishes', async () => {
+    const state = await phone();
+    let last = 'unset';
+    state.subscribe((snap) => { last = snap.indexFetch; });
+
+    async function* chunks() { yield new Uint8Array(GZ); }
+    await state.startIndexFetch(chunks);
+    assert.equal(last, null, 'the bar would sit there for ever');
+  });
+
+  test('a second tap joins the one in flight rather than starting another',
+    async () => {
+      // Two concurrent pulls would both write the same rows, cost twice
+      // the data, and race each other's cursor.
+      const state = await phone();
+      let started = 0;
+      async function* chunks() {
+        started += 1;
+        yield new Uint8Array(GZ);
+      }
+      const [a, b] = await Promise.all([
+        state.startIndexFetch(chunks),
+        state.startIndexFetch(chunks),
+      ]);
+      assert.deepEqual(a, b);
+      // Two files per pull — printings and cards — so one pull is two.
+      assert.equal(started, 2, `${started} downloads for one pull`);
+    });
+
+  test('and the app can be asked whether one is running', async () => {
+    const state = await phone();
+    assert.equal(state.fetchingIndex, false);
+    async function* chunks() { yield new Uint8Array(GZ); }
+    const run = state.startIndexFetch(chunks);
+    assert.equal(state.fetchingIndex, true);
+    await run;
+    assert.equal(state.fetchingIndex, false);
+  });
+});

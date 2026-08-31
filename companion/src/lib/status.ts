@@ -72,9 +72,13 @@ export function describeConnection(
   }
 
   if (snapshot.connection === 'offline') {
+    // "Offline" was read as "this phone has no internet", which it does not
+    // mean and which is alarming when you are plainly online. The only
+    // thing out of reach is the PC, so that is what it says — and the
+    // phone's own half of the app does not depend on it.
     return {
       tone: 'warn',
-      headline: waiting ? `Offline · ${waiting}` : 'Offline',
+      headline: waiting ? `No PC · ${waiting}` : 'No PC',
       text: waiting
         ? `Can't reach your PC. ${waiting} — they go across when it comes back.`
         : "Can't reach your PC. Your collection is still here.",

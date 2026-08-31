@@ -156,3 +156,33 @@ describe('how long ago, in words', () => {
     assert.equal(agoInWords('not a date', NOW), '');
   });
 });
+
+describe('what the strip means by offline', () => {
+  /**
+   * Reported from a phone that was plainly on the internet: the strip said
+   * "Offline". It meant the PC, but it reads as "this phone has no
+   * connection", which is both wrong and alarming — and it is the phone's
+   * own half of the app that does NOT depend on the PC at all.
+   */
+  test('it names the PC rather than claiming the phone is offline', () => {
+    const status = describeConnection(
+      { connection: 'offline', pendingEdits: 0 }, Date.now());
+    assert.equal(status.headline, 'No PC');
+    assert.doesNotMatch(status.headline, /offline/i);
+  });
+
+  test('and still counts what is waiting to go across', () => {
+    const status = describeConnection(
+      { connection: 'offline', pendingEdits: 3 }, Date.now());
+    assert.match(status.headline, /No PC/);
+    assert.match(status.headline, /3/);
+  });
+
+  test('the longer line says the collection is still here', () => {
+    // The thing somebody actually wants to know when they see a warning
+    // while holding a box of cards.
+    const status = describeConnection(
+      { connection: 'offline', pendingEdits: 0 }, Date.now());
+    assert.match(status.text, /still here/i);
+  });
+});
