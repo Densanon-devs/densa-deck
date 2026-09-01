@@ -30,6 +30,7 @@ const CARD = {
   type_line: 'Artifact', oracle_text: 'Add two colourless.',
   mana_cost: '{1}', cmc: 1, color_identity: [], set: 'cmm',
   collector_number: '410', lang: 'en', games: ['paper'], digital: false,
+  rarity: 'common',
 };
 
 describe('what belongs in the index', () => {
@@ -55,8 +56,10 @@ describe('what belongs in the index', () => {
 
 describe('what a card becomes', () => {
   test('a printing row carries the exact key a scan matches on', () => {
+    // Six: the four a scan matches on, plus mana value and rarity, which
+    // match nothing but are filters somebody expects to work.
     assert.deepEqual(toPrintingRow(CARD),
-      ['p-sol', 'Sol Ring', 'cmm', '410', 1]);
+      ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common']);
   });
 
   test('an oracle row carries what the card does', () => {

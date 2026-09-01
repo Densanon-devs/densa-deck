@@ -41,7 +41,8 @@ export interface BulkSource {
 }
 
 /** One row of the printing index: id, name, set, number, mana value. */
-export type PrintingRow = [string, string, string, string, number | null];
+export type PrintingRow =
+  [string, string, string, string, number | null, string];
 
 /** One row of the oracle index. */
 export type OracleIndexRow =
@@ -120,6 +121,7 @@ export function toPrintingRow(
     String(card.set ?? ''),
     String(card.collector_number ?? ''),
     typeof cmc === 'number' ? cmc : null,
+    String(card.rarity ?? ''),
   ];
 }
 

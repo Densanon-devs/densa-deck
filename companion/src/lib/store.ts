@@ -203,10 +203,14 @@ export const SCHEMA: string[] = [
      name TEXT NOT NULL,
      set_code TEXT NOT NULL,
      collector_number TEXT NOT NULL,
-     -- Not used for matching. It is here because a collection is most often
-     -- sorted by mana value, and a phone cannot sort by a number it does
-     -- not hold. One small integer per printing against megabytes of text.
-     cmc REAL
+     -- Neither of these identifies a card. They are here because they are
+     -- filters somebody expects to work — sort by curve, browse the
+     -- mythics — and a filter with nothing behind it silently finds
+     -- nothing, which reads as the app refusing rather than as data it
+     -- does not hold. A number and a short word per printing, against
+     -- megabytes of text.
+     cmc REAL,
+     rarity TEXT NOT NULL DEFAULT ''
    )`,
   // The exact-key lookup: set code plus collector number is how a scan
   // identifies a card when the footer reads cleanly, and it is one indexed
@@ -294,7 +298,7 @@ export interface OracleCard {
 }
 
 export type CatalogueRow =
-  [string, string, string, string, (number | null)?];
+  [string, string, string, string, (number | null)?, string?];
 
 /**
  * The extra lists a queued scan was headed for.
@@ -693,20 +697,21 @@ export class LocalStore {
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
       if (!chunk.length) continue;
-      const holes = chunk.map(() => '(?, ?, ?, ?, ?)').join(', ');
+      const holes = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
       await this.db.run(
         `INSERT INTO catalogue
-           (printing_id, name, set_code, collector_number, cmc)
+           (printing_id, name, set_code, collector_number, cmc, rarity)
          VALUES ${holes}
          ON CONFLICT(printing_id) DO UPDATE SET
            name = excluded.name,
            set_code = excluded.set_code,
            collector_number = excluded.collector_number,
-           cmc = excluded.cmc`,
-        // Padded, so a page from an older desktop that sends four fields
+           cmc = excluded.cmc,
+           rarity = excluded.rarity`,
+        // Padded, so a page from an older desktop that sends fewer fields
         // still writes rather than throwing a bind-count error and
         // stranding the whole download.
-        chunk.flatMap((r) => [r[0], r[1], r[2], r[3], r[4] ?? null]),
+        chunk.flatMap((r) => [r[0], r[1], r[2], r[3], r[4] ?? null, r[5] ?? '']),
       );
     }
   }
@@ -739,6 +744,11 @@ export class LocalStore {
     const rows = await this.db.all<{ n: number }>(
       'SELECT COUNT(*) AS n FROM oracle');
     return Number(rows[0]?.n ?? 0);
+  }
+
+  /** Every card in the oracle index, for a filtered search. */
+  async allOracle(): Promise<OracleCard[]> {
+    return this.db.all<OracleCard>('SELECT * FROM oracle');
   }
 
   /** Cards whose name contains this, best-first by how early it matches. */
@@ -823,6 +833,14 @@ export class LocalStore {
     }>('SELECT * FROM catalogue WHERE set_code = ? AND collector_number = ?',
       [setCode.toLowerCase(), collectorNumber]);
     return rows[0] ?? null;
+  }
+
+  /** Everything in the index, for a search that filters on more than a name. */
+  async allPrintings(): Promise<Array<{
+    printing_id: string; name: string; set_code: string;
+    collector_number: string; cmc: number | null; rarity: string;
+  }>> {
+    return this.db.all('SELECT * FROM catalogue');
   }
 
   /** Every printing of one card, for when only the title read. */

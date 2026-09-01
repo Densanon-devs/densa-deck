@@ -19,6 +19,7 @@ import { identifyLocally } from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import type { IndexSource } from './index-source.ts';
+import { searchLocally } from './local-search.ts';
 import { deviceTextReader } from './ocr.ts';
 import { bulkSources, readBulk, toOracleRow, toPrintingRow } from './scryfall.ts';
 import type { BulkSource } from './scryfall.ts';
@@ -1634,47 +1635,32 @@ export class AppState {
    * exists" — which is worse than saying it cannot.
    */
   async searchCards(query: CardQuery = {}): Promise<CardSearchReply> {
-    // The PC first, because it searches on far more than a name — rules
-    // text, colours, types, format legality, price. This is the case where
-    // the PC is genuinely better and the phone is the fallback rather than
-    // the fast path.
+    // The PC first, because it searches on far more than this phone holds
+    // — rules text, format legality, price, how many printings exist. This
+    // is the case where it is genuinely better and the phone is the
+    // fallback rather than the fast path.
     try {
       return await this.client.call<CardSearchReply>('cards/search', { query });
     } catch {
-      // No PC. Answer from the phone's own index, which covers the search
-      // people actually do standing over a box: by name.
-      const term = String(query.name ?? '').trim();
-      if (!term) return { cards: [], total: 0, offset: 0, limit: 0 };
-      const found = await this.store.searchOracle(
-        term, Number(query.limit ?? 50));
-      const printings = await this.store.printingsForNames(
-        found.map((c) => c.name));
-      return {
-        cards: found.map((c) => {
-          const p = printings.get(c.name.trim().toLowerCase());
-          return {
-            scryfall_id: '',
-            oracle_id: c.oracle_id,
-            name: c.name,
-            type_line: c.type_line,
-            mana_cost: c.mana_cost,
-            cmc: c.cmc ?? 0,
-            colors: [],
-            color_identity: c.color_identity
-              ? c.color_identity.split(/[^A-Z]+/).filter(Boolean) : [],
-            rarity: '',
-            set_code: p?.set_code ?? '',
-            // A printing id is what art is fetched by, and the art itself
-            // is a Scryfall URL the phone loads directly — so a card found
-            // offline still has a picture the moment there is any network,
-            // without the PC being involved.
-            printing_id: p?.printing_id ?? '',
-          } as CatalogueCard;
-        }),
-        total: found.length,
-        offset: 0,
-        limit: found.length,
-      };
+      // No PC. Answer from the phone's own indexes, honouring every filter
+      // the browser can send — one that quietly returned nothing unless a
+      // name was typed read as the app refusing to find cards.
+      const limit = Number(query.limit ?? 60);
+      const owned = new Set(
+        (await this.store.listStacks())
+          .filter((s) => s.quantity > 0)
+          .map((s) => s.card_name.trim().toLowerCase()),
+      );
+      const cards = searchLocally(
+        query,
+        {
+          oracle: await this.store.allOracle(),
+          printings: await this.store.allPrintings(),
+          owned,
+        },
+        limit,
+      );
+      return { cards, total: cards.length, offset: 0, limit };
     }
   }
 

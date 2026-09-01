@@ -3,8 +3,12 @@
  *
  * The split is deliberate. Editing a list and working out what you still need
  * both happen on the phone, because those are the things you do standing in a
- * shop. Analysis goes to the PC, because it needs the card catalogue and the
- * combo database, and there is no honest offline answer.
+ * shop. Analysis goes to the PC, because it needs the whole card catalogue and
+ * the combo database, and there is no honest offline answer.
+ *
+ * On a phone with no PC at all, the desktop halves are not shown rather than
+ * shown disabled: two folders of buttons that cannot do anything make the
+ * phone look broken instead of complete.
  *
  * A deck is shown two ways and the pictures come first. A decklist as text is
  * what you send someone; a wall of card faces is what you actually think
@@ -421,8 +425,13 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         setRecord(await decks.recordFor(deckId));
       } catch (err) {
         setProblem(
-          `${(err as Error).message}. The result is only saved on this phone ` +
-            'until your PC is reachable.',
+          `${(err as Error).message}. `
+          + (state.soloForever
+            // No PC to be waiting for, so there is nothing pending — the
+            // result is simply saved, here, and that is the end of it.
+            ? 'The result is saved on this phone.'
+            : 'The result is only saved on this phone until your PC is '
+              + 'reachable.'),
         );
       } finally {
         setLogging('');
@@ -1118,6 +1127,14 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         </View>
       ) : null}
 
+      {/*
+        Both of these sections are the desktop's work — saving into the
+        versioned store, and running the model. On a phone with no PC they
+        are two folders of buttons that cannot do anything, which is worse
+        than not offering them: it makes the phone look broken rather than
+        complete.
+      */}
+      {state.soloForever ? null : (
       <Folding
         title="On your PC"
         open={!folded.pc}
@@ -1132,7 +1149,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         </Text>
         {savedToPc ? <Text style={styles.good}>{savedToPc}</Text> : null}
       </Folding>
+      )}
 
+      {state.soloForever ? null : (
       <Folding
         title="Analysis"
         open={!folded.analysis}
@@ -1146,6 +1165,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         {thinking ? <ActivityIndicator color="#48bb78" /> : null}
         {analysis ? <Text style={styles.analysis}>{analysis}</Text> : null}
       </Folding>
+      )}
 
       {/*
         Last, because it is the part you act on AFTER the deck is settled —

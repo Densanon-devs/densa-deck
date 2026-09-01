@@ -3867,10 +3867,11 @@ class AppApi:
     def catalogue_index_page(self, after: str = "", limit: int = 5000) -> dict:
         """A page of the index a phone needs to identify a card by itself.
 
-        Five fields: the printing id to file against, the name, set code
-        and collector number the OCR reads, and the mana value — which is
-        not used for matching at all, but is what a collection is most often
-        sorted by, and a phone cannot sort by a number it does not hold.
+        Six fields: the printing id to file against, the name, set code
+        and collector number the OCR reads, and two the phone browses and
+        sorts by rather than matches on — the mana value and the rarity.
+        Neither identifies a card; both are filters somebody expects to
+        work, and a filter with nothing behind it silently finds nothing.
         One small integer per printing is a rounding error against the text.
 
         Everything else about a card — oracle text, prices, legality, art —
@@ -3893,7 +3894,7 @@ class AppApi:
         conn = self._get_db().connect()
         rows = conn.execute(
             """SELECT p.printing_id, p.name, p.set_code, p.collector_number,
-                      c.cmc
+                      c.cmc, p.rarity
                FROM card_printings p
                LEFT JOIN cards c ON c.oracle_id = p.oracle_id
                WHERE p.lang = 'en' AND p.printing_id > ?
@@ -3904,7 +3905,7 @@ class AppApi:
             "SELECT COUNT(*) FROM card_printings WHERE lang = 'en'").fetchone()
         return {
             "rows": [[r[0], r[1], r[2] or "", r[3] or "",
-                      None if r[4] is None else float(r[4])]
+                      None if r[4] is None else float(r[4]), r[5] or ""]
                      for r in rows],
             # Empty when the walk is done, so the caller stops on the reply
             # rather than on a count it has to keep in step with.
