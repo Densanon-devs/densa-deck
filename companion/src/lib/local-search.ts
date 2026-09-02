@@ -109,7 +109,19 @@ export function searchLocally(
   { oracle, printings, owned }: SearchInputs,
   limit = 60,
 ): CatalogueCard[] {
-  const term = String(query.name ?? '').trim().toLowerCase();
+  // The browser sends what you typed as `anywhere` — name, type line and
+  // rules text — not as `name`. Reading only `name` ignored the box
+  // entirely: typing "Vol" and filtering to creatures returned the first
+  // sixty creatures in the catalogue, which is how a search for Volrath
+  // came back full of Un-set cards whose names begin with underscores.
+  const anywhere = String(query.anywhere ?? '').trim().toLowerCase();
+  const term = String(query.name ?? anywhere).trim().toLowerCase();
+  const textTerm = String(query.text ?? '').trim().toLowerCase();
+  // `name` means the name only; `anywhere` may match the rest of the card.
+  const beyondName = !query.name && (!!anywhere || !!textTerm);
+  const wanted = term || textTerm;
+  // Ownership arrives as a word, not a flag.
+  const ownedOnly = query.owned === true || query.ownership === 'owned';
   const colours = (query.colors ?? []).filter(Boolean);
   const types = (query.types ?? []).filter(Boolean);
   const rarities = (query.rarities ?? [query.rarity])
@@ -131,22 +143,31 @@ export function searchLocally(
   // Nothing asked for is not "everything". The browser guards against this
   // too, but a fallback that answered a blank query with the whole
   // catalogue would hand back thirty-four thousand rows to render.
-  const asked = !!term || colours.length || types.length || rarities.length
+  const asked = !!wanted || colours.length || types.length || rarities.length
     || sets.length || query.cmc_min != null || query.cmc_max != null
-    || !!query.owned;
+    || ownedOnly;
   if (!asked) return [];
 
   const out: Array<{ card: CatalogueCard; at: number }> = [];
   for (const card of oracle) {
     const key = card.name.trim().toLowerCase();
 
-    const at = term ? key.indexOf(term) : 0;
-    if (term && at < 0) continue;
+    // Where the match landed decides the order, and a name match beats a
+    // rules-text one: searching "flying" should offer cards CALLED that
+    // before every creature that has it.
+    let at = wanted ? key.indexOf(wanted) : 0;
+    if (wanted && at < 0) {
+      const elsewhere = beyondName
+        && (`${card.type_line} ${card.oracle_text}`.toLowerCase()
+          .includes(wanted));
+      if (!elsewhere) continue;
+      at = 5000;
+    }
     if (!coloursMatch(card, colours, query.color_match ?? 'identity')) continue;
     if (!typesMatch(card, types)) continue;
     if (query.cmc_min != null && (card.cmc ?? -1) < query.cmc_min) continue;
     if (query.cmc_max != null && (card.cmc ?? 99) > query.cmc_max) continue;
-    if (query.owned && !owned.has(key)) continue;
+    if (ownedOnly && !owned.has(key)) continue;
 
     const prints = byName.get(key) ?? [];
     const inSet = sets.length
@@ -164,7 +185,10 @@ export function searchLocally(
     out.push({
       at,
       card: {
-        scryfall_id: '',
+        // The browser fetches art by `scryfall_id`, and for a PRINTING
+        // that id IS the printing id — leaving it blank is why every
+        // result came back a grey rectangle.
+        scryfall_id: pick?.printing_id ?? '',
         oracle_id: card.oracle_id,
         name: card.name,
         type_line: card.type_line,

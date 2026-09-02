@@ -220,3 +220,70 @@ describe('type matching', () => {
     assert.equal(typesMatch(ORACLE[0], []), true);
   });
 });
+
+describe('the fields the browser actually sends', () => {
+  /**
+   * Reported with a screenshot: typing "Vol" with the Creature filter on
+   * returned sixty cards whose names start with underscores — Un-set
+   * cards, which sort first alphabetically. That is not a search for
+   * "Vol"; it is every creature in the catalogue.
+   *
+   * The browser sends what you typed as `anywhere`, ownership as the word
+   * `owned`, and fetches art by `scryfall_id`. The local search read
+   * `name`, `owned` and set `scryfall_id` to empty — so the term was
+   * ignored, the ownership filter was ignored, and every result was a
+   * grey rectangle.
+   */
+  test('the typed term arrives as `anywhere`, and is used', () => {
+    assert.deepEqual(names(searchLocally({ anywhere: 'Sol' }, inputs())),
+      ['Sol Ring']);
+  });
+
+  test('a term plus a type does not return the whole type', () => {
+    // The exact shape of the screenshot.
+    const rows = searchLocally(
+      { anywhere: 'Nissa', types: ['Creature'] }, inputs());
+    assert.deepEqual(names(rows), ['Nissa, Worldsoul Speaker']);
+  });
+
+  test('`anywhere` also reaches the type line and rules text', () => {
+    // That is what the word means, and it is why the desktop is still
+    // asked first — it searches more than this.
+    assert.ok(names(searchLocally({ anywhere: 'landfall' }, inputs()))
+      .includes('Nissa, Worldsoul Speaker'));
+  });
+
+  test('but a name match still comes first', () => {
+    // Searching "artifact" should offer a card CALLED that before every
+    // card that merely is one.
+    const rows = searchLocally({ anywhere: 'sol' }, {
+      ...inputs(),
+      oracle: [
+        { oracle_id: 'o-x', name: 'Not Named', type_line: 'Artifact',
+          oracle_text: 'Solve the puzzle.', mana_cost: '', cmc: 0,
+          color_identity: '' },
+        ...ORACLE,
+      ],
+    });
+    assert.equal(rows[0].name, 'Sol Ring');
+  });
+
+  test('`name` stays name-only, and does not match rules text', () => {
+    assert.deepEqual(names(searchLocally({ name: 'landfall' }, inputs())), []);
+  });
+
+  test('ownership arrives as a word, not a flag', () => {
+    assert.deepEqual(
+      names(searchLocally({ ownership: 'owned' }, inputs(['Sol Ring']))),
+      ['Sol Ring']);
+  });
+
+  test('every result carries an id the art can be fetched by', () => {
+    // The browser loads art from `scryfall_id`, and for a printing that
+    // id IS the printing id. Blank means a grey rectangle.
+    for (const card of searchLocally({ anywhere: 'o' }, inputs())) {
+      assert.ok(card.scryfall_id, `${card.name} has no art id`);
+      assert.equal(card.scryfall_id, card.printing_id);
+    }
+  });
+});
