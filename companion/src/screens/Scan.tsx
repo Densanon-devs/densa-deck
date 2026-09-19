@@ -459,6 +459,19 @@ export function ScanScreen({ state }: Props) {
         // pictures. If this phone could not read the card, nothing else
         // is going to — so say so, and let them take another go at it
         // while the card is still in their hand.
+        // Why it failed decides what to say. Getting that wrong sends
+        // somebody off to fix their lighting when the app simply has
+        // nothing to match against — which cost a tester a whole session.
+        if (!index.ready) {
+          setStatus(index.rows > 0
+            ? 'The card index is only part-downloaded, so nothing can be '
+              + 'matched yet. Tap "Get it" above to finish it.'
+            : 'No card index on this phone yet — scanning has nothing to '
+              + 'match against. Tap "Get it" above once, then this works '
+              + 'anywhere.');
+          return;
+        }
+
         if (state.soloForever) {
           setStatus('Could not read that one. Try more light, fill more of '
                     + 'the frame, or type the name in from the Cards tab.');

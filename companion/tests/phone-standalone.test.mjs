@@ -875,3 +875,62 @@ describe('the fetch says something the instant it is asked', () => {
     assert.ok(stages.includes('scryfall'), stages.join(','));
   });
 });
+
+describe('a scan that fails says WHY it failed', () => {
+  /**
+   * From a tester: nothing scanned, and the phone told him to try more
+   * light and fill more of the frame. He had never downloaded the card
+   * index, so there was nothing on the phone to match against — the
+   * advice sent him to fix a photo that was fine.
+   *
+   * The reason a scan failed decides what to say about it, and "no index"
+   * and "bad picture" are not the same failure.
+   */
+  async function alone(reader) {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      async () => { throw new Error('no PC'); }, new DeckStore(db), reader,
+    );
+    return { store, state };
+  }
+
+  const readerOf = (text) => ({ async read() { return text; } });
+
+  test('with no index at all, nothing is identified', async () => {
+    // The state the tester was in: a live camera, a real card, and an
+    // empty index behind it.
+    const { state } = await alone(readerOf('Sol Ring\n0410/0500 U\nCMM • EN'));
+    assert.equal((await state.catalogueReady()).ready, false);
+    assert.equal(await state.identifyOffline('file:///card.jpg'), null);
+  });
+
+  test('and the phone can tell that apart from an unreadable photo', async () => {
+    // Both come back null from identifyOffline, so the screen cannot use
+    // that to choose its words — it has to ask whether there is an index.
+    const { store, state } = await alone(readerOf(''));
+    const before = await state.catalogueReady();
+
+    await store.putCatalogue([['p-sol', 'Sol Ring', 'cmm', '410', 1, 'uncommon']]);
+    await store.setMeta('catalogue.cursor', '');
+    const after = await state.catalogueReady();
+
+    assert.equal(before.ready, false, 'no index');
+    assert.equal(after.ready, true, 'index present');
+    // Same null either way — which is exactly why the message has to come
+    // from readiness rather than from the result.
+    assert.equal(await state.identifyOffline('file:///card.jpg'), null);
+  });
+
+  test('a part-downloaded index is its own case again', async () => {
+    const { store, state } = await alone(readerOf('x'));
+    await store.putCatalogue([['p-sol', 'Sol Ring', 'cmm', '410', 1, 'uncommon']]);
+    await store.setMeta('catalogue.cursor', 'bulk:in-progress');
+
+    const state2 = await state.catalogueReady();
+    assert.equal(state2.ready, false);
+    assert.ok(state2.rows > 0, 'rows present but not finished — the middle case');
+  });
+});
