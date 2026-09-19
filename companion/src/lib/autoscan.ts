@@ -82,9 +82,13 @@ export class AutoScanner {
     // start there would mean auto-scan never works on a cold open, which is
     // exactly when a box of cards is about to be filed.
     if (input.connection === 'offline' || input.connection === 'unpaired') {
-      // Unpaired is different from merely out of range: with no pairing
-      // there is no index and nothing to file into, so that still stops.
-      if (!input.offlineCapable || input.connection === 'unpaired') {
+      // Whether the phone holds the index is the whole question, and it is
+      // the only one. Unpaired used to stop as well, on the reasoning that
+      // no pairing meant no index and nowhere to file -- but 'unpaired' is
+      // also what a standalone phone reports for ever, and that phone has
+      // the index and its own database. The old rule switched auto scan
+      // off for every customer with no PC.
+      if (!input.offlineCapable) {
         return { act: 'stop', reason: 'offline' };
       }
     }
@@ -136,14 +140,23 @@ export class AutoScanner {
   }
 }
 
-export function explain(reason: StopReason): string {
+export function explain(reason: StopReason, solo = false): string {
   switch (reason) {
     case 'offline':
-      return 'Auto scan needs your PC — the picture is read there. Reconnect and start it again.';
+      // A standalone phone is 'unpaired' for ever, so this line reaches it
+      // whenever the index is missing. Sending that user to reconnect a PC
+      // names a machine he has told the app he does not have.
+      return solo
+        ? 'Auto scan needs the card index, and this phone does not have all '
+          + 'of it yet. Finish the download and start it again.'
+        : 'Auto scan needs your PC — the picture is read there. Reconnect and start it again.';
     case 'frozen-camera':
       return 'The camera is handing back the same picture every time. Close and reopen this screen.';
     case 'too-many-failures':
-      return 'Your PC stopped answering, so auto scan stopped rather than keep trying.';
+      return solo
+        ? 'Too many cards in a row could not be read, so auto scan stopped '
+          + 'rather than keep trying. More light usually fixes it.'
+        : 'Your PC stopped answering, so auto scan stopped rather than keep trying.';
     case 'stopped':
       return '';
   }

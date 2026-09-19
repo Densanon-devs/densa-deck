@@ -39,11 +39,12 @@ import { installGlobalErrorTrap, onCrash, recordCrash } from './src/lib/crash.ts
 import type { Pairing } from './src/lib/client.ts';
 import { DeckStore } from './src/lib/decks.ts';
 import {
+  choosePairing,
+  chooseStandalone,
+  decideStartup,
   deviceId,
   forgetPairing,
-  isStandalone,
   loadPairing,
-  savePairing,
   setStandalone,
 } from './src/lib/pairing.ts';
 import { openDeviceDatabase } from './src/lib/sqlite.ts';
@@ -253,20 +254,25 @@ function Shell() {
         if (!live) return;
         setStore(local);
 
-        const pairing = await loadPairing(local);
+        // Standalone is a CHOICE, and it is remembered -- asking to pair on
+        // every launch of an app that works without a PC is nagging. The
+        // precedence between a remembered choice and a stored address is a
+        // rule with a test on it, not the order of two awaits; see
+        // `decideStartup`. It outranks a leftover pairing on purpose, which
+        // is what unsticks a phone written by the build that kept both.
+        const startup = await decideStartup(local);
+        if (startup === 'standalone') {
+          const soloDb = await openDeviceDatabase();
+          const soloDecks = new DeckStore(soloDb);
+          setPhase({
+            kind: 'ready',
+            state: await connect(local, ALONE, soloDecks),
+            decks: soloDecks,
+          });
+          return;
+        }
+        const pairing = startup === 'paired' ? await loadPairing(local) : null;
         if (!pairing) {
-          // Standalone is a CHOICE, and it is remembered. Asking to pair on
-          // every launch of an app that works without a PC is nagging.
-          if (await isStandalone(local)) {
-            const soloDb = await openDeviceDatabase();
-            const soloDecks = new DeckStore(soloDb);
-            setPhase({
-              kind: 'ready',
-              state: await connect(local, ALONE, soloDecks),
-              decks: soloDecks,
-            });
-            return;
-          }
           setPhase({ kind: 'pairing' });
           return;
         }
@@ -411,7 +417,10 @@ function Shell() {
                     + 'and try again.',
                 );
               }
-              await setStandalone(store, true);
+              // Forgets the desktop address as well as setting the flag.
+              // Leaving one behind is what made this choice look like it
+              // had not been saved at all.
+              await chooseStandalone(store);
               const database = await openDeviceDatabase();
               const deckStore = new DeckStore(database);
               setPhase({
@@ -429,7 +438,10 @@ function Shell() {
                     'and try again.',
                 );
               }
-              await savePairing(store, pairing);
+              // Clears the standalone flag as well as saving the address,
+              // so the two can never both be set -- which is the whole
+              // reason the launch can trust one over the other.
+              await choosePairing(store, pairing);
               const database = await openDeviceDatabase();
               // Built BEFORE connecting, and handed to it. Built after, the
               // engine would have no deck store on the one run that matters

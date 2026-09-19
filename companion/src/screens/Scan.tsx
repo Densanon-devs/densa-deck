@@ -565,7 +565,9 @@ export function ScanScreen({ state }: Props) {
       });
       if (decision.act === 'stop') {
         setAuto(false);
-        if (decision.reason !== 'stopped') setStatus(explain(decision.reason));
+        if (decision.reason !== 'stopped') {
+          setStatus(explain(decision.reason, state.soloForever));
+        }
         return;
       }
       if (decision.act === 'capture') {
@@ -704,7 +706,7 @@ export function ScanScreen({ state }: Props) {
           style={[styles.chip, auto && styles.chipOn]}
           onPress={() => {
             if (!auto && offline && !index.ready) {
-              setStatus(explain('offline'));
+              setStatus(explain('offline', state.soloForever));
               return;
             }
             setStatus(

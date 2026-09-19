@@ -11,6 +11,9 @@ import { describe, test } from 'node:test';
 
 import { DesktopClient, Unpaired, Unreachable, parsePairingUrl } from '../src/lib/client.ts';
 import {
+  chooseStandalone,
+  choosePairing,
+  decideStartup,
   deviceId,
   forgetPairing,
   loadPairing,
@@ -251,6 +254,113 @@ describe('choosing to run without a PC, and changing your mind', () => {
     await s.setMeta('app.standalone', 'true');
     assert.equal(await isStandalone(s), false);
   });
+});
+
+describe('what a launch does with what it finds', () => {
+  /**
+   * The bug a tester hit: he chose to run without a PC, and the app spent
+   * the rest of its life telling him his PC would not connect.
+   *
+   * Choosing standalone wrote the standalone flag and left the old pairing
+   * row sitting in the database. Every launch read the pairing first, found
+   * one, and booted paired -- to a desktop that had long since forgotten
+   * this phone. So the app nagged about a machine the user had explicitly
+   * told it he did not have, and the only cure was a reinstall, which
+   * Android's auto-backup then undid.
+   *
+   * The precedence is the fix, and it is a rule rather than an accident:
+   * an explicit "no PC" outranks a leftover address.
+   */
+  function store() {
+    const meta = new Map();
+    return {
+      meta,
+      async getMeta(key) { return meta.get(key); },
+      async setMeta(key, value) { meta.set(key, value); },
+    };
+  }
+
+  test('a fresh phone is asked which it wants', async () => {
+    assert.equal(await decideStartup(store()), 'ask');
+  });
+
+  test('a paired phone opens paired', async () => {
+    const s = store();
+    await savePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+    assert.equal(await decideStartup(s), 'paired');
+  });
+
+  test('a standalone phone opens standalone', async () => {
+    const s = store();
+    await setStandalone(s, true);
+    assert.equal(await decideStartup(s), 'standalone');
+  });
+
+  test('and a leftover pairing does NOT override the choice to go alone',
+    async () => {
+      // This is the tester's phone exactly: both rows present, because
+      // choosing standalone never cleared the address. Reading the pairing
+      // first is what made the choice look like it had not been saved.
+      const s = store();
+      await savePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+      await setStandalone(s, true);
+      assert.equal(await decideStartup(s), 'standalone');
+    });
+});
+
+describe('choosing one side puts away the other', () => {
+  /**
+   * The two states are mutually exclusive, and leaving both on disk is what
+   * produced a phone that could not be talked out of looking for a PC.
+   * Neither choice is trusted to be written by two separate calls at the
+   * call site, because that is exactly the pair of calls that got split up.
+   */
+  function store() {
+    const meta = new Map();
+    return {
+      meta,
+      async getMeta(key) { return meta.get(key); },
+      async setMeta(key, value) { meta.set(key, value); },
+    };
+  }
+
+  test('going standalone forgets the desktop address', async () => {
+    const s = store();
+    await savePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+
+    await chooseStandalone(s);
+
+    assert.equal(await isStandalone(s), true);
+    assert.equal(await loadPairing(s), null,
+      'a kept address is a PC the app will go on asking about');
+  });
+
+  test('pairing drops the standalone choice', async () => {
+    // The mirror image, and the reason the precedence above is safe to
+    // state as a rule: once pairing clears the flag, the only way to hold
+    // both is the old bug.
+    const s = store();
+    await setStandalone(s, true);
+
+    await choosePairing(s, { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+
+    assert.equal(await isStandalone(s), false);
+    assert.deepEqual(await loadPairing(s),
+      { baseUrl: 'https://100.64.0.1:8791', token: 't' });
+  });
+
+  test('and a standalone phone that pairs, then disconnects, is ASKED',
+    async () => {
+      // The full round trip. Any residue at either end skips the question.
+      const s = store();
+      await chooseStandalone(s);
+      await choosePairing(s, { baseUrl: 'https://x:8791', token: 't' });
+
+      await forgetPairing(s);
+      await setStandalone(s, false);
+
+      assert.equal(await decideStartup(s), 'ask');
+    });
 });
 
 describe('starting over from inside the app', () => {

@@ -284,8 +284,11 @@ export function CardScreen({ state, stack, onClose }: Props) {
           <Text style={styles.muted}>
             {history.scope === 'card'
               ? 'Cheapest copy each day.'
-              : 'This printing, each day your PC was open.'}
-            {history.cached ? ' From this phone — your PC is not reachable.' : ''}
+              : state.soloForever
+                ? 'This printing, each day you opened the app.'
+                : 'This printing, each day your PC was open.'}
+            {history.cached && !state.soloForever
+              ? ' From this phone — your PC is not reachable.' : ''}
           </Text>
         </>
       ) : null}
@@ -296,8 +299,13 @@ export function CardScreen({ state, stack, onClose }: Props) {
 
       {detail?.unknown_card ? (
         <Text style={styles.muted}>
-          This card is not in the catalogue on your PC, so there is no rules
-          text to show. The art and what you own are right either way.
+          {state.soloForever
+            ? 'This card is not in the index on this phone, so there is no '
+              + 'rules text to show. The art and what you own are right '
+              + 'either way.'
+            : 'This card is not in the catalogue on your PC, so there is no '
+              + 'rules text to show. The art and what you own are right '
+              + 'either way.'}
         </Text>
       ) : null}
 

@@ -58,6 +58,74 @@ export async function forgetPairing(store: LocalStore): Promise<void> {
 }
 
 /**
+ * Storage narrow enough for the two choices below to be testable.
+ *
+ * `LocalStore` drags a database in with it; the decisions here are about
+ * two strings, and pinning them should not need one.
+ */
+interface MetaStore {
+  getMeta(key: string): Promise<string | null | undefined>;
+  setMeta(key: string, value: string): Promise<void>;
+}
+
+/**
+ * Run without a PC, and mean it.
+ *
+ * One call rather than two, because the two drifted apart: choosing
+ * standalone set the flag and left the old desktop address in place. The
+ * launch reads the address first, so every start came back paired to a
+ * machine that had forgotten this phone, and the app told a standalone
+ * user his PC would not connect -- about a PC he had said he did not have.
+ * Uninstalling did not help, because Android restores the database.
+ */
+export async function chooseStandalone(store: MetaStore): Promise<void> {
+  await store.setMeta(PAIRING_KEY, '');
+  await store.setMeta(STANDALONE_KEY, 'yes');
+}
+
+/**
+ * Take a desktop, and stop being standalone.
+ *
+ * The mirror of the above, and what makes the precedence in
+ * `decideStartup` safe to state as a rule instead of a guess.
+ */
+export async function choosePairing(
+  store: MetaStore,
+  pairing: Pairing,
+): Promise<void> {
+  await store.setMeta(PAIRING_KEY, JSON.stringify(pairing));
+  await store.setMeta(STANDALONE_KEY, '');
+}
+
+/** What a launch should open into. */
+export type Startup = 'standalone' | 'paired' | 'ask';
+
+/**
+ * Which of the three states this phone is in.
+ *
+ * Pulled out of the startup effect so the precedence is a stated rule with
+ * a test on it rather than the order two `await`s happen to sit in.
+ *
+ * Standalone wins over a stored pairing. Both present can only mean a
+ * phone written by the older build that set the flag without clearing the
+ * address -- and between an explicit "no PC" and a leftover address, the
+ * explicit choice is the one the user made on purpose. That also heals
+ * those phones on their next launch, which matters because the alternative
+ * is asking people to reinstall an app whose data survives reinstalling.
+ */
+export async function decideStartup(store: MetaStore): Promise<Startup> {
+  if (await isStandalone(store)) return 'standalone';
+  const raw = await store.getMeta(PAIRING_KEY);
+  if (!raw) return 'ask';
+  try {
+    const parsed = JSON.parse(raw) as Pairing;
+    return parsed.baseUrl && parsed.token ? 'paired' : 'ask';
+  } catch {
+    return 'ask';
+  }
+}
+
+/**
  * This phone's identity, minted once and kept forever.
  *
  * Sync is meaningless without a stable answer to "who am I": a device that

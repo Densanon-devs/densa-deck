@@ -201,6 +201,21 @@ describe('what the user is told', () => {
     }
     assert.equal(explain('stopped'), '');
   });
+
+  test('and on a phone with no PC it does not mention one', () => {
+    // Telling a standalone user to reconnect his PC names a machine he
+    // told the app he does not have, and gives him nothing to do about a
+    // loop that stopped for some other reason entirely.
+    for (const reason of ['offline', 'too-many-failures']) {
+      const line = explain(reason, true);
+      assert.ok(line.length > 20, reason);
+      assert.doesNotMatch(line, /\bPC\b/, reason);
+    }
+  });
+
+  test('while a phone that has one is still told about it', () => {
+    assert.match(explain('offline'), /\bPC\b/);
+  });
 });
 
 describe('scanning a box with no PC', () => {
@@ -233,14 +248,30 @@ describe('scanning a box with no PC', () => {
     assert.equal(decision.reason, 'offline');
   });
 
-  test('unpaired always stops, index or not', () => {
-    // No pairing means no index and nowhere to file: a loop there is
-    // photographing cards into nothing.
+  test('unpaired keeps going too, once the phone holds the index', () => {
+    // This used to stop, on the reasoning that no pairing meant no index
+    // and nowhere to file. Both halves stopped being true: a standalone
+    // phone downloads the index before it is allowed past the setup
+    // screen, and it files into its own database.
+    //
+    // 'unpaired' IS the standalone connection state, so the old rule
+    // turned auto scan off for every phone with no PC -- and told them to
+    // reconnect a machine they had said they did not have.
     const scanner = new AutoScanner();
     scanner.reset(0);
     const decision = scanner.next({
       ...base, connection: 'unpaired', offlineCapable: true });
+    assert.equal(decision.act, 'capture');
+  });
+
+  test('and unpaired with no index still stops', () => {
+    // The half of the old rule that was right: nothing to match against.
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    const decision = scanner.next({
+      ...base, connection: 'unpaired', offlineCapable: false });
     assert.equal(decision.act, 'stop');
+    assert.equal(decision.reason, 'offline');
   });
 
   test('a caller that never heard of the flag keeps the old behaviour', () => {

@@ -536,7 +536,11 @@ export function CardBrowser({
                 );
               })}
             {allSets.length === 0 ? (
-              <Text style={styles.muted}>Asking your PC for the set list...</Text>
+              <Text style={styles.muted}>
+                {state.soloForever
+                  ? 'Reading the set list...'
+                  : 'Asking your PC for the set list...'}
+              </Text>
             ) : null}
           </View>
         </View>

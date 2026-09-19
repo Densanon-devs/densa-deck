@@ -108,8 +108,10 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
       } catch (err) {
         setReview(null);
         setProblem(
-          `${(err as Error).message}. The group total is counted on your PC, ` +
-            'so it needs your PC to be reachable.',
+          state.soloForever
+            ? (err as Error).message
+            : `${(err as Error).message}. The group total is counted on `
+              + 'your PC, so it needs your PC to be reachable.',
         );
       } finally {
         setReviewing(false);
@@ -355,7 +357,8 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                   onPress={() => void reviewGroup(chosen)}
                 >
                   <Text style={styles.groupBtnText}>
-                    {reviewing ? 'Asking your PC…' : "What's in this group?"}
+                    {!reviewing ? "What's in this group?"
+                      : state.soloForever ? 'Working…' : 'Asking your PC…'}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -419,7 +422,9 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
           <Text style={styles.empty}>
             {search
               ? 'Nothing here matches that.'
-              : 'No cards yet. Scan some, or pull down to sync with your PC.'}
+              : state.soloForever
+                ? 'No cards yet. Scan one to start.'
+                : 'No cards yet. Scan some, or pull down to sync with your PC.'}
           </Text>
         }
         renderItem={({ item }) => (
