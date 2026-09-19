@@ -57,6 +57,7 @@ import { shrinkForQueue } from '../lib/shrink.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
+import { FrameGuide } from './FrameGuide.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 
@@ -909,13 +910,7 @@ export function ScanScreen({ state }: Props) {
             autofocus={settings.autofocus}
             animateShutter={false}
           />
-          {/*
-            Where the footer has to land. The collector number and set code
-            are the whole basis of an exact match, and until now nothing on
-            screen said so — you lined the card up by its art, which is the
-            half that does not matter.
-          */}
-          <View pointerEvents="none" style={styles.footerGuide} />
+          <FrameGuide busy={busy} />
           <Pressable
             style={styles.shutter}
             disabled={busy}
@@ -1180,18 +1175,6 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   shutterText: { color: '#fff', fontWeight: '700' },
-  // A hint of where the footer has to land. Left half, bottom edge —
-  // opposite the shutter, and the only region that has to be readable.
-  footerGuide: {
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    right: 110,
-    height: 26,
-    borderColor: '#ffffff44',
-    borderWidth: 1,
-    borderRadius: 4,
-  },
   status: { color: '#e4e6eb' },
   panel: {
     borderColor: '#2d3142',
