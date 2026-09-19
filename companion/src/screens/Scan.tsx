@@ -498,7 +498,12 @@ export function ScanScreen({ state }: Props) {
         setBusy(false);
       }
     },
-    [state, file, target, alsoTag],
+    // `index` belongs here. Without it this callback is memoised with the
+    // FIRST render's value — an empty index, before the lookup that fills
+    // it has resolved — so every failure reported "no card index on this
+    // phone" on a phone holding all 105,000 cards. A stale closure that
+    // says the opposite of the truth.
+    [state, file, target, alsoTag, index],
   );
 
   /**
@@ -904,6 +909,13 @@ export function ScanScreen({ state }: Props) {
             autofocus={settings.autofocus}
             animateShutter={false}
           />
+          {/*
+            Where the footer has to land. The collector number and set code
+            are the whole basis of an exact match, and until now nothing on
+            screen said so — you lined the card up by its art, which is the
+            half that does not matter.
+          */}
+          <View pointerEvents="none" style={styles.footerGuide} />
           <Pressable
             style={styles.shutter}
             disabled={busy}
@@ -1151,16 +1163,35 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   gearText: { color: '#e4e6eb', fontSize: 12 },
+  // Bottom RIGHT, not bottom centre.
+  //
+  // Centred, it sat directly over the one part of the card the scanner
+  // reads — the collector number and set code along the bottom left — so
+  // framing the thing being matched meant hiding it behind the button.
+  // A tester's photo showed a perfectly placed card with its footer
+  // underneath the word "Capture".
   shutter: {
     position: 'absolute',
-    bottom: 14,
-    alignSelf: 'center',
+    bottom: 12,
+    right: 12,
     backgroundColor: '#e53e3ecc',
     borderRadius: 999,
-    paddingHorizontal: 28,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
   },
   shutterText: { color: '#fff', fontWeight: '700' },
+  // A hint of where the footer has to land. Left half, bottom edge —
+  // opposite the shutter, and the only region that has to be readable.
+  footerGuide: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    right: 110,
+    height: 26,
+    borderColor: '#ffffff44',
+    borderWidth: 1,
+    borderRadius: 4,
+  },
   status: { color: '#e4e6eb' },
   panel: {
     borderColor: '#2d3142',
