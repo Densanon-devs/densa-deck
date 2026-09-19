@@ -57,6 +57,7 @@ import { ConnectionScreen } from './src/screens/Connection.tsx';
 import { DeckListScreen, DeckScreen } from './src/screens/Decks.tsx';
 import { PcDecksScreen } from './src/screens/PcDecks.tsx';
 import { PairScreen } from './src/screens/Pair.tsx';
+import { IndexGate } from './src/screens/IndexGate.tsx';
 import { ScanScreen } from './src/screens/Scan.tsx';
 import { WishlistScreen } from './src/screens/Wishlist.tsx';
 
@@ -95,6 +96,10 @@ type Phase =
 const PC_TABS: ReadonlySet<Tab> = new Set(['pc', 'overlaps']);
 
 const TABS: Array<{ id: Tab; label: string }> = [
+  // Scanning first, and first is deliberate: it is the job the phone
+  // exists for. Everything else here is a way of looking at cards that
+  // are already in, and they got in through this tab.
+  { id: 'scan', label: 'Scan' },
   { id: 'collection', label: 'Cards' },
   { id: 'decks', label: 'Decks' },
   // The PC's decks are a different set from this phone's — versioned,
@@ -103,7 +108,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'pc', label: 'PC' },
   { id: 'overlaps', label: 'Shared' },
   { id: 'wishlist', label: 'Wishlist' },
-  { id: 'scan', label: 'Scan' },
 ];
 
 /**
@@ -129,12 +133,33 @@ function Shell() {
   const insets = useSafeAreaInsets();
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
   const [store, setStore] = useState<LocalStore | null>(null);
-  const [tab, setTab] = useState<Tab>('collection');
+  // Opens on Scan, for the same reason it is first.
+  const [tab, setTab] = useState<Tab>('scan');
 
   const [openDeck, setOpenDeck] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [fatal, setFatal] = useState<Crash | null>(null);
   const [showConnection, setShowConnection] = useState(false);
+  /**
+   * Whether the card index is complete.
+   *
+   * Null until asked. Everything in the app depends on it — scanning has
+   * nothing to match against, searching has no cards to find — so the
+   * whole UI waits behind it rather than offering buttons that cannot
+   * work. A tester photographed a box into an empty index while the app
+   * told him to improve his lighting.
+   */
+  const [indexed, setIndexed] = useState<boolean | null>(null);
+
+  /**
+   * Nothing in the app is usable until the index is confirmed complete.
+   *
+   * `null` — not asked yet — counts as locked. Opening the tabs for the
+   * instant before the answer arrives shows a collection screen that then
+   * vanishes, and briefly lets somebody tap into a screen that cannot
+   * work.
+   */
+  const locked = phase.kind === 'ready' && indexed !== true;
   const [openCard, setOpenCard] = useState<StackRow | null>(null);
 
   useEffect(
@@ -152,7 +177,7 @@ function Shell() {
   // purpose — reading a binding from further down the render body works
   // until somebody reorders two lines.
   useEffect(() => {
-    if (solo.current && PC_TABS.has(tab)) setTab('collection');
+    if (solo.current && PC_TABS.has(tab)) setTab('scan');
   }, [tab, phase]);
 
   const connect = useCallback(async (local: LocalStore, pairing: Pairing,
@@ -205,6 +230,17 @@ function Shell() {
       }
     });
     return () => subscription.remove();
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase.kind !== 'ready') return;
+    let live = true;
+    void phase.state.catalogueReady()
+      .then(({ ready }) => { if (live) setIndexed(ready); })
+      // Unknown must not read as "ready": that would open the app on an
+      // index it has never confirmed, which is the state being guarded.
+      .catch(() => { if (live) setIndexed(false); });
+    return () => { live = false; };
   }, [phase]);
 
   useEffect(() => {
@@ -311,6 +347,23 @@ function Shell() {
         </Pressable>
       ) : null}
 
+      {/*
+        The door. Not a banner and not a disabled button — until the index
+        is complete there is nothing here that can do its job, so there is
+        nothing here.
+      */}
+      {phase.kind === 'ready' && indexed === false && !showConnection ? (
+        <ErrorBoundary where="the setup screen">
+          <View style={styles.body}>
+            <IndexGate
+              state={phase.state}
+              onReady={() => setIndexed(true)}
+              onSettings={() => setShowConnection(true)}
+            />
+          </View>
+        </ErrorBoundary>
+      ) : null}
+
       <ErrorBoundary where={`the ${tab} screen`}>
       <View style={styles.body}>
         {phase.kind === 'ready' && showConnection ? (
@@ -392,7 +445,7 @@ function Shell() {
           />
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'collection' ? (
+        {phase.kind === 'ready' && !locked && !showConnection && tab === 'collection' ? (
           openCard ? (
             <CardScreen
               state={phase.state}
@@ -404,7 +457,7 @@ function Shell() {
           )
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'decks' ? (
+        {phase.kind === 'ready' && !locked && !showConnection && tab === 'decks' ? (
           openDeck ? (
             <DeckScreen
               state={phase.state}
@@ -418,7 +471,7 @@ function Shell() {
           )
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && !solo.current
+        {phase.kind === 'ready' && !locked && !showConnection && !solo.current
           && tab === 'pc' ? (
           <PcDecksScreen
             state={phase.state}
@@ -433,22 +486,22 @@ function Shell() {
           />
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && !solo.current
+        {phase.kind === 'ready' && !locked && !showConnection && !solo.current
           && tab === 'overlaps' ? (
           <OverlapsScreen state={phase.state} />
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'wishlist' ? (
+        {phase.kind === 'ready' && !locked && !showConnection && tab === 'wishlist' ? (
           <WishlistScreen state={phase.state} decks={phase.decks} />
         ) : null}
 
-        {phase.kind === 'ready' && !showConnection && tab === 'scan' ? (
+        {phase.kind === 'ready' && !locked && !showConnection && tab === 'scan' ? (
           <ScanScreen state={phase.state} />
         ) : null}
       </View>
       </ErrorBoundary>
 
-      {phase.kind === 'ready' ? (
+      {phase.kind === 'ready' && !locked ? (
         <View style={[styles.tabs, { paddingBottom: frame.paddingBottom + 6 }]}>
           {TABS.filter((entry) => !solo.current || !PC_TABS.has(entry.id))
             .map((entry) => (
