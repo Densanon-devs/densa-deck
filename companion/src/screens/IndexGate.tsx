@@ -37,7 +37,7 @@ import {
 
 import type { AppState, IndexFetch } from '../lib/app-state.ts';
 import { recordCrash } from '../lib/crash.ts';
-import { SCRYFALL_CREDIT } from '../lib/index-source.ts';
+import { SCRYFALL_CREDIT, describeStage } from '../lib/index-source.ts';
 import type { IndexSource } from '../lib/index-source.ts';
 import { VERSION } from '../lib/version.ts';
 
@@ -137,11 +137,9 @@ export function IndexGate({
     : fetching ? 1 : 0;
   const busy = started || !!fetching;
 
-  const where = !fetching ? ''
-    : fetching.source === null ? 'Working out where to get it…'
-      : fetching.source === 'desktop'
-        ? `Getting ${fetching.stage} from your PC`
-        : `Downloading ${fetching.stage} from Scryfall`;
+  const where = fetching
+    ? describeStage(fetching.stage, fetching.source)
+    : '';
 
   // ---------------------------------------------------------------- step 1
 

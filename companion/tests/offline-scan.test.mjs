@@ -86,12 +86,17 @@ describe('getting the index off the PC', () => {
 
     await state.syncCatalogue();
     assert.equal(await store.catalogueSize(), 2);
-    assert.deepEqual(await state.catalogueReady(), { rows: 2, ready: true });
+    // Only the printings were pulled here, and that is exactly enough to
+    // SCAN and not enough to call setup finished -- the oracle text is
+    // still missing. The two answers coming apart is the point.
+    assert.deepEqual(await state.catalogueReady(),
+      { rows: 2, ready: false, scanReady: true });
   });
 
   test('a phone that has never pulled is not ready', async () => {
     const { state } = await makePhone(serving(new FakeDesktop()));
-    assert.deepEqual(await state.catalogueReady(), { rows: 0, ready: false });
+    assert.deepEqual(await state.catalogueReady(),
+      { rows: 0, ready: false, scanReady: false });
   });
 
   test('pulling twice does not double the index', async () => {
@@ -164,7 +169,8 @@ describe('identifying with no PC', () => {
     const { store, state } = await makePhone(desktop, readerOf(FOOTER));
     await store.putCatalogue([INDEX[0]]);
     await store.setMeta('catalogue.cursor', 'p-sol');
-    assert.equal((await state.catalogueReady()).ready, false);
+    // The scanner's question, which is the one this test is about.
+    assert.equal((await state.catalogueReady()).scanReady, false);
     assert.equal(await state.identifyOffline('file:///card.jpg'), null);
   });
 

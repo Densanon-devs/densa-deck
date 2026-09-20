@@ -588,7 +588,9 @@ describe('a whole Scryfall pull, end to end', () => {
     await store.setMeta('oracle.cursor', 'o-somewhere');
 
     await state.fetchIndex(undefined, fakeChunks);
-    assert.deepEqual(await state.catalogueReady(), { rows: 2, ready: true });
+    assert.deepEqual(await state.catalogueReady(),
+      // Both files landed, so both answers are yes.
+      { rows: 2, ready: true, scanReady: true });
   });
 
   test('progress is reported against the compressed size', async () => {
@@ -960,8 +962,11 @@ describe('a scan that fails says WHY it failed', () => {
     await store.setMeta('catalogue.cursor', '');
     const after = await state.catalogueReady();
 
-    assert.equal(before.ready, false, 'no index');
-    assert.equal(after.ready, true, 'index present');
+    // `scanReady` rather than `ready`: this is the question the SCANNER
+    // asks, and it needs only the printings -- which is all this test
+    // writes. Setup asks the stricter one.
+    assert.equal(before.scanReady, false, 'no index');
+    assert.equal(after.scanReady, true, 'index present');
     // Same null either way — which is exactly why the message has to come
     // from readiness rather than from the result.
     assert.equal(await state.identifyOffline('file:///card.jpg'), null);
@@ -976,4 +981,149 @@ describe('a scan that fails says WHY it failed', () => {
     assert.equal(state2.ready, false);
     assert.ok(state2.rows > 0, 'rows present but not finished — the middle case');
   });
+});
+
+describe('half an index is not an index', () => {
+  /**
+   * The download is two files: printings, then the oracle text. Only the
+   * printings cursor was ever checked, so the moment the FIRST file
+   * finished the app declared the index complete, opened the setup gate
+   * and carried on downloading behind it. That reads as the download
+   * starting over -- a fresh bar at a fresh percentage on a screen that
+   * had just said it was done.
+   *
+   * The worse half is silent. If the second file never finishes -- the app
+   * is killed, the phone sleeps, the wifi drops -- nothing notices. The
+   * gate never comes back, so it is never resumed, and the phone spends
+   * the rest of its life with no rules text and a crippled search, saying
+   * it is ready.
+   *
+   * Scanning genuinely only needs the printings, and that is why they are
+   * fetched first. So the two questions are kept apart: `scanReady` is
+   * what the scanner asks, `ready` is what setup asks.
+   */
+  async function phone() {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(store, { baseUrl: '', token: '' }, 'phone-1',
+                                testUuid);
+    return { store, state };
+  }
+
+  test('a phone with nothing is neither', async () => {
+    const { state } = await phone();
+    const out = await state.catalogueReady();
+    assert.equal(out.ready, false);
+    assert.equal(out.scanReady, false);
+  });
+
+  test('printings alone let you SCAN but do not finish setup', async () => {
+    const { store, state } = await phone();
+    await store.putCatalogue([['p-1', 'Sol Ring', 'cmm', '410', 1, 'common']]);
+
+    const out = await state.catalogueReady();
+    assert.equal(out.scanReady, true, 'scanning needs only the printings');
+    assert.equal(out.ready, false,
+      'setup is not done while the second file is missing');
+  });
+
+  test('an interrupted second file is still not finished', async () => {
+    // The silent case: the oracle pull died partway, so its cursor is left
+    // marking the file as in progress. Rows exist, so a row count alone
+    // would call this done.
+    const { store, state } = await phone();
+    await store.putCatalogue([['p-1', 'Sol Ring', 'cmm', '410', 1, 'common']]);
+    await store.putOracle([
+      ['o-1', 'Sol Ring', 'Artifact', 'Add two colourless.', '{1}', 1, ''],
+    ]);
+    await store.setMeta('oracle.cursor', 'bulk:in-progress');
+
+    assert.equal((await state.catalogueReady()).ready, false);
+  });
+
+  test('and both files complete is finished', async () => {
+    const { store, state } = await phone();
+    await store.putCatalogue([['p-1', 'Sol Ring', 'cmm', '410', 1, 'common']]);
+    await store.putOracle([
+      ['o-1', 'Sol Ring', 'Artifact', 'Add two colourless.', '{1}', 1, ''],
+    ]);
+
+    const out = await state.catalogueReady();
+    assert.equal(out.ready, true);
+    assert.equal(out.scanReady, true);
+  });
+});
+
+describe('finishing a half-done download does not redo the done half', () => {
+  /**
+   * The index is two files and the second is the one that gets
+   * interrupted, because it is second. Requiring both before setup ends
+   * is right -- but if resuming re-fetched the printings as well, every
+   * resume would cost the full download again, which is precisely the
+   * "it is downloading AGAIN" the stricter rule is meant to stop.
+   *
+   * A bulk file cannot resume partway (the gzip has to be read start to
+   * finish), so the unit of skipping is the whole file: one that is
+   * already down and marked complete is not fetched again.
+   */
+  async function phone(seen) {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'phone-1', testUuid,
+      undefined, undefined, undefined,
+      async (url) => bulkListing(url),
+    );
+    return { store, state };
+  }
+
+  async function bulkListing() {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          { type: 'oracle_cards', jsonl_download_uri: 'https://x/o.jsonl.gz',
+            compressed_size: 10, updated_at: 'now' },
+          { type: 'default_cards', jsonl_download_uri: 'https://x/d.jsonl.gz',
+            compressed_size: 10, updated_at: 'now' },
+        ],
+      }),
+    };
+  }
+
+  test('a completed printings file is not downloaded a second time',
+    async () => {
+      const asked = [];
+      const { store, state } = await phone();
+      // Printings already complete, oracle never finished.
+      await store.putCatalogue([['p-1', 'Sol Ring', 'cmm', '410', 1, 'common']]);
+      await store.setMeta('catalogue.cursor', '');
+      await store.setMeta('oracle.cursor', 'bulk:in-progress');
+
+      // Its own bytes: `fakeChunks` belongs to another block.
+      const CARD = {
+        id: 'p-2', oracle_id: 'o-2', name: 'Lightning Bolt',
+        type_line: 'Instant', oracle_text: 'Deal 3 damage.', mana_cost: '{R}',
+        cmc: 1, color_identity: ['R'], set: 'lea', collector_number: '161',
+        lang: 'en', games: ['paper'], digital: false, rarity: 'common',
+      };
+      const GZ = gzipSync(JSON.stringify(CARD) + String.fromCharCode(10));
+      async function* watched(url) {
+        asked.push(url);
+        for (let i = 0; i < GZ.length; i += 32) {
+          yield new Uint8Array(GZ.subarray(i, i + 32));
+        }
+      }
+
+      await state.fetchIndex(undefined, watched, 'scryfall');
+
+      assert.ok(!asked.some((u) => u.includes('/d.jsonl')),
+        'the finished printings file was fetched again');
+      assert.ok(asked.some((u) => u.includes('/o.jsonl')),
+        'the unfinished oracle file should have been fetched');
+      assert.equal((await state.catalogueReady()).ready, true);
+    });
 });

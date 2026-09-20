@@ -41,6 +41,29 @@ export function describeSource(source: IndexSource): string {
 }
 
 /**
+ * What is downloading, said so that two steps read as two steps.
+ *
+ * The index is two files: every printing, then the rules text. They were
+ * labelled "printings" and "cards", which are the same word to anyone who
+ * does not already know the shape of Scryfall's bulk data -- so when the
+ * first finished and the second began, at a fresh percentage, it read as
+ * the whole download starting over.
+ *
+ * Numbering them is the fix. "Step 2 of 2" cannot be mistaken for a
+ * restart, whatever the bar does.
+ */
+export function describeStage(
+  stage: string,
+  source: IndexSource | null,
+): string {
+  if (source === null) return 'Working out where to get it\u2026';
+  const from = source === 'desktop' ? 'from your PC' : 'from Scryfall';
+  return stage === 'printings'
+    ? `Step 1 of 2 \u00b7 every printing ${from}`
+    : `Step 2 of 2 \u00b7 card text ${from}`;
+}
+
+/**
  * Attribution, which is not optional.
  *
  * The card data is Scryfall's, and every surface that shows it says so.

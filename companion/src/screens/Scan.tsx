@@ -57,6 +57,7 @@ import { shrinkForQueue } from '../lib/shrink.ts';
 import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
+import { describeStage } from '../lib/index-source.ts';
 import { FrameGuide } from './FrameGuide.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
@@ -109,8 +110,10 @@ export function ScanScreen({ state }: Props) {
    * set, and an app that bundled one would be wrong within weeks and only
    * fixable by shipping another app.
    */
-  const [index, setIndex] = useState<{ rows: number; ready: boolean }>(
-    { rows: 0, ready: false });
+  const [index, setIndex] = useState<{
+    rows: number; ready: boolean; scanReady: boolean;
+  }>(
+    { rows: 0, ready: false, scanReady: false });
   // Read from the snapshot, so a download started here and left behind is
   // still shown on the way back.
   // A percentage only once there is a size to measure against; 1 stands
@@ -118,15 +121,12 @@ export function ScanScreen({ state }: Props) {
   const pulling = indexFetch?.total
     ? Math.max(1, Math.round((indexFetch.done / indexFetch.total) * 100))
     : indexFetch ? 1 : 0;
-  const indexStage = !indexFetch
-    ? ''
-    // The source is not known until a round trip decides it, and claiming
-    // one before then would name the wrong place half the time.
-    : indexFetch.source === null
-      ? 'Starting…'
-      : indexFetch.source === 'scryfall'
-        ? `Downloading ${indexFetch.stage} from Scryfall`
-        : `Fetching ${indexFetch.stage} from your PC`;
+  // The source is not known until a round trip decides it, and claiming
+  // one before then would name the wrong place half the time --
+  // `describeStage` holds that back until it is known.
+  const indexStage = indexFetch
+    ? describeStage(indexFetch.stage, indexFetch.source)
+    : '';
   const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
@@ -463,7 +463,7 @@ export function ScanScreen({ state }: Props) {
         // Why it failed decides what to say. Getting that wrong sends
         // somebody off to fix their lighting when the app simply has
         // nothing to match against — which cost a tester a whole session.
-        if (!index.ready) {
+        if (!index.scanReady) {
           setStatus(index.rows > 0
             ? 'The card index is only part-downloaded, so nothing can be '
               + 'matched yet. Tap "Get it" above to finish it.'
@@ -561,7 +561,7 @@ export function ScanScreen({ state }: Props) {
         now: Date.now(),
         // With the index in hand the phone identifies cards itself, so
         // losing the PC is no longer a reason to stop the loop.
-        offlineCapable: index.ready,
+        offlineCapable: index.scanReady,
       });
       if (decision.act === 'stop') {
         setAuto(false);
@@ -578,7 +578,7 @@ export function ScanScreen({ state }: Props) {
       }
     }, TICK_MS);
     return () => clearInterval(timer);
-  }, [auto, connection, capture, index.ready]);
+  }, [auto, connection, capture, index.scanReady]);
 
   const offline = connection === 'offline' || connection === 'unpaired';
 
@@ -705,7 +705,7 @@ export function ScanScreen({ state }: Props) {
         <Pressable
           style={[styles.chip, auto && styles.chipOn]}
           onPress={() => {
-            if (!auto && offline && !index.ready) {
+            if (!auto && offline && !index.scanReady) {
               setStatus(explain('offline', state.soloForever));
               return;
             }

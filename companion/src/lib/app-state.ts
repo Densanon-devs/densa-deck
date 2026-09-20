@@ -198,8 +198,12 @@ export class AppState {
                 collector_number: string };
     foilHint: boolean;
   } | null> {
-    const { ready } = await this.catalogueReady();
-    if (!ready) return null;
+    // `scanReady`, not `ready`: identifying matches set code and collector
+    // number, and both live in the printings. Demanding the oracle text
+    // as well would refuse to read a card over missing rules text that
+    // the match never looks at.
+    const { scanReady } = await this.catalogueReady();
+    if (!scanReady) return null;
     const text = await this.textReader.read(imageUri);
     if (!text) return null;
     const out = await identifyLocally(text, this.store);
@@ -375,20 +379,44 @@ export class AppState {
     }
 
     const sources = await bulkSources(this.plainFetch);
+
+    /*
+      A file that is already down is not fetched again.
+
+      The second file is the one that gets interrupted, because it is
+      second -- and setup is not finished until both are in, so resuming
+      is a normal thing to do rather than an edge case. Re-fetching the
+      completed printings every time would make each resume cost the
+      whole download twice over, which is exactly the "it is downloading
+      AGAIN" this is all meant to stop.
+
+      The unit is the whole file, not a position in it: a bulk gzip has
+      to be read start to finish, so there is nothing finer to resume
+      from. Complete means the marker is cleared AND there are rows --
+      a cleared marker on an empty table is a file that never started.
+    */
+    const done = async (cursorKey: string, count: Promise<number>) =>
+      ((await this.store.getMeta(cursorKey)) ?? '') === '' && (await count) > 0;
+
     // Printings first: it is the one scanning turns on, so a download
     // interrupted halfway still leaves the scanner working.
-    const printings = await this.pullBulk(
-      sources.default_cards, toPrintingRow,
-      (rows) => this.store.putCatalogue(rows as CatalogueRow[]),
-      CATALOGUE_CURSOR_KEY, chunks,
-      (done, total) => onProgress?.({ source, done, total, stage: 'printings' }),
-    );
-    const oracle = await this.pullBulk(
-      sources.oracle_cards, toOracleRow,
-      (rows) => this.store.putOracle(rows as OracleRow[]),
-      ORACLE_CURSOR_KEY, chunks,
-      (done, total) => onProgress?.({ source, done, total, stage: 'cards' }),
-    );
+    const printings = await done(CATALOGUE_CURSOR_KEY,
+                                 this.store.catalogueSize())
+      ? await this.store.catalogueSize()
+      : await this.pullBulk(
+        sources.default_cards, toPrintingRow,
+        (rows) => this.store.putCatalogue(rows as CatalogueRow[]),
+        CATALOGUE_CURSOR_KEY, chunks,
+        (d, total) => onProgress?.({ source, done: d, total, stage: 'printings' }),
+      );
+    const oracle = await done(ORACLE_CURSOR_KEY, this.store.oracleSize())
+      ? await this.store.oracleSize()
+      : await this.pullBulk(
+        sources.oracle_cards, toOracleRow,
+        (rows) => this.store.putOracle(rows as OracleRow[]),
+        ORACLE_CURSOR_KEY, chunks,
+        (d, total) => onProgress?.({ source, done: d, total, stage: 'cards' }),
+      );
     return { printings, oracle, source };
   }
 
@@ -439,13 +467,36 @@ export class AppState {
   }
 
   /** How much of the index this phone is holding. */
-  async catalogueReady(): Promise<{ rows: number; ready: boolean }> {
+  async catalogueReady(): Promise<{
+    rows: number; ready: boolean; scanReady: boolean;
+  }> {
     const rows = await this.store.catalogueSize();
     // A partial pull is not usable: the missing rows are exactly the cards
     // it would silently fail to identify, and "scanned it, nothing found"
     // reads as a bad photo rather than a half-downloaded index.
     const cursor = (await this.store.getMeta(CATALOGUE_CURSOR_KEY)) ?? '';
-    return { rows, ready: rows > 0 && cursor === '' };
+    const scanReady = rows > 0 && cursor === '';
+
+    // The download is TWO files and only the first was ever checked, so
+    // the app called the index complete the moment the printings landed,
+    // opened the setup gate, and went on downloading the oracle behind it
+    // -- a fresh bar at a fresh percentage on a screen that had just said
+    // it was finished, which reads as starting over.
+    //
+    // The quiet half is worse. An oracle pull that never finished was
+    // never noticed, so it was never resumed: no rules text and a crippled
+    // search, for ever, on a phone reporting itself ready.
+    //
+    // Scanning really does need only the printings -- that is why they are
+    // fetched first -- so the two questions stay apart rather than one of
+    // them being dropped.
+    const oracleRows = await this.store.oracleSize();
+    const oracleCursor = (await this.store.getMeta(ORACLE_CURSOR_KEY)) ?? '';
+    return {
+      rows,
+      scanReady,
+      ready: scanReady && oracleRows > 0 && oracleCursor === '',
+    };
   }
 
   /**
