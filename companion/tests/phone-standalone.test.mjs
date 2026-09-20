@@ -353,6 +353,49 @@ describe('getting the index with no PC in the world', () => {
     return { store, state };
   }
 
+  test('but choosing Scryfall overrules a PC that IS answering', async () => {
+    /*
+     * The setup screen offers this when a paired PC is not answering, and
+     * the answer has to stick. Quietly using the PC because it woke up
+     * between the tap and the fetch would be the app overruling a choice
+     * it had just put on screen -- and the two take wildly different
+     * amounts of time, so the user would be waiting for the wrong thing.
+     */
+    const desktop = serving(new FakeDesktop());
+    let askedScryfall = 0;
+    const { state } = await phone({
+      desktop,
+      plainFetch: async () => {
+        askedScryfall += 1;
+        throw new Error('reached Scryfall');
+      },
+    });
+
+    await assert.rejects(
+      () => state.fetchIndex(undefined, undefined, 'scryfall'),
+      /reached Scryfall/);
+    assert.equal(askedScryfall, 1);
+  });
+
+  test('and the PC is not even asked, so nobody waits on a sleeping one',
+    async () => {
+      // Probing is a round trip to a machine that is usually off. The user
+      // has already said they are not waiting for it.
+      const desktop = serving(new FakeDesktop());
+      const inner = desktop.fetchImpl;
+      let probed = 0;
+      desktop.fetchImpl = async (...args) => { probed += 1; return inner(...args); };
+
+      const { state } = await phone({
+        desktop,
+        plainFetch: async () => { throw new Error('reached Scryfall'); },
+      });
+
+      await assert.rejects(
+        () => state.fetchIndex(undefined, undefined, 'scryfall'));
+      assert.equal(probed, 0, 'the PC was asked despite the choice');
+    });
+
   test('a paired, reachable PC is used — it is far faster', async () => {
     const desktop = serving(new FakeDesktop());
     const { state } = await phone({

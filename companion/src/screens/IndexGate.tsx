@@ -1,21 +1,28 @@
 /**
- * The card index, before anything else.
+ * Setting the app up, in the order the questions actually depend on.
  *
- * Nothing in this app works without it. Scanning has nothing to match a
- * photo against, searching has no cards to find, and a deck cannot be
- * built out of a catalogue that is not there — so the index is not a
- * setting, it is the thing being installed.
+ * Two things have to be settled before anything works, and one decides the
+ * other: **which version you are running**, and **where the card index
+ * comes from**. A phone with a PC gets the index off it in seconds; a
+ * phone on its own downloads it from Scryfall, which is large.
  *
- * It used to be a banner on the Scan tab, which reads as optional. A
- * tester spent a session photographing cards into an app with an empty
- * index, being told by it to try better lighting. This is that banner
- * turned into a door.
+ * It used to ask only the second, and only implicitly — it picked a source
+ * itself and started downloading. That was wrong twice over. A phone whose
+ * PC was simply switched off got quietly committed to a 74 MB download it
+ * never agreed to, while the screen cheerfully said "if your PC is on and
+ * reachable this takes seconds" about a decision already taken. And a
+ * phone that had a pairing restored by Android's auto-backup was never
+ * asked which version it was at all — it just arrived here, downloading.
  *
- * Where it comes from is decided for you, because there is only one right
- * answer at any moment: a paired PC that is answering has it already and
- * hands it over in seconds, and everything else means fetching it from
- * Scryfall. That choice lives in `chooseSource`; this screen only shows
- * what is happening and refuses to get out of the way until it has.
+ * So: which version first, then where the index comes from. The second
+ * question mostly answers itself, and it is only put to the user when it
+ * genuinely is a question — a PC that is not answering right now.
+ *
+ * Nothing in this app works without the index. Scanning has nothing to
+ * match against, searching has no cards to find, and a deck cannot be
+ * built out of a catalogue that is not there. So this is not a setting; it
+ * is the thing being installed, and it does not get out of the way until
+ * it is done.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -31,6 +38,7 @@ import {
 import type { AppState, IndexFetch } from '../lib/app-state.ts';
 import { recordCrash } from '../lib/crash.ts';
 import { SCRYFALL_CREDIT } from '../lib/index-source.ts';
+import type { IndexSource } from '../lib/index-source.ts';
 import { VERSION } from '../lib/version.ts';
 
 interface Props {
@@ -39,13 +47,47 @@ interface Props {
   onReady: () => void;
   /** Settings, so a phone paired to a dead PC is not trapped here. */
   onSettings?: () => void;
+  /**
+   * Go and pair with a desktop.
+   *
+   * Absent when there is nothing to pair with from here; present means the
+   * "with a PC" answer has somewhere to lead.
+   */
+  onPairPc?: () => void;
+  /** Commit to running with no PC, for ever. Remembered. */
+  onStandalone?: () => Promise<void> | void;
+  /** Whether this phone has already been told it has no PC. */
+  standalone: boolean;
+  /** Whether a desktop address is stored, answering or not. */
+  paired: boolean;
 }
 
-export function IndexGate({ state, onReady, onSettings }: Props) {
+/** Which question is on screen. */
+type Step = 'version' | 'index';
+
+export function IndexGate({
+  state, onReady, onSettings, onPairPc, onStandalone, standalone, paired,
+}: Props) {
   const [fetching, setFetching] = useState<IndexFetch | null>(null);
   const [rows, setRows] = useState(0);
   const [problem, setProblem] = useState('');
   const [started, setStarted] = useState(false);
+  // Null until the probe answers. Naming a source before then would be
+  // wrong about half the time, which is the mistake this screen is here
+  // to stop making.
+  const [pcAnswers, setPcAnswers] = useState<boolean | null>(null);
+
+  /*
+    A phone that has already answered the version question does not get
+    asked it again: choosing standalone is an explicit decision and so is
+    scanning a pairing QR code. Everything else starts at the top.
+
+    Note that a STORED pairing is not on its own an answer. A pairing
+    restored from a backup onto a phone whose index is missing is a phone
+    at the start of setup, whatever the database says, and that is exactly
+    the phone that was landing here mid-download.
+  */
+  const [step, setStep] = useState<Step>(standalone ? 'index' : 'version');
 
   useEffect(() => state.subscribe((snap) => setFetching(snap.indexFetch ?? null)),
     [state]);
@@ -59,11 +101,25 @@ export function IndexGate({ state, onReady, onSettings }: Props) {
       .catch(() => {});
   }, [state, onReady]);
 
-  const fetchIt = useCallback(async () => {
+  // Asked once we are on the question it affects, and not before — it is a
+  // round trip to a machine that is usually off.
+  useEffect(() => {
+    if (step !== 'index' || standalone) {
+      setPcAnswers(standalone ? false : null);
+      return;
+    }
+    let live = true;
+    void state.desktopReachable()
+      .then((yes) => { if (live) setPcAnswers(yes); })
+      .catch(() => { if (live) setPcAnswers(false); });
+    return () => { live = false; };
+  }, [state, step, standalone]);
+
+  const fetchIt = useCallback(async (prefer?: IndexSource) => {
     setProblem('');
     setStarted(true);
     try {
-      await state.startIndexFetch();
+      await state.startIndexFetch(undefined, prefer);
       const { ready, rows: have } = await state.catalogueReady();
       setRows(have);
       if (ready) onReady();
@@ -81,28 +137,86 @@ export function IndexGate({ state, onReady, onSettings }: Props) {
     : fetching ? 1 : 0;
   const busy = started || !!fetching;
 
-  // Where it is coming from, once that has been decided. Null means the
-  // round trip that decides has not answered yet, and naming a source
-  // before then would be wrong about half the time.
   const where = !fetching ? ''
     : fetching.source === null ? 'Working out where to get it…'
       : fetching.source === 'desktop'
         ? `Getting ${fetching.stage} from your PC`
         : `Downloading ${fetching.stage} from Scryfall`;
 
+  // ---------------------------------------------------------------- step 1
+
+  if (step === 'version' && !busy) {
+    return (
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <Text style={styles.title}>How will you use Densa Deck?</Text>
+        <Text style={styles.body}>
+          Your collection, decks and scanning work either way. A PC adds
+          deck analysis, card suggestions and combo detection — and it hands
+          over the card index in seconds instead of minutes.
+        </Text>
+
+        <Pressable
+          style={styles.go}
+          onPress={() => {
+            // Already paired means the address is on file; there is
+            // nothing to scan and the next question is the index.
+            if (paired || !onPairPc) setStep('index');
+            else onPairPc();
+          }}
+        >
+          <Text style={styles.goText}>With a PC</Text>
+        </Pressable>
+        <Text style={styles.under}>
+          {paired
+            ? 'This phone already has a PC saved.'
+            : 'Densa Deck runs on the PC and this phone pairs to it.'}
+        </Text>
+
+        <Pressable
+          style={[styles.go, styles.goQuiet]}
+          onPress={() => {
+            void (async () => {
+              try {
+                await onStandalone?.();
+                setStep('index');
+              } catch (err) {
+                setProblem(recordCrash(err, 'going standalone', false).message);
+              }
+            })();
+          }}
+        >
+          <Text style={styles.goText}>This phone only</Text>
+        </Pressable>
+        <Text style={styles.under}>
+          Everything about owning cards, with no PC and no signal. You can
+          add a PC later from Settings.
+        </Text>
+
+        {problem ? <Text style={styles.problem}>{problem}</Text> : null}
+
+        <Text style={styles.credit}>{SCRYFALL_CREDIT}</Text>
+        <Text style={styles.version}>Densa Deck companion {VERSION}</Text>
+      </ScrollView>
+    );
+  }
+
+  // ---------------------------------------------------------------- step 2
+
+  // The one case where the source is a real question rather than a
+  // consequence: a PC was chosen, and it is not answering. Downloading the
+  // whole thing from Scryfall is a fine answer, but it is a big one and it
+  // is theirs to give.
+  const pcChosenButSilent = !standalone && pcAnswers === false;
+
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>One thing first</Text>
+      <Text style={styles.title}>The card index</Text>
       <Text style={styles.body}>
-        Densa Deck needs the card index before it can do anything — every
-        card in Magic, so your phone can recognise one and find one without
-        asking anybody.
+        Every card in Magic, so this phone can recognise one and find one
+        without asking anybody. Densa Deck needs it before it can do
+        anything.
       </Text>
 
-      {/*
-        Partly-there is its own state and says so. "Half-downloaded" and
-        "not started" want different words: one of them is nearly done.
-      */}
       {rows > 0 && !busy ? (
         <Text style={styles.partial}>
           {rows.toLocaleString()} cards are already here, but the index is
@@ -119,22 +233,51 @@ export function IndexGate({ state, onReady, onSettings }: Props) {
             <View style={[styles.fill, { width: `${Math.min(pct, 100)}%` }]} />
           </View>
         </View>
-      ) : (
-        <Pressable style={styles.go} onPress={() => void fetchIt()}>
-          <Text style={styles.goText}>
-            {rows > 0 ? 'Finish the download' : 'Get the card index'}
+      ) : pcAnswers === null && !standalone ? (
+        <View style={styles.progress}>
+          <ActivityIndicator color="#7db8e8" />
+          <Text style={styles.stage}>Checking whether your PC is awake…</Text>
+        </View>
+      ) : pcChosenButSilent ? (
+        <>
+          <Text style={styles.partial}>
+            Your PC is not answering, so it cannot hand the index over right
+            now.
           </Text>
-        </Pressable>
+          <Pressable style={styles.go} onPress={() => setPcAnswers(null)}>
+            <Text style={styles.goText}>Try my PC again</Text>
+          </Pressable>
+          <Text style={styles.under}>
+            Open Densa Deck on the PC, with phone scanning switched on.
+          </Text>
+          <Pressable
+            style={[styles.go, styles.goQuiet]}
+            onPress={() => void fetchIt('scryfall')}
+          >
+            <Text style={styles.goText}>Download it here instead</Text>
+          </Pressable>
+          <Text style={styles.under}>
+            Straight from Scryfall — a large one-time download, so use wifi.
+          </Text>
+        </>
+      ) : (
+        <>
+          <Pressable style={styles.go} onPress={() => void fetchIt()}>
+            <Text style={styles.goText}>
+              {rows > 0 ? 'Finish the download' : 'Get the card index'}
+            </Text>
+          </Pressable>
+          <Text style={styles.under}>
+            {standalone
+              ? 'Straight from Scryfall — a large one-time download, so use '
+                + 'wifi. Afterwards the app works with no PC and no signal '
+                + 'at all.'
+              : 'From your PC, which takes a few seconds.'}
+          </Text>
+        </>
       )}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
-
-      <Text style={styles.note}>
-        If your PC is on and reachable this takes seconds. Otherwise it comes
-        straight from Scryfall — a large one-time download, so use wifi.
-        Either way you only do this once, and afterwards the app works with
-        no PC and no signal at all.
-      </Text>
 
       {/*
         A phone paired to a PC that is switched off would otherwise be
@@ -154,7 +297,7 @@ export function IndexGate({ state, onReady, onSettings }: Props) {
 
 const styles = StyleSheet.create({
   screen: { backgroundColor: '#0f1117', flex: 1 },
-  content: { gap: 14, padding: 22, paddingTop: 40 },
+  content: { gap: 12, padding: 22, paddingTop: 40, paddingBottom: 40 },
   title: { color: '#e4e6eb', fontSize: 24, fontWeight: '700' },
   body: { color: '#b6bac4', fontSize: 15, lineHeight: 22 },
   partial: { color: '#d9ae62', fontSize: 14, lineHeight: 20 },
@@ -172,12 +315,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#2f6f9f',
     borderRadius: 10,
-    marginTop: 8,
+    marginTop: 10,
     paddingVertical: 14,
   },
+  // The second answer is not the lesser one; it is just not the default.
+  goQuiet: { backgroundColor: '#242b3a' },
   goText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  under: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
   problem: { color: '#e53e3e', fontSize: 14, lineHeight: 20 },
-  note: { color: '#8a8f9c', fontSize: 13, lineHeight: 19, marginTop: 4 },
   settings: { color: '#7db8e8', fontSize: 14, marginTop: 10 },
   credit: { color: '#6b7079', fontSize: 12, marginTop: 20 },
   version: { color: '#4d525c', fontSize: 12 },

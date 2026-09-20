@@ -318,6 +318,10 @@ export class AppState {
    */
   async startIndexFetch(
     chunks?: (url: string) => AsyncIterable<Uint8Array>,
+    // Which source the user picked, when they were given the choice. Only
+    // honoured for 'desktop' if the desktop actually answers; a preference
+    // is not a reason to wait on a machine that is switched off.
+    prefer?: IndexSource,
   ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
     if (this.indexRun) return this.indexRun;
     // Before anything asynchronous, so the screen changes on the tap
@@ -329,6 +333,7 @@ export class AppState {
     this.indexRun = this.fetchIndex(
       (p) => this.emit({ indexFetch: p }),
       chunks,
+      prefer,
     ).finally(() => {
       this.indexRun = null;
       this.emit({ indexFetch: null });
@@ -352,9 +357,13 @@ export class AppState {
     // filesystem that cannot exist under Node, and the cursor handling
     // around it is worth testing.
     chunks: (url: string) => AsyncIterable<Uint8Array> = downloadedChunks,
+    prefer?: IndexSource,
   ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
-    const source = chooseSource({
-      desktopAvailable: await this.desktopAvailable(),
+    // Asking the PC costs a round trip to a machine that is often off, and
+    // somebody who has just chosen to download from Scryfall should not
+    // wait on it to be told what they already said.
+    const source = prefer === 'scryfall' ? 'scryfall' : chooseSource({
+      desktopAvailable: await this.desktopReachable(),
     });
 
     if (source === 'desktop') {
@@ -412,8 +421,14 @@ export class AppState {
     return rows;
   }
 
-  /** Whether a desktop is paired AND answering right now. */
-  private async desktopAvailable(): Promise<boolean> {
+  /**
+   * Whether a desktop is paired AND answering right now.
+   *
+   * Public because the setup screen has to know before it offers a choice
+   * between the two sources: "get it from your PC" is not an option worth
+   * showing next to a PC that is switched off.
+   */
+  async desktopReachable(): Promise<boolean> {
     if (this.standalone) return false;
     try {
       await this.client.call('tier', {});

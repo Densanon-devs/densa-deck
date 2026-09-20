@@ -173,6 +173,13 @@ function Shell() {
   // the value as it was at pairing time.
   const solo = useRef(false);
 
+  // No colour and no dot while setup is running. An amber "No PC" over a
+  // screen that is still ASKING whether there is a PC reports a fault
+  // where there is only an unanswered question -- and it was the first
+  // thing on screen, above the question itself.
+  const quiet = solo.current || locked;
+
+
   // Going standalone while sitting on a desktop tab would leave a blank
   // screen with no tab to press to get off it. Declared after `solo` on
   // purpose — reading a binding from further down the render body works
@@ -337,15 +344,17 @@ function Shell() {
       {phase.kind === 'ready' ? (
         <Pressable
           style={[styles.banner,
-            styles[`banner_${solo.current ? 'idle' : status.tone}`]]}
+            styles[`banner_${quiet ? 'idle' : status.tone}`]]}
           onPress={() => setShowConnection((open) => !open)}
         >
-          {solo.current ? null : (
+          {quiet ? null : (
             <View style={[styles.dot, styles[`dot_${status.tone}`]]} />
           )}
           <Text style={[styles.bannerText,
-            styles[`text_${solo.current ? 'idle' : status.tone}`]]}>
-            {solo.current ? 'This phone only' : status.headline}
+            styles[`text_${quiet ? 'idle' : status.tone}`]]}>
+            {solo.current ? 'This phone only'
+              : locked ? 'Setting up'
+                : status.headline}
           </Text>
           <Text style={styles.bannerHint}>
             {showConnection ? 'Close' : 'Settings'}
@@ -360,18 +369,54 @@ function Shell() {
       */}
       {phase.kind === 'ready' && indexed === false && !showConnection ? (
         <ErrorBoundary where="the setup screen">
-          <View style={styles.body}>
+          {/*
+            Its own flex box, NOT `styles.body` -- the body below is also
+            flex: 1 and renders even while every screen inside it is
+            withheld, so the two split the column between them. Setup got
+            the top half and its text was cut off mid-sentence, with the
+            other half blank underneath.
+          */}
+          <View style={styles.setup}>
             <IndexGate
               state={phase.state}
+              standalone={solo.current}
+              paired={!solo.current}
               onReady={() => setIndexed(true)}
               onSettings={() => setShowConnection(true)}
+              onPairPc={async () => {
+                // Same rule as leaving standalone from Settings: the flag
+                // goes before the pairing screen, so backing out of
+                // pairing does not land on a phone that has quietly
+                // forgotten which it was.
+                if (store) await setStandalone(store, false);
+                setPhase({ kind: 'pairing' });
+              }}
+              onStandalone={async () => {
+                if (!store) {
+                  throw new Error('The local collection is not open yet. '
+                                  + 'Give it a moment and try again.');
+                }
+                await chooseStandalone(store);
+                const soloDb = await openDeviceDatabase();
+                const soloDecks = new DeckStore(soloDb);
+                setPhase({
+                  kind: 'ready',
+                  state: await connect(store, ALONE, soloDecks),
+                  decks: soloDecks,
+                });
+              }}
             />
           </View>
         </ErrorBoundary>
       ) : null}
 
       <ErrorBoundary where={`the ${tab} screen`}>
-      <View style={styles.body}>
+      {/*
+        Collapsed while setup is up. A flex: 1 view with nothing in it is
+        still a flex: 1 view, and it was taking half the screen off the
+        setup screen beside it.
+      */}
+      <View style={locked && !showConnection ? styles.collapsed : styles.body}>
         {phase.kind === 'ready' && showConnection ? (
           <ConnectionScreen
             state={phase.state}
@@ -540,6 +585,10 @@ function Shell() {
 const styles = StyleSheet.create({
   app: { flex: 1, backgroundColor: '#0f1117' },
   body: { flex: 1 },
+  setup: { flex: 1 },
+  // Not `display: none`: the screens inside are already withheld, and this
+  // only has to stop the box itself from claiming a share of the column.
+  collapsed: { flex: 0, height: 0 },
   centre: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   muted: { color: '#8a8f9c' },
   banner: {
