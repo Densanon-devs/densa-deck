@@ -35,23 +35,24 @@ import { CardBrowser } from './CardBrowser.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
-  deckColorIdentity,
-  type DeckRecord,
   addToDeck,
   carryPrintings,
   copiesOf,
   costToFinish,
+  deckColorIdentity,
   deckSize,
   deckValue,
   deckWarnings,
   entryKey,
   formatDecklist,
-  parseDecklist,
-  printingLabel,
-  pricesFromSlots,
-  removeFromDeck,
   mergeCounts,
+  parseDecklist,
+  pricesFromSlots,
+  printingLabel,
+  removeFromDeck,
   shortfall,
+  totalCards,
+  type DeckRecord,
 } from '../lib/decks.ts';
 import type { Deck, DeckEntry, ShortfallRow, SlotFacts } from '../lib/decks.ts';
 
@@ -192,7 +193,7 @@ export function DeckListScreen({
               <View style={styles.grow}>
                 <Text style={styles.name}>{deck.name}</Text>
                 <Text style={styles.muted}>
-                  {deckSize(deck.decklist)} cards · hold to rename or delete
+                  {totalCards(deck)} cards · hold to rename or delete
                 </Text>
               </View>
               <Text style={styles.plus}>›</Text>
@@ -783,7 +784,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
       <Text style={styles.title}>{deck?.name ?? 'Deck'}</Text>
       <Text style={styles.muted}>
-        {deck ? `${deckSize(deck.decklist)} cards` : ''}
+        {deck ? `${totalCards(deck)} cards` : ''}
       </Text>
       {money && (money.worth.usd > 0 || money.worth.unpriced > 0) ? (
         <Text style={styles.muted}>
@@ -936,6 +937,12 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           style={[styles.zone, zone === 'main' && styles.zoneOn]}
           onPress={() => setZone('main')}
         >
+          {/*
+            The LIST's count, not the deck's. This tab switches between
+            two lists and labels how many rows are in each; the
+            commander lives above them in its own slot and is not one
+            of these rows. The deck's real size is in the header.
+          */}
           <Text style={[styles.zoneText, zone === 'main' && styles.zoneTextOn]}>
             Deck ({deckSize(deck?.decklist ?? [])})
           </Text>
