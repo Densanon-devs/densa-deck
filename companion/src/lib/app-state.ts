@@ -685,6 +685,24 @@ ${more}`;
     return this.store.namesLike?.(text) ?? [];
   }
 
+  /**
+   * Printing ids of a card that this phone actually owns.
+   *
+   * For choosing which version to show when a slot names none: the
+   * copy on the shelf beats the newest reprint of it, because that is
+   * the one going on the table.
+   */
+  async ownedPrintingsOf(cardName: string): Promise<Set<string>> {
+    const key = (cardName || '').trim().toLowerCase();
+    const out = new Set<string>();
+    for (const stack of await this.store.listStacks()) {
+      if (stack.quantity <= 0) continue;
+      if (stack.card_name.trim().toLowerCase() !== key) continue;
+      if (stack.printing_id) out.add(stack.printing_id);
+    }
+    return out;
+  }
+
   /** Every printing of a card this phone's index knows. */
   async printingsOf(cardName: string): Promise<CataloguePrintingRow[]> {
     return this.store.printingsByName?.(cardName) ?? [];

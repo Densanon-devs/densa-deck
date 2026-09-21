@@ -12,7 +12,14 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { deckSize, deckWarnings, totalCards } from '../src/lib/decks.ts';
+import {
+  carryPrintings,
+  deckSize,
+  deckWarnings,
+  formatDecklist,
+  parseDecklist,
+  totalCards,
+} from '../src/lib/decks.ts';
 
 const card = (name, qty = 1) => ({ name, qty });
 
@@ -108,5 +115,53 @@ describe('the size warning counts the commander too', () => {
       [card('Lazav, the Multifarious')]);
     assert.ok(warnings.some((w) => w.kind === 'copies'),
       'two Lazavs is two Lazavs');
+  });
+});
+
+describe('a commander survives a save with its printing', () => {
+  /**
+   * Reported: the commander does not carry the variant you set it to.
+   *
+   * Two faults under that. `save` destructured only cards and
+   * sideboard from the parse and built the deck without a commander
+   * field at all -- `parseDecklist` returns one and it went in the
+   * bin -- so saving from the text box dropped the commander
+   * entirely. And `carryPrintings` was applied to the decklist and
+   * the sideboard but never to the commander, so even once it
+   * survived, the Scryfall id did not: the text box can carry a set
+   * and a number, never an id.
+   */
+  test('the text round trip keeps the commander', () => {
+    const text = formatDecklist(
+      [card('Island', 99)], [],
+      [{ name: 'Lazav, the Multifarious', qty: 1,
+         set_code: 'rna', collector_number: '212' }]);
+    const parsed = parseDecklist(text);
+    assert.equal(parsed.commander.length, 1);
+    assert.equal(parsed.commander[0].name, 'Lazav, the Multifarious');
+  });
+
+  test('and the set and number with it', () => {
+    const text = formatDecklist([], [], [{
+      name: 'Lazav, the Multifarious', qty: 1,
+      set_code: 'rna', collector_number: '212',
+    }]);
+    const back = parseDecklist(text).commander[0];
+    assert.equal((back.set_code || '').toLowerCase(), 'rna');
+    assert.equal(back.collector_number, '212');
+  });
+
+  test('carryPrintings puts the Scryfall id back on the commander', () => {
+    // The id cannot be written to text, so it has to be recovered
+    // from the deck as it was before the edit -- exactly as the
+    // decklist and sideboard already do.
+    const before = [{ name: 'Lazav, the Multifarious', qty: 1,
+                      set_code: 'rna', collector_number: '212',
+                      printing_id: 'rna-212-id' }];
+    const parsed = parseDecklist(formatDecklist([], [], before)).commander;
+    assert.equal(parsed[0].printing_id, undefined, 'text cannot carry it');
+
+    const carried = carryPrintings(parsed, before);
+    assert.equal(carried[0].printing_id, 'rna-212-id');
   });
 });

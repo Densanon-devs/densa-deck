@@ -420,7 +420,13 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         const newest = [...rows].sort(
           (a, b) => (directory[(b.set_code || '').toLowerCase()]?.year ?? 0)
             - (directory[(a.set_code || '').toLowerCase()]?.year ?? 0));
-        found[entry.name] = newest[0]?.printing_id ?? '';
+        // The copy on your shelf before the newest reprint of it. A
+        // commander with no printing recorded is usually a deck typed
+        // from a list, and the one you own is the one you will put on
+        // the table.
+        const held = await state.ownedPrintingsOf(entry.name);
+        const mine = newest.find((r) => held.has(r.printing_id));
+        found[entry.name] = (mine ?? newest[0])?.printing_id ?? '';
       }
       if (live && Object.keys(found).length) {
         setCommanderArt((held) => ({ ...held, ...found }));
@@ -556,7 +562,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   }, [slotSignature, state]);
 
   const save = useCallback(async () => {
-    const { cards, sideboard, skipped } = parseDecklist(text);
+    const { cards, sideboard, commander, skipped } = parseDecklist(text);
     setProblem(
       skipped.length
         ? `Couldn't read ${skipped.length} line${skipped.length === 1 ? '' : 's'}: ` +
@@ -573,6 +579,19 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       // would change, and nothing on screen would say why.
       decklist: carryPrintings(cards, deck?.decklist),
       sideboard: carryPrintings(sideboard, deck?.sideboard),
+      /*
+        The commander, which this used to drop on the floor.
+        `parseDecklist` has always returned one and the destructure
+        above ignored it, so `next` had no commander field at all and
+        saving from the text box demoted the card into the
+        ninety-nine -- taking the colour lock and the size check with
+        it.
+        Carried like the other two zones, and for the same reason:
+        the text box holds a set and a number, never a Scryfall id,
+        so without this the exact printing somebody chose became
+        "any printing of that card" on the first hand edit.
+      */
+      commander: carryPrintings(commander, deck?.commander),
       notes: deck?.notes ?? '',
       updated_at: new Date().toISOString(),
     };
