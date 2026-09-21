@@ -427,6 +427,11 @@ export function ScanScreen({ state }: Props) {
           const local = await state.identifyOffline(
             uri, (text) => { sawText = text.length > 0; });
           if (local) {
+            // Proof the machinery works. Without this, a paired phone
+            // placing cards locally never cleared failures, so three
+            // scattered PC hiccups across a long session would stop the
+            // loop mid-box.
+            scanner.current.succeeded();
             buzz({ kind: 'card', name: local.printing.name });
             const decision = guard.current.consider(
               local.printing.name, Date.now());
@@ -502,7 +507,12 @@ export function ScanScreen({ state }: Props) {
                     'the focus once it looks sharp.',
           );
         } catch (err) {
-          scanner.current.failed();
+          // NOT counted as a failure here. What this catch means depends
+          // entirely on which branch below it lands in, and only one of
+          // them is a round trip that failed. Counting first and undoing
+          // it later works only as long as nobody adds a branch that
+          // returns in between -- which is exactly how the busy flag
+          // leaked two versions ago.
 
           // On a phone with no PC there is nobody to keep it FOR.
           //
@@ -527,6 +537,12 @@ export function ScanScreen({ state }: Props) {
           }
 
           if (state.soloForever) {
+            // Not a failure. There is no PC, so there was no round trip
+            // to fail -- the photo simply had no card the phone could
+            // place, which is what the gap between two cards looks like.
+            // Counting these stopped auto scan after about three
+            // seconds of reaching for the next card.
+            scanner.current.missed();
             // Pass or fail, a card being THERE is worth feeling: it means
             // stop moving your hand. An empty frame is not.
             buzz(sawText ? { kind: 'unreadable' } : { kind: 'nothing' });
@@ -540,6 +556,12 @@ export function ScanScreen({ state }: Props) {
 
           // There IS a PC, just not right now. The card in your hand is
           // still real, so the picture is kept for it rather than discarded.
+          //
+          // This is the one branch where a round trip genuinely failed,
+          // so it is the one that counts against the limit: three of
+          // these in a row means the desktop has stopped answering and
+          // hammering it once a second helps nobody.
+          scanner.current.failed();
           try {
             // Shrunk before storing, never before sending: the live path
             // hands the PC everything it could have had.

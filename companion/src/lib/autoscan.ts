@@ -129,6 +129,26 @@ export class AutoScanner {
     this.failures += 1;
   }
 
+  /**
+   * The photograph held no card.
+   *
+   * The most ordinary thing that happens during a scan — the gap while
+   * you reach for the next card, the edge of the box, the table — and
+   * emphatically not a fault.
+   *
+   * It has to be said out loud rather than left as "not a success",
+   * because on a phone with no PC an unplaced card falls through to a
+   * desktop that is not there and throws. Counting those, the loop
+   * treated three seconds of reaching for the next card as three
+   * consecutive failures and gave up.
+   *
+   * Clears the count: the machinery is evidently working, it is just
+   * looking at nothing.
+   */
+  missed(): void {
+    this.failures = 0;
+  }
+
   /** Starting again clears everything that made it stop. */
   reset(now = 0): void {
     this.failures = 0;

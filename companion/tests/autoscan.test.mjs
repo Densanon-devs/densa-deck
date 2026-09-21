@@ -281,3 +281,64 @@ describe('scanning a box with no PC', () => {
       scanner.next({ ...base, connection: 'offline' }).act, 'stop');
   });
 });
+
+describe('the gap between two cards is not a failure', () => {
+  /**
+   * Reported from a real box: auto scan does "about three bad scans and
+   * is like no more for you". Reaching for the next card was enough to
+   * stop it.
+   *
+   * The failure counter guards a round trip to the PC -- three throws in
+   * a row means the desktop stopped answering, so stop hammering it. On
+   * a phone with no PC there is no round trip and nothing to hammer:
+   * every frame the local matcher cannot place falls through to a PC
+   * that is not there and throws. An empty table between two cards read
+   * as three consecutive faults.
+   *
+   * A photograph with no card in it is the single most normal thing that
+   * happens during a scan. It cannot be a fault.
+   */
+  const base = { running: true, busy: false, connection: 'unpaired',
+                 offlineCapable: true };
+
+  test('three empty frames do not stop the loop', () => {
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    for (let i = 0; i < 3; i += 1) scanner.missed();
+    assert.equal(scanner.next({ ...base, now: 10_000 }).act, 'capture');
+  });
+
+  test('nor thirty of them', () => {
+    // Putting the kettle on mid-box.
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    for (let i = 0; i < 30; i += 1) scanner.missed();
+    assert.equal(scanner.next({ ...base, now: 10_000 }).act, 'capture');
+  });
+
+  test('but three real round-trip failures still do', () => {
+    // The guard this counter exists for: a desktop that stopped
+    // answering should not be hammered once a second for ever.
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    for (let i = 0; i < FAILURE_LIMIT; i += 1) scanner.failed();
+    const decision = scanner.next({
+      ...base, connection: 'connected', now: 10_000 });
+    assert.equal(decision.act, 'stop');
+    assert.equal(decision.reason, 'too-many-failures');
+  });
+
+  test('and seeing nothing clears failures that came before', () => {
+    // Two throws, then the camera is simply pointed at the table. The
+    // machinery is evidently fine; holding the old count against it
+    // would stop the loop on the next unrelated hiccup.
+    const scanner = new AutoScanner();
+    scanner.reset(0);
+    scanner.failed();
+    scanner.failed();
+    scanner.missed();
+    scanner.failed();
+    assert.equal(scanner.next({
+      ...base, connection: 'connected', now: 10_000 }).act, 'capture');
+  });
+});
