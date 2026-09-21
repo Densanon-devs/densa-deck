@@ -200,6 +200,17 @@ describe('an index from before the artist column', () => {
       assert.doesNotMatch(out.reason, /did not read/);
     });
 
+  test('and it quotes what it did read, so the next scan is evidence',
+    async () => {
+      // A message that only says the line did not read leaves nobody
+      // able to tell whether it was missed, mangled, or matched the
+      // wrong thing. This is what found the collector-number bug.
+      const store = await indexed();
+      const out = await identifyLocally(
+        'Island\nBasic Land\nIllus. Someone Nobody Knows', store);
+      assert.match(out.reason, /Someone Nobody Knows/);
+    });
+
   test('a current index blames the card, not the index', async () => {
     const store = await indexed();
     const out = await identifyLocally(

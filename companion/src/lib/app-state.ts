@@ -1571,14 +1571,49 @@ ${more}`;
   /**
    * Every printing of one card.
    *
-   * Needs the desktop: the phone mirrors what you own, and the point here is
-   * the printings you do not.
+   * The desktop first, because its catalogue is the complete one and
+   * it carries prices this phone may not have.
+   *
+   * Then this phone's own index, which is the half that was missing.
+   * Reported as "when adding them into a deck they only show one
+   * version": the browser asks for the printings to build its swipe
+   * pager, the ask needed a PC, and with no PC it caught the failure
+   * and showed an empty list. Everything downstream is gated on that
+   * list having more than one row -- the pager, "Add this printing",
+   * the set and number under the art -- so a standalone phone could
+   * not choose a version of anything. Which is worst exactly where it
+   * matters most: a land you own four different printings of.
+   *
+   * Newest first, the same order the scan picker uses, so the two
+   * places you choose a printing agree about what order printings
+   * come in.
    */
   async printingsFor(cardName: string): Promise<{ printings: CataloguePrinting[] }> {
-    return this.client.call<{ printings: CataloguePrinting[] }>(
-      'cards/printings',
-      { card_name: cardName },
-    );
+    try {
+      const reply = await this.client.call<{ printings: CataloguePrinting[] }>(
+        'cards/printings',
+        { card_name: cardName },
+      );
+      if (reply?.printings?.length) return reply;
+    } catch {
+      // No PC, or it is asleep. The index here answers the same
+      // question for every card it holds.
+    }
+    const rows = await this.store.printingsByName(cardName);
+    const printings = rows
+      .slice()
+      .sort((a, b) => (b.released_year ?? 0) - (a.released_year ?? 0))
+      .map((row): CataloguePrinting => ({
+        printing_id: row.printing_id,
+        set_code: row.set_code,
+        collector_number: row.collector_number,
+        rarity: row.rarity ?? '',
+        // The index carries prices now, so the pager can price a
+        // printing you do not own -- which is most of them, and the
+        // whole reason to look at the list.
+        price_usd: (row as { price_usd?: number | null }).price_usd ?? null,
+      }));
+    return { printings };
   }
 
   /**

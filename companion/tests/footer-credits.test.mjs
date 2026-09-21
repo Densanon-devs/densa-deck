@@ -15,6 +15,7 @@ import {
   artistIn,
   flatten,
   narrowByCredits,
+  withinOneEdit,
   yearsIn,
 } from '../src/lib/footer-credits.ts';
 
@@ -163,5 +164,114 @@ describe('flattening', () => {
 
   test('is stable on something already flat', () => {
     assert.equal(flatten('john avon'), 'john avon');
+  });
+});
+
+describe('one character out', () => {
+  /**
+   * A proper noun in six-point italic on beige is where OCR slips,
+   * and it slips by a letter. An exact-only search throws away the
+   * whole card for that.
+   *
+   * This is the fuzzy matching the card-NAME path refuses, and the
+   * difference is what a wrong answer costs: a fuzzy name lands on a
+   * different real card and files it, a fuzzy artist lands on a
+   * shortlist of pictures that a person looks at.
+   */
+  test('a substituted letter still finds the artist', () => {
+    assert.equal(artistIn('Illus. John Avan', ARTISTS), 'John Avon');
+  });
+
+  test('a dropped letter does too', () => {
+    assert.equal(artistIn('Illus. John Avn', ARTISTS), 'John Avon');
+  });
+
+  test('an extra letter does too', () => {
+    assert.equal(artistIn('Illus. John Avoon', ARTISTS), 'John Avon');
+  });
+
+  test('two slips is not a match', () => {
+    // One edit is a misread. Two is a different name.
+    assert.equal(artistIn('Illus. Jahn Avan', ARTISTS), '');
+  });
+
+  test('an exact match is preferred over a near one', () => {
+    // Both Rob Alexander and Rob Alexander-with-a-typo cannot both
+    // win; the one actually printed does.
+    assert.equal(artistIn('Illus. Mark Poole', ARTISTS), 'Mark Poole');
+  });
+
+  test('a short name gets no slack', () => {
+    // One edit in a six-letter name is most of the name. Chippy and
+    // Chappy are not the same person.
+    assert.equal(artistIn('Illus. Chappy', ARTISTS), '');
+  });
+
+  test('two artists one edit away means neither', () => {
+    // Ambiguity is not a coin toss. A shortlist built on the wrong
+    // artist is worse than the refusal it replaced.
+    assert.equal(
+      artistIn('Illus. Xan Frazier', ['Dan Frazier', 'Van Frazier']), '');
+  });
+
+  test('every real artist survives one misread letter', () => {
+    /*
+      A substitution in the middle, which is the slip that actually
+      happens: a letter comes back as a different letter.
+
+      Through `flatten`, not through a strip of non-ASCII -- removing
+      the accents from Alvarez is not one edit, it is three, and a
+      test that did that would be measuring its own fixture. And a
+      substitution rather than a deletion, because dropping the last
+      character of "Tianhua X" does not lose a letter, it loses a
+      whole name; that is a real limit and it is not one edit.
+    */
+    let checked = 0;
+    for (const artist of ARTISTS) {
+      const flat = flatten(artist);
+      if (flat.length < 8) continue;
+      const at = Math.floor(flat.length / 2);
+      if (flat[at] === ' ') continue;
+      const broken = `${flat.slice(0, at)}${flat[at] === 'x' ? 'q' : 'x'}`
+        + flat.slice(at + 1);
+      assert.ok(artistIn(`Illus. ${broken}`, ARTISTS),
+        `${artist} lost to one misread letter (${broken})`);
+      checked += 1;
+    }
+    // The loop has to have run, or this passes by skipping everything.
+    assert.ok(checked > 120, `only checked ${checked}`);
+  });
+});
+
+describe('the one-edit test itself', () => {
+  test('identical', () => {
+    assert.equal(withinOneEdit('dan frazier', 'dan frazier'), true);
+  });
+
+  test('one substitution, at each end and in the middle', () => {
+    assert.equal(withinOneEdit('xan frazier', 'dan frazier'), true);
+    assert.equal(withinOneEdit('dan frazier', 'dan fraziex'), true);
+    assert.equal(withinOneEdit('dan frxzier', 'dan frazier'), true);
+  });
+
+  test('one insertion and one deletion', () => {
+    assert.equal(withinOneEdit('dan fraziers', 'dan frazier'), true);
+    assert.equal(withinOneEdit('dan frazie', 'dan frazier'), true);
+  });
+
+  test('two edits is not one', () => {
+    assert.equal(withinOneEdit('xan fraziex', 'dan frazier'), false);
+    assert.equal(withinOneEdit('dan frazierss', 'dan frazier'), false);
+  });
+
+  test('a transposition counts as two, which it is', () => {
+    // Deliberately not treated as one edit: "Braid" and "Biard" are
+    // two different words and this has no reason to conflate them.
+    assert.equal(withinOneEdit('adn frazier', 'dan frazier'), false);
+  });
+
+  test('empty against something', () => {
+    assert.equal(withinOneEdit('', 'a'), true);
+    assert.equal(withinOneEdit('', 'ab'), false);
   });
 });

@@ -20,7 +20,8 @@
  * the two shows up as a failure rather than as a card filed wrong.
  */
 
-import { artistIn, narrowByCredits, yearsIn } from './footer-credits.ts';
+import { artistIn, narrowByCredits, tailOf, yearsIn }
+  from './footer-credits.ts';
 
 /** What we managed to read off a card face. */
 export interface ReadIdentity {
@@ -631,8 +632,18 @@ export async function identifyLocally(
             ? 'This card index was downloaded before it kept '
               + 'artist names, and the artist is what tells 800 Islands '
               + 'apart — refresh the index in Settings.'
-            : 'The artist line along the bottom edge did not read '
-              + 'either.'),
+            /*
+              What it actually read, quoted.
+
+              A message that only says the artist line did not read
+              leaves nobody able to tell WHY -- whether the line was
+              missed entirely, came back as one of its neighbours, or
+              arrived with a letter wrong. Quoting the tail turns the
+              next scan into evidence instead of another guess, which
+              is how the collector-number bug was found.
+            */
+            : `The artist line along the bottom edge did not read: `
+              + `"${tailOf(text)}"`),
       };
     }
   }
