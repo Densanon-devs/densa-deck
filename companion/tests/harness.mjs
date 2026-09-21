@@ -293,6 +293,28 @@ export class MemoryDatabase {
     // lookup an offline identification turns on.
     if (/FROM catalogue/i.test(text)) {
       const rows = this._table('catalogue');
+      // Typing a name instead of photographing one. Distinct names
+      // with a count, prefix matches first -- the same order `instr`
+      // gives in the real query.
+      if (/name LIKE/i.test(text)) {
+        const needle = String(params[0] ?? '').toLowerCase();
+        const counts = new Map();
+        for (const r of rows) {
+          const name = String(r.name ?? '');
+          if (!name.toLowerCase().includes(needle)) continue;
+          counts.set(name, (counts.get(name) ?? 0) + 1);
+        }
+        const limit = Number(params[2] ?? 12);
+        return [...counts.entries()]
+          .map(([name, n]) => ({ name, n }))
+          .sort((a, b) => (a.name.toLowerCase().indexOf(needle)
+            - b.name.toLowerCase().indexOf(needle))
+            || a.name.localeCompare(b.name))
+          .slice(0, limit);
+      }
+      // AFTER the LIKE branch on purpose: `namesLike` selects
+      // COUNT(*) as a COLUMN, and this size check would swallow it and
+      // hand back one row with no name in it.
       if (/COUNT\(\*\)/i.test(text)) return [{ n: rows.length }];
       if (/WHERE set_code = \? AND collector_number = \?/i.test(text)) {
         return rows.filter((r) => r.set_code === params[0]

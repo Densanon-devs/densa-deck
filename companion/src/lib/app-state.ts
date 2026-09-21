@@ -603,6 +603,21 @@ ${more}`;
     return this.store.setDirectory();
   }
 
+  /**
+   * Card names matching what somebody is typing.
+   *
+   * The way in for cards the scanner structurally cannot read: a basic
+   * land has 828 printings and no usable name lookup, and anything
+   * printed before 2014 carries no set code at all. Typing four
+   * letters is faster than fighting the camera over a card it was
+   * never going to place.
+   */
+  async searchCardNames(text: string): Promise<Array<{
+    name: string; printings: number;
+  }>> {
+    return this.store.namesLike?.(text) ?? [];
+  }
+
   /** Every printing of a card this phone's index knows. */
   async printingsOf(cardName: string): Promise<CataloguePrintingRow[]> {
     return this.store.printingsByName?.(cardName) ?? [];

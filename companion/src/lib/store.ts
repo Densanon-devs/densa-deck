@@ -872,6 +872,35 @@ export class LocalStore {
   }
 
   /** Every printing of one card, for when only the title read. */
+  /**
+   * Card names matching what somebody has typed so far.
+   *
+   * For adding a card without photographing it, which is the only way
+   * to enter the ones the scanner structurally cannot do: a basic land
+   * has 828 printings and no usable name lookup, and a pre-2014 card
+   * prints no set code at all.
+   *
+   * Substring rather than prefix, because people type the memorable
+   * word: "bolt", not "lightning b". Prefix matches still sort first
+   * via `instr`, so typing "sol" offers Sol Ring before Console.
+   */
+  async namesLike(text: string, limit = 12): Promise<Array<{
+    name: string; printings: number;
+  }>> {
+    const needle = (text || '').trim();
+    if (needle.length < 2) return [];
+    const rows = await this.db.all<{ name: string; n: number }>(
+      `SELECT name, COUNT(*) AS n FROM catalogue
+        WHERE name LIKE '%' || ? || '%'
+        GROUP BY name
+        ORDER BY instr(lower(name), lower(?)), name
+        LIMIT ?`,
+      [needle, needle, limit]);
+    return rows.map((r) => ({
+      name: String(r.name), printings: Number(r.n || 0),
+    }));
+  }
+
   /** Remember what the set codes mean. */
   async putSets(rows: Array<{
     code: string; name: string; at: number; iconUri: string;

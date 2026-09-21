@@ -32,6 +32,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   Vibration,
   View,
 } from 'react-native';
@@ -182,6 +183,62 @@ export function ScanScreen({ state }: Props) {
   const indexStage = indexFetch
     ? describeStage(indexFetch.stage, indexFetch.source)
     : '';
+  /*
+    Typing a card instead of photographing it.
+
+    Two of the scanner's limits are structural rather than fixable: a
+    basic land has eight hundred printings and no name lookup can
+    choose between them, and a card printed before 2014 carries no set
+    code at all. Fighting the camera over those wastes an evening.
+
+    It ends in the same picker a scan does, so there is one way to
+    choose a printing and one way to file it.
+  */
+  const [typed, setTyped] = useState('');
+  const [suggestions, setSuggestions] = useState<Array<{
+    name: string; printings: number;
+  }>>([]);
+
+  useEffect(() => {
+    const term = typed.trim();
+    if (term.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    let live = true;
+    // Debounced: every keystroke is a LIKE over a hundred thousand
+    // rows, and nobody needs an answer to "so" on the way to "sol".
+    const timer = setTimeout(() => {
+      void state.searchCardNames(term)
+        .then((rows) => { if (live) setSuggestions(rows); })
+        .catch(() => { if (live) setSuggestions([]); });
+    }, 200);
+    return () => { live = false; clearTimeout(timer); };
+  }, [typed, state]);
+
+  /** Show every printing of a typed name in the usual picker. */
+  const chooseTyped = useCallback(async (name: string) => {
+    setProblem('');
+    try {
+      const rows = await state.printingsOf(name);
+      if (!rows.length) {
+        setStatus(`${name} is not in this phone's index.`);
+        return;
+      }
+      setTyped('');
+      setSuggestions([]);
+      setResult(asScanResult({
+        identity: { name, setCode: '', collectorNumber: '', foilHint: false },
+        candidates: rows,
+        autoAddable: false,
+        reason: '',
+      }));
+      setStatus(`${name} — which printing?`);
+    } catch (err) {
+      setProblem(recordCrash(err, 'looking that card up', false).message);
+    }
+  }, [state]);
+
   const [draining, setDraining] = useState(false);
   const [problem, setProblem] = useState('');
   // The green flash is gone in under a second. What was filed has to stay on
@@ -1331,6 +1388,43 @@ export function ScanScreen({ state }: Props) {
         </View>
       ) : null}
 
+      {/*
+        The way in that does not use the camera. Under the controls
+        rather than above the preview: scanning is the main event and
+        this is the fallback for what scanning cannot do.
+      */}
+      <View style={styles.typedBox}>
+        <TextInput
+          style={styles.typedInput}
+          value={typed}
+          onChangeText={setTyped}
+          placeholder="Or type a card name"
+          placeholderTextColor="#6b7079"
+          autoCorrect={false}
+          autoCapitalize="words"
+          returnKeyType="search"
+        />
+        {suggestions.map((row) => (
+          <Pressable
+            key={row.name}
+            style={styles.typedHit}
+            onPress={() => void chooseTyped(row.name)}
+          >
+            <Text style={styles.typedName}>{row.name}</Text>
+            <Text style={styles.typedCount}>
+              {row.printings === 1
+                ? '1 printing'
+                : `${row.printings} printings`}
+            </Text>
+          </Pressable>
+        ))}
+        {typed.trim().length >= 2 && !suggestions.length ? (
+          <Text style={styles.typedNone}>
+            Nothing in the index matches that.
+          </Text>
+        ) : null}
+      </View>
+
       {result?.candidates?.length ? (
         <View
           style={styles.picker}
@@ -1458,6 +1552,30 @@ const styles = StyleSheet.create({
   },
   alsoLabel: { color: '#8a8f9c', fontSize: 12 },
   alsoChips: { flexDirection: 'row', gap: 6 },
+  typedBox: { gap: 6, marginTop: 10 },
+  typedInput: {
+    backgroundColor: '#141924',
+    borderColor: '#242b3a',
+    borderRadius: 10,
+    borderWidth: 1,
+    color: '#e4e6eb',
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  typedHit: {
+    alignItems: 'center',
+    borderColor: '#242b3a',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  typedName: { color: '#e4e6eb', flexShrink: 1, fontSize: 14 },
+  typedCount: { color: '#8a8f9c', fontSize: 12 },
+  typedNone: { color: '#8a8f9c', fontSize: 13 },
   chip: {
     borderColor: '#2d3142',
     borderWidth: 1,
