@@ -23,6 +23,7 @@ import {
   installGlobalErrorTrap,
   lastCrash,
   onCrash,
+  reachFailure,
   recordCrash,
   resetGlobalErrorTrap,
 } from '../src/lib/crash.ts';
@@ -234,5 +235,35 @@ describe('knowing which build is on the phone', () => {
     // The screen a phone lands on when it is not paired, which is exactly when
     // someone is asking "did the new build install".
     assert.ok(read('../src/screens/Pair.tsx').includes('{VERSION}'));
+  });
+});
+
+describe('blaming the network only when it was the network', () => {
+  /**
+   * "Prices need the internet" was appended to every price failure,
+   * including `no such column: price_usd` -- so the one report that
+   * mattered arrived with a sentence sending the tester to check a
+   * signal that was fine.
+   */
+  test('a database fault is not a connection problem', () => {
+    assert.equal(reachFailure('Error code : no such column: price_usd'),
+      false);
+    assert.equal(
+      reachFailure("Call to function 'NativeDatabase.prepareAsync' "
+        + 'has been rejected'), false);
+  });
+
+  test('a real network failure still says so', () => {
+    assert.equal(reachFailure('Network request failed'), true);
+    assert.equal(reachFailure('fetch failed'), true);
+    assert.equal(reachFailure('connect ECONNREFUSED 10.0.0.4:8765'), true);
+    assert.equal(reachFailure('The request timed out'), true);
+  });
+
+  test('an unfamiliar message is not guessed at', () => {
+    // A whitelist, because an unrecognised failure is exactly where
+    // guessing does the damage.
+    assert.equal(reachFailure('Something went wrong'), false);
+    assert.equal(reachFailure(''), false);
   });
 });

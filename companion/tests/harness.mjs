@@ -491,6 +491,28 @@ export class MemoryDatabase {
         return rows.find((r) => r.set_code === params[0]
           && r.collector_number === params[1]);
       }
+      if (/WHERE c\.name = \?/i.test(text)) {
+        // The name fallback, which has an ORDER BY that matters: a
+        // printing this phone owns first, then the most recently
+        // released set, then the id so two runs agree. Reimplemented
+        // here rather than ignored, because "whichever row came
+        // first" IS the bug this ordering was written to fix.
+        //
+        // The real ordering is tested against a real SQLite in
+        // tests/deck-art.test.mjs. This is only so the offline-deck
+        // tests can still run.
+        const sets = new Map(
+          this._table('card_sets').map((s) => [s.code, s.released_at ?? 0]));
+        const owned = new Set(this._table('stacks')
+          .filter((s) => (s.quantity ?? 0) > 0)
+          .map((s) => s.printing_id));
+        return rows
+          .filter((r) => r.name === params[0])
+          .sort((a, b) => (Number(owned.has(b.printing_id))
+              - Number(owned.has(a.printing_id)))
+            || ((sets.get(b.set_code) ?? 0) - (sets.get(a.set_code) ?? 0))
+            || String(a.printing_id).localeCompare(String(b.printing_id)))[0];
+      }
       if (/WHERE name = \?/i.test(text)) {
         return rows.find((r) => r.name === params[0]);
       }

@@ -628,8 +628,31 @@ ${more}`;
    * beats none.
    */
   async refreshPrices(now = Date.now()): Promise<{ priced: number }> {
-    const owned = await this.store.ownedPrintingIds();
-    const batches = priceBatches(owned);
+    /*
+      What you own, and what your decks point at.
+
+      Owning the card is the common case and was the whole of this,
+      which left every card in a deck that is not in a box unpriced --
+      the cost-to-finish number, which is the one people actually
+      look at. Deck slots that name a printing cost nothing to add:
+      the same seventy-five-at-a-time requests, deduplicated.
+
+      Slots that name no printing are not here. There is no id to
+      ask about, and the catalogue already holds a price for whatever
+      printing answers for them.
+    */
+    const wanted = new Set(await this.store.ownedPrintingIds());
+    for (const deck of (await this.decks?.list()) ?? []) {
+      for (const entry of [
+        ...(deck.decklist ?? []),
+        ...(deck.sideboard ?? []),
+        ...(deck.commander ?? []),
+      ]) {
+        const id = (entry.printing_id ?? '').trim();
+        if (id) wanted.add(id);
+      }
+    }
+    const batches = priceBatches([...wanted]);
     let priced = 0;
     for (const batch of batches) {
       const response = await this.plainFetch(
@@ -1626,6 +1649,10 @@ ${more}`;
           price_usd: hit.price_usd,
           color_identity: hit.color_identity,
           type_line: hit.type_line,
+          // Carried so the merge below can tell a resolved printing
+          // from a guess between everything sharing a name. Absent on
+          // a cached answer, which the desktop resolved properly.
+          via: (hit as { via?: 'printing' | 'key' | 'name' }).via,
           found: Boolean(hit.printing_id),
         } as ResolvedSlot;
       });

@@ -17,6 +17,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { AppSnapshot, AppState } from '../lib/app-state.ts';
 import type { TierSnapshot } from '../lib/protocol.ts';
 import type { EndpointReport } from '../lib/client.ts';
+import { reachFailure } from '../lib/crash.ts';
 import { checkArtReachable } from '../lib/images.ts';
 import type { ArtReach } from '../lib/images.ts';
 import { describeConnection } from '../lib/status.ts';
@@ -175,7 +176,18 @@ export function ConnectionScreen({
         setProblem('No cards to price yet — scan or add some first.');
       }
     } catch (err) {
-      setProblem(`${(err as Error).message}. Prices need the internet.`);
+      /*
+        Only blame the network when it was the network.
+
+        This appended "Prices need the internet" to every failure,
+        including `no such column: price_usd` -- so the one report
+        that mattered came with a sentence sending the tester to
+        check a signal that was fine.
+      */
+      const message = (err as Error).message || 'Prices could not be updated';
+      setProblem(reachFailure(message)
+        ? `${message}. Prices need the internet.`
+        : message);
     } finally {
       setPricing(false);
     }

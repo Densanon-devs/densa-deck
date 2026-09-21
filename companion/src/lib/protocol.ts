@@ -362,6 +362,14 @@ export interface ResolvedSlot extends DeckSlotRef {
    */
   color_identity?: string[];
   type_line?: string;
+  /**
+   * How the printing was arrived at, when the phone answered itself.
+   *
+   * The desktop never sets this: it resolves a slot against the whole
+   * catalogue. The phone's own index sometimes cannot do better than
+   * "a card with this name", and a reader has to be able to tell.
+   */
+  via?: 'printing' | 'key' | 'name';
 }
 
 /**

@@ -52,6 +52,24 @@ export function describe(error: unknown): { message: string; stack: string } {
   return { message: String(error), stack: '' };
 }
 
+/**
+ * Whether a failure was the network, or was blamed on it.
+ *
+ * "Check your connection" is the reflex suffix on anything that talks
+ * to the internet, and it is wrong often enough to matter: a phone
+ * reported `no such column: price_usd` with "Prices need the
+ * internet" tacked on, sending someone to look at a signal that was
+ * fine while the real cause sat in the same sentence.
+ *
+ * Deliberately a whitelist. Anything unrecognised is NOT called a
+ * network problem, because an unfamiliar message is exactly the case
+ * where guessing does the damage.
+ */
+export function reachFailure(message: string): boolean {
+  return /network|fetch|timed? ?out|abort|unreachable|refused|offline|dns|socket|connect/i
+    .test(message || '');
+}
+
 export function recordCrash(error: unknown, where: string, fatal = true): Crash {
   const { message, stack } = describe(error);
   const crash: Crash = { message, stack, where, fatal, when: Date.now() };

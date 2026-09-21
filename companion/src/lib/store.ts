@@ -12,6 +12,7 @@
  * someone's cards to be tested in Node, on every run, without a device.
  */
 
+import { addColumnStatements, tablePlan } from './migrate.ts';
 import { stackKey } from './protocol.ts';
 import type { StackDelta, SyncEvent } from './protocol.ts';
 
@@ -349,7 +350,22 @@ export class LocalStore {
   }
 
   async init(): Promise<void> {
-    for (const stmt of SCHEMA) await this.db.run(stmt);
+    /*
+      Tables, then the columns they have gained, then everything else.
+
+      The order matters and it is not the order the schema is written
+      in. An index over a column this migration is about to add cannot
+      be created before it exists -- on a phone whose sync_events had
+      no `pushed` column yet, running the statements top to bottom
+      threw `no such column: pushed` while creating its index, before
+      the migration that adds it ever ran.
+    */
+    const tables = SCHEMA.filter((stmt) => tablePlan(stmt));
+    for (const stmt of tables) await this.db.run(stmt);
+    await this.catchUpSchema();
+    for (const stmt of SCHEMA) {
+      if (!tablePlan(stmt)) await this.db.run(stmt);
+    }
     // Both devices have to agree on what "unfiled" means without ever having
     // spoken, so the default collection has a fixed uid rather than a minted
     // one. A random uid per device gave each its own unfiled pile.
@@ -359,6 +375,43 @@ export class LocalStore {
        VALUES (?, 'Main Collection', 'collection', 1, ?)`,
       [DEFAULT_COLLECTION_UID, new Date().toISOString()],
     );
+  }
+
+  /**
+   * Add columns the schema has gained since this file was created.
+   *
+   * `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+   * exists, so a new column reaches fresh installs only. The first
+   * phone to update over the top of an older one answered `no such
+   * column: price_usd` -- the column was in the source and not in the
+   * file. This closes that gap for every column, not just that one.
+   */
+  private async catchUpSchema(): Promise<void> {
+    for (const stmt of SCHEMA) {
+      const plan = tablePlan(stmt);
+      if (!plan) continue;
+      const existing = await this.columnsOf(plan.table);
+      // Empty means the driver could not tell us -- no such table, or
+      // a test double with no PRAGMA. Either way there is nothing to
+      // add to, and guessing would mean ALTERing a table we have not
+      // looked at.
+      if (!existing.length) continue;
+      const { statements } = addColumnStatements(plan, existing);
+      for (const sql of statements) await this.db.run(sql);
+    }
+  }
+
+  /** What the file says this table actually holds, right now. */
+  private async columnsOf(table: string): Promise<string[]> {
+    try {
+      // PRAGMA takes no bound parameters. The name is interpolated
+      // from this module's own SCHEMA constant and never from input.
+      const rows = await this.db.all<{ name?: string }>(
+        `PRAGMA table_info(${table})`);
+      return (rows ?? []).map((r) => String(r?.name ?? '')).filter(Boolean);
+    } catch {
+      return [];
+    }
   }
 
   // ------------------------------------------------------------- metadata
@@ -933,6 +986,11 @@ export class LocalStore {
    * that name. Colour identity comes from the oracle index, keyed by
    * name because identity belongs to the card rather than to the
    * printing.
+   *
+   * `via` says WHICH of those three answered, and callers need it. A
+   * name-only answer is a guess between printings that all have that
+   * name -- fine for a price and a colour, wrong for a picture, and
+   * it must not outrank the copy sitting in someone's box.
    */
   async factsForEntries(entries: Array<{
     name: string; printing_id: string; set_code: string;
@@ -940,6 +998,7 @@ export class LocalStore {
   }>): Promise<Array<{
     printing_id: string; set_code: string; collector_number: string;
     price_usd: number | null; color_identity: string[]; type_line: string;
+    via: 'printing' | 'key' | 'name';
   } | undefined>> {
     type Row = {
       printing_id: string; set_code: string; collector_number: string;
@@ -948,23 +1007,50 @@ export class LocalStore {
     const out: Array<{
       printing_id: string; set_code: string; collector_number: string;
       price_usd: number | null; color_identity: string[]; type_line: string;
+      via: 'printing' | 'key' | 'name';
     } | undefined> = [];
     for (const entry of entries) {
       let row: Row | undefined;
+      let via: 'printing' | 'key' | 'name' = 'name';
       if (entry.printing_id) {
         row = await this.db.get<Row>(
           'SELECT * FROM catalogue WHERE printing_id = ?',
           [entry.printing_id]);
+        if (row) via = 'printing';
       }
       if (!row && entry.set_code && entry.collector_number) {
         row = await this.db.get<Row>(
           'SELECT * FROM catalogue WHERE set_code = ? AND '
           + 'collector_number = ?',
           [entry.set_code.toLowerCase(), entry.collector_number]);
+        if (row) via = 'key';
       }
       if (!row) {
+        /*
+          Any printing of that name -- but not just any.
+
+          `SELECT * ... WHERE name = ?` returns whichever row SQLite
+          reaches first, which is insertion order from a 78 MB bulk
+          file: arbitrary, and stable enough to look deliberate. Every
+          land in a deck came back as some printing nobody chose.
+
+          So: a printing this phone OWNS first, because that is the
+          card going on the table, and the most recently released one
+          after that. Ties broken by id so two runs agree.
+        */
         row = await this.db.get<Row>(
-          'SELECT * FROM catalogue WHERE name = ?', [entry.name]);
+          `SELECT c.* FROM catalogue c
+             LEFT JOIN card_sets s ON s.code = c.set_code
+            WHERE c.name = ?
+            ORDER BY
+              (SELECT COUNT(*) FROM stacks k
+                WHERE k.printing_id = c.printing_id
+                  AND k.quantity > 0) DESC,
+              COALESCE(s.released_at, 0) DESC,
+              c.printing_id ASC
+            LIMIT 1`,
+          [entry.name]);
+        via = 'name';
       }
       if (!row) {
         out.push(undefined);
@@ -983,6 +1069,7 @@ export class LocalStore {
         color_identity: [...String(card?.color_identity ?? '').toUpperCase()]
           .filter((c) => 'WUBRG'.includes(c)),
         type_line: String(card?.type_line ?? ''),
+        via,
       });
     }
     return out;
