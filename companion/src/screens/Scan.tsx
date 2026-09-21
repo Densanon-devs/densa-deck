@@ -59,6 +59,7 @@ import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
+import { asScanResult } from '../lib/scan-miss.ts';
 import { describeLocalMiss } from '../lib/scan-miss.ts';
 import { whileBusy } from '../lib/busy.ts';
 import { BuzzGuard } from '../lib/buzz-policy.ts';
@@ -200,6 +201,18 @@ export function ScanScreen({ state }: Props) {
   // The interval's closure would otherwise read whatever `busy` was when the
   // effect ran, and fire a second capture on top of the one in flight.
   const busyRef = useRef(false);
+  /**
+   * Whether a choice is waiting on screen.
+   *
+   * Auto scan has to stop for it. Carrying on would photograph the next
+   * frame over the top of the question, replace the list mid-tap, and
+   * file whatever the following card happened to be -- and the pile is
+   * still sitting under the camera while someone reads seven printings.
+   *
+   * A ref because the loop's closure is installed once and would
+   * otherwise read whatever this was when auto scan was switched on.
+   */
+  const pickingRef = useRef(false);
   // Measured rather than assumed: a tap only means a zoom level if the width
   // it landed on is the real one.
   const [trackWidth, setTrackWidth] = useState(0);
@@ -454,12 +467,19 @@ export function ScanScreen({ state }: Props) {
         // produced a message that blamed the index for a key it had
         // never looked up.
         let missReason = '';
+        // The printings it found but could not choose between. Thrown
+        // away until now, which is why a status saying "needs a tap"
+        // had nothing to tap.
+        let missOffer: ScanResult | null = null;
         try {
           const local = await state.identifyOffline(
             uri,
             ({ text, result }) => {
               readText = text;
               missReason = result?.reason ?? '';
+              missOffer = result && result.candidates.length
+                ? asScanResult(result)
+                : null;
             },
             { preferPromo: promo });
           if (local) {
@@ -582,6 +602,10 @@ export function ScanScreen({ state }: Props) {
             // Pass or fail, a card being THERE is worth feeling: it means
             // stop moving your hand. An empty frame is not.
             buzz(readText ? { kind: 'unreadable' } : { kind: 'nothing' });
+            // A list to tap beats a sentence about a list. The picker
+            // is the same one the desktop's ambiguous reads have always
+            // used; only the phone had no way to reach it.
+            if (missOffer) setResult(missOffer);
             setStatus(describeLocalMiss(readText, missReason));
             return;
           }
@@ -671,6 +695,11 @@ export function ScanScreen({ state }: Props) {
     await handlePhoto({ uri: shot.uri, base64: shot.base64 });
   }, [handlePhoto]);
 
+  // Both pickers, mirrored into a ref the interval can read.
+  useEffect(() => {
+    pickingRef.current = !!result?.candidates?.length || !!choosing?.length;
+  }, [result, choosing]);
+
   // The auto loop. Every decision it makes lives in AutoScanner, which is
   // tested in Node; this only carries them out.
   useEffect(() => {
@@ -679,7 +708,9 @@ export function ScanScreen({ state }: Props) {
     const timer = setInterval(() => {
       const decision = scanner.current.next({
         running: true,
-        busy: busyRef.current,
+        // A question on screen counts as busy: the loop must not
+        // answer it by taking another picture.
+        busy: busyRef.current || pickingRef.current,
         connection,
         now: Date.now(),
         // With the index in hand the phone identifies cards itself, so

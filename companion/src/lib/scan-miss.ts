@@ -9,6 +9,8 @@
  */
 
 import { footerKeys } from './identify.ts';
+import type { LocalIdentifyResult } from './identify.ts';
+import type { ScanResult } from './scanner.ts';
 
 /**
  * Why a scan on a phone with no PC came to nothing.
@@ -53,4 +55,38 @@ export function describeLocalMiss(text: string, reason = ''): string {
   return `Read ${setCode.toUpperCase()} #${number}, which is not in this `
     + "phone's index. If it is a date-stamped prerelease, turn that on "
     + 'above.';
+}
+
+/**
+ * The phone's answer, in the shape the picker already speaks.
+ *
+ * The screen has shown a list of printings for the desktop's ambiguous
+ * reads since the beginning. The phone reached the same kind of answer
+ * — "it is one of these seven" — and had no way to say it, because
+ * `identifyOffline` returns null whenever it cannot auto-file and the
+ * candidates went in the bin on the way out.
+ *
+ * Two fields are invented because the phone index does not carry them.
+ * `finishes` matters: `defaultFinish` falls back to nonfoil on an empty
+ * list, which would file a foil as an ordinary copy and quietly
+ * misprice it, so the foil hint from the footer star is turned into a
+ * real option here. `set_name` is cosmetic and the picker shows the set
+ * CODE, which the index does have.
+ */
+export function asScanResult(local: LocalIdentifyResult): ScanResult {
+  const foil = local.identity.foilHint;
+  return {
+    confidence: local.autoAddable ? 'exact' : 'ambiguous',
+    auto_addable: local.autoAddable,
+    suggested_finish: foil ? 'foil' : 'nonfoil',
+    foil_detected: foil,
+    candidates: local.candidates.map((row) => ({
+      printing_id: row.printing_id,
+      name: row.name,
+      set_code: row.set_code,
+      set_name: '',
+      collector_number: row.collector_number,
+      finishes: foil ? ['nonfoil', 'foil'] : ['nonfoil'],
+    })),
+  };
 }
