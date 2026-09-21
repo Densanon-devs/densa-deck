@@ -55,12 +55,25 @@ export function describeSource(source: IndexSource): string {
 export function describeStage(
   stage: string,
   source: IndexSource | null,
+  /*
+    Which half of the work on this file.
+
+    A bulk file is fetched whole and then read back, and the bar
+    fills once for each. Unnamed, the second pass looks like the
+    first one starting over -- and since the fetch itself used to
+    report nothing at all, what people saw was a bar that sat
+    still for two minutes and then raced. Naming the phase is
+    most of the fix.
+  */
+  phase?: 'downloading' | 'reading',
 ): string {
   if (source === null) return 'Working out where to get it\u2026';
   const from = source === 'desktop' ? 'from your PC' : 'from Scryfall';
-  return stage === 'printings'
-    ? `Step 1 of 2 \u00b7 every printing ${from}`
-    : `Step 2 of 2 \u00b7 card text ${from}`;
+  const what = stage === 'printings' ? 'every printing' : 'card text';
+  const step = stage === 'printings' ? 'Step 1 of 2' : 'Step 2 of 2';
+  if (phase === 'reading') return `${step} \u00b7 reading in ${what}`;
+  return `${step} \u00b7 `
+    + `${phase === 'downloading' ? 'downloading ' : ''}${what} ${from}`;
 }
 
 /**

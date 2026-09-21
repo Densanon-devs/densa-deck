@@ -428,6 +428,28 @@ export function promoKey(
  */
 export const NAME_SHORTLIST = 40;
 
+/**
+ * And how many a CREDIT-narrowed list may be, which is not the same.
+ *
+ * A Revised Swamp came back refused with the artist read correctly.
+ * `Illus, Dan Firazier` matched Dan Frazier through the one-edit
+ * tolerance, the index cut 744 Swamps down to his 42, and forty was
+ * the cap -- so the answer was found and then thrown away, two rows
+ * over a line drawn for a different list.
+ *
+ * Different because the lists are different. Forty is the point where
+ * a name lookup stops being able to help at all; this one has already
+ * helped, cutting 744 to 42, and what it hands over is a wall of card
+ * PICTURES with a set box above it rather than a column of set codes.
+ * Choosing your Swamp out of 42 pictures is a normal thing to do.
+ * Being told "too many" about it is not.
+ *
+ * Capped rather than unbounded, because an artist with three hundred
+ * printings of one card is a scroll, not a shortlist, and at that
+ * point the honest answer is still to type the set.
+ */
+export const CREDIT_SHORTLIST = 120;
+
 export interface IdentifyOptions {
   /**
    * Look for the prerelease printing before the ordinary one.
@@ -611,7 +633,12 @@ export async function identifyLocally(
       */
       const { rows, why } = await narrowByCredit(
         text, identity.name, catalogue);
-      if (rows.length && rows.length <= NAME_SHORTLIST) {
+      // Narrowed at all, and short enough to look through. Measured
+      // against the wrong constant first: 42 Dan Frazier Swamps out
+      // of 744 is an answer, and the forty here was a cap written
+      // for a list of set codes rather than one of card pictures.
+      if (rows.length && rows.length < printings.length
+          && rows.length <= CREDIT_SHORTLIST) {
         return {
           identity, candidates: rows, autoAddable: false,
           reason: `Read '${identity.name}' and its artist, which leaves `

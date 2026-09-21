@@ -22,6 +22,9 @@ import { checkArtReachable } from '../lib/images.ts';
 import type { ArtReach } from '../lib/images.ts';
 import { describeConnection } from '../lib/status.ts';
 import { lastCheckedInWords } from '../lib/index-freshness.ts';
+import { fractionDone, progressLine }
+  from '../lib/index-progress.ts';
+import { describeStage } from '../lib/index-source.ts';
 import { pricedInWords } from '../lib/price-refresh.ts';
 import { reporting } from './report.ts';
 
@@ -193,6 +196,18 @@ export function ConnectionScreen({
     }
   }, [state]);
 
+  /*
+    The live fetch, from the app rather than from this screen.
+
+    `refreshing` is a local flag and it dies when the screen does, so
+    navigating away and back showed "Get the new cards" over a
+    download that was still running -- reported as "going out and back
+    resets". It never reset; it stopped saying anything.
+  */
+  const fetching = snapshot?.indexFetch ?? null;
+  const downloading = refreshing || !!fetching;
+  const share = fractionDone(fetching);
+
   const refreshCards = useCallback(async () => {
     setRefreshing(true);
     setProblem('');
@@ -335,11 +350,11 @@ export function ConnectionScreen({
         {behind ? (
           <Pressable
             style={styles.pcButton}
-            disabled={refreshing}
+            disabled={downloading}
             onPress={() => void refreshCards()}
           >
             <Text style={styles.pcButtonText}>
-              {refreshing ? 'Downloading\u2026' : 'Get the new cards'}
+              {downloading ? 'Downloading\u2026' : 'Get the new cards'}
             </Text>
           </Pressable>
         ) : (
@@ -353,7 +368,34 @@ export function ConnectionScreen({
             </Text>
           </Pressable>
         )}
-        {behind ? (
+        {/*
+          What it is doing, while it is doing it.
+
+          The fetch has emitted progress the whole time; this screen
+          never rendered it, so the one place you start a 78 MB
+          download was the one place that said nothing about it.
+        */}
+        {fetching ? (
+          <View style={styles.progressBox}>
+            <Text style={styles.progressLine}>{progressLine(fetching)}</Text>
+            <View style={styles.track}>
+              <View
+                style={[styles.fill,
+                        { width: `${Math.round((share ?? 0) * 100)}%` }]}
+              />
+            </View>
+            <Text style={styles.muted}>
+              {describeStage(fetching.stage, fetching.source,
+                             fetching.phase)}
+            </Text>
+            <Text style={styles.muted}>
+              Keep the app open. The printings come first, so scanning
+              works even if this is interrupted.
+            </Text>
+          </View>
+        ) : null}
+
+        {behind && !fetching ? (
           <Text style={styles.muted}>
             A large download, so use wifi. Checking is tiny; downloading is
             not, which is why it asks.
@@ -381,9 +423,10 @@ export function ConnectionScreen({
           </Text>
         </Pressable>
         <Text style={styles.muted}>
-          Looks when a new set is released \u2014 the dates come from Scryfall,
-          so it follows the real schedule \u2014 and at least once a quarter
-          otherwise. It never downloads anything without asking.
+          Looks when a new set is released — the dates come from
+          Scryfall, so it follows the real schedule — and at least
+          once a quarter otherwise. It never downloads anything without
+          asking.
         </Text>
       </View>
 
@@ -592,9 +635,22 @@ export function ConnectionScreen({
         </View>
       ) : null}
 
+      {/*
+        The closing reassurance, which has to be true of the phone
+        reading it.
+
+        A standalone phone was told its edits "go across when the PC
+        comes back", about a PC it has never had and has explicitly
+        said it does not want. The sentence was written for the
+        paired case and shown to everyone.
+      */}
       <Text style={styles.footnote}>
-        Your collection is on this phone either way. Nothing here is lost while
-        the PC is out of reach — edits wait and go across when it comes back.
+        {standalone
+          ? 'Your collection lives on this phone. Nothing here leaves it, '
+            + 'and nothing here needs a PC.'
+          : 'Your collection is on this phone either way. Nothing here is '
+            + 'lost while the PC is out of reach — edits wait and go '
+            + 'across when it comes back.'}
       </Text>
     </ScrollView>
   );
@@ -725,5 +781,14 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: '#e4e6eb', fontSize: 16 },
   problem: { color: '#e53e3e', fontSize: 13, lineHeight: 19 },
+  progressBox: { gap: 6, marginTop: 4 },
+  progressLine: { color: '#e4e6eb', fontSize: 14, fontWeight: '600' },
+  track: {
+    backgroundColor: '#1d2433',
+    borderRadius: 4,
+    height: 8,
+    overflow: 'hidden',
+  },
+  fill: { backgroundColor: '#2f6f9f', height: 8 },
   footnote: { color: '#8a8f9c', fontSize: 12, lineHeight: 18 },
 });

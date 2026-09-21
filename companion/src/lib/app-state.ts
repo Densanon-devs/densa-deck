@@ -19,6 +19,18 @@ import { footerKeys, identifyLocally } from './identify.ts';
 import type { CataloguePrintingRow, IdentifyOptions, LocalIdentifyResult }
   from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
+import type { DownloadWatcher } from './bulk-download.ts';
+
+/**
+ * Where a bulk file's bytes come from.
+ *
+ * A seam, so the whole index walk can be driven under Node. The
+ * watcher is optional: a fake that yields a few bytes has no
+ * download to report on.
+ */
+type BulkChunks = (
+  url: string, watch?: DownloadWatcher,
+) => AsyncIterable<Uint8Array>;
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
 import { priceBatches, pricesDue } from './price-refresh.ts';
@@ -110,6 +122,17 @@ export interface IndexFetch {
   source: IndexSource | null;
   /** Which half: printings or cards. */
   stage: string;
+  /**
+   * Which half of the work on THAT half.
+   *
+   * A bulk file is fetched whole and then read back, and the two take
+   * very different times: 78 MB over wifi, then an inflate-and-insert
+   * that is CPU-bound. Reported as one bar they looked like a bar that
+   * filled, emptied and filled again -- and before the download
+   * reported anything at all, like a bar that did not move for two
+   * minutes and then raced.
+   */
+  phase?: 'downloading' | 'reading';
   done: number;
   total: number;
 }
@@ -417,7 +440,7 @@ ${more}`;
    * race each other's cursor.
    */
   async startIndexFetch(
-    chunks?: (url: string) => AsyncIterable<Uint8Array>,
+    chunks?: BulkChunks,
     // Which source the user picked, when they were given the choice. Only
     // honoured for 'desktop' if the desktop actually answers; a preference
     // is not a reason to wait on a machine that is switched off.
@@ -454,11 +477,13 @@ ${more}`;
 
   async fetchIndex(
     onProgress?: (p: { source: IndexSource; done: number; total: number;
-                       stage: string }) => void,
+                       stage: string;
+                       phase?: 'downloading' | 'reading' }) => void,
     // The bytes of a bulk file, as a seam. The real one reaches a native
     // filesystem that cannot exist under Node, and the cursor handling
-    // around it is worth testing.
-    chunks: (url: string) => AsyncIterable<Uint8Array> = downloadedChunks,
+    // around it is worth testing. The second argument is optional so a
+    // fake that ignores progress keeps working.
+    chunks: BulkChunks = downloadedChunks,
     prefer?: IndexSource,
     // A deliberate refresh, which is the one case where a file that is
     // already complete SHOULD be fetched again. Without this the skip
@@ -523,7 +548,8 @@ ${more}`;
         sources.default_cards, toPrintingRow,
         (rows) => this.store.putCatalogue(rows as CatalogueRow[]),
         CATALOGUE_CURSOR_KEY, chunks,
-        (d, total) => onProgress?.({ source, done: d, total, stage: 'printings' }),
+        (d, total, phase) =>
+          onProgress?.({ source, done: d, total, stage: 'printings', phase }),
       );
     const skipOracle = await done(ORACLE_CURSOR_KEY, this.store.oracleSize());
     const oracle = skipOracle
@@ -532,7 +558,8 @@ ${more}`;
         sources.oracle_cards, toOracleRow,
         (rows) => this.store.putOracle(rows as OracleRow[]),
         ORACLE_CURSOR_KEY, chunks,
-        (d, total) => onProgress?.({ source, done: d, total, stage: 'cards' }),
+        (d, total, phase) =>
+          onProgress?.({ source, done: d, total, stage: 'cards', phase }),
       );
     return { printings, oracle, source };
   }
@@ -543,8 +570,9 @@ ${more}`;
     pick: (card: Record<string, unknown>) => T | null,
     write: (rows: T[]) => Promise<void>,
     cursorKey: string,
-    chunks: (url: string) => AsyncIterable<Uint8Array>,
-    onProgress: (done: number, total: number) => void,
+    chunks: BulkChunks,
+    onProgress: (done: number, total: number,
+                 phase: 'downloading' | 'reading') => void,
   ): Promise<number> {
     // Marked as in progress BEFORE a single row is written.
     //
@@ -556,8 +584,16 @@ ${more}`;
     // have been noticed much later and much worse.
     await this.store.setMeta(cursorKey, BULK_IN_PROGRESS);
     const rows = await readBulk(
-      chunks(source.url), pick, write,
-      (p) => onProgress(p.bytes, source.bytes || p.bytes),
+      // The download's own progress, which is the slow half and used
+      // to report nothing at all. Its total comes from the callback
+      // rather than from `source.bytes`, because the server is the
+      // one that knows what it is actually sending.
+      chunks(source.url,
+             (bytes, total) =>
+               onProgress(bytes, total || source.bytes || bytes,
+                          'downloading')),
+      pick, write,
+      (p) => onProgress(p.bytes, source.bytes || p.bytes, 'reading'),
     );
     // Cleared only on the way out. A bulk file is all-or-nothing — there
     // is no page to resume from — so an interrupted one leaves the marker
