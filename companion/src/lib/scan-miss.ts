@@ -34,6 +34,13 @@ export function describeLocalMiss(text: string, reason = ''): string {
     return 'Nothing legible in that picture. Try more light, or lock the '
       + 'focus once it looks sharp.';
   }
+  // The matcher's own account first, whenever it has one. It knows
+  // what it looked up and what came back; this function only knows what
+  // the text looks like. Checking the keys first meant a card the name
+  // fallback had something to say about -- "828 printings" -- was told
+  // instead that its footer was unreadable, which was true and not the
+  // point.
+  if (reason) return reason;
   const keys = footerKeys(read);
   if (!keys.length) {
     // The TAIL, not the head. The footer is the last thing on a card,
@@ -46,11 +53,6 @@ export function describeLocalMiss(text: string, reason = ''): string {
       + 'The small line along the bottom edge is the part that matters — '
       + 'zoom in on it, or tilt the card away from the glare.';
   }
-  // The matcher's own account, when it has one. It knows which key it
-  // actually looked up and what came back; this function only knows
-  // what the first key WOULD have been, which is not the same thing and
-  // was confidently wrong about it.
-  if (reason) return reason;
   const [setCode, number] = keys[0] ?? ['', ''];
   return `Read ${setCode.toUpperCase()} #${number}, which is not in this `
     + "phone's index. If it is a date-stamped prerelease, turn that on "

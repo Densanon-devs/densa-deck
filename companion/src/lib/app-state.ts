@@ -15,11 +15,12 @@ import type { CameraSettings } from './camera-settings.ts';
 import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
-import { identifyLocally } from './identify.ts';
+import { footerKeys, identifyLocally } from './identify.ts';
 import type { IdentifyOptions, LocalIdentifyResult } from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
+import { closerLookAtFooter, needsCloserLook } from './footer-crop.ts';
 import type { CheckReason, Release } from './index-freshness.ts';
 import type { IndexSource } from './index-source.ts';
 import { searchLocally } from './local-search.ts';
@@ -254,17 +255,47 @@ export class AppState {
       );
     }
 
-    const text = await this.textReader.read(imageUri);
+    const readText = await this.textReader.read(imageUri);
     // Nothing legible at all is its own answer, and the only one that
     // can be given before a match is attempted: "no card in the frame"
     // and "a card I could not place" both come back null from here, and
     // they are opposite news. The first means keep looking; the second
     // means stop moving your hand.
-    if (!text) {
+    if (!readText) {
       onRead?.({ text: '', result: null });
       return null;
     }
-    const out = await identifyLocally(text, this.store, options);
+    let text = readText;
+    let out = await identifyLocally(text, this.store, options);
+
+    /*
+      A second, closer look at the bottom of the card.
+
+      A whole card photographed at arm's length gives the recogniser a
+      name in 40pt and a collector line in about 6. Five real scans in a
+      row came back with the name, the artist and the copyright line —
+      all of which sit beside the set code — and without the set code
+      itself. The app could see there was a card and could not say which.
+
+      The desktop has never had this problem because it crops to the
+      footer and enlarges it first. Only when the first read produced no
+      key, so a card that already identified pays nothing and neither
+      does an empty frame during auto scan, which is most frames.
+    */
+    if (needsCloserLook(text, footerKeys(text))) {
+      const closer = await closerLookAtFooter(imageUri);
+      if (closer) {
+        const more = await this.textReader.read(closer);
+        if (more) {
+          // Appended, not substituted: the name lives up at the top of
+          // the card and corroboration still needs it.
+          text = `${text}
+${more}`;
+          out = await identifyLocally(text, this.store, options);
+        }
+      }
+    }
+
     onRead?.({ text, result: out });
     const hit = out.candidates[0];
     // Only what it is CERTAIN of. Anything less is a photo for the PC, which
