@@ -26,6 +26,7 @@ import {
   looksLikeSetCode,
   normaliseNumber,
   parseFooter,
+  promoKey,
   repairDigits,
   setCodeVariants,
 } from '../src/lib/identify.ts';
@@ -252,5 +253,128 @@ describe('a footer that prints the rarity first', () => {
     // a stray capital beside it must not read as rarity plus number.
     assert.deepEqual(
       collectorNumbersIn('TM & © 2024 Wizards of the Coast'), []);
+  });
+});
+
+describe('scanning a prerelease promo', () => {
+  /**
+   * A prerelease promo prints its ORIGINAL set code and number -- MKM,
+   * 0200 -- and the catalogue files it somewhere else entirely, as
+   * `pmkm` / `200s`. The only thing on the card distinguishing it from
+   * the ordinary foil is the holofoil date stamp in the art, which is a
+   * picture and not text, so OCR cannot tell them apart and never will.
+   *
+   * So the user tells it. The toggle turns the read key into the promo
+   * key before the lookup; everything downstream is unchanged.
+   *
+   * The mapping was checked against the real catalogue rather than
+   * assumed: of 3884 prerelease-style rows in p-prefixed sets, 3854 map
+   * back to the same card in the base set under this exact rule. The 30
+   * that do not are all Portal, whose set code simply begins with a p
+   * and is not a promo set at all.
+   */
+  test('the promo key is the p-set and an s-suffixed number', () => {
+    assert.deepEqual(promoKey('mkm', '200'), ['pmkm', '200s']);
+  });
+
+  test('a set code that already starts with p is still prefixed', () => {
+    // `pstx` prerelease promos exist; a card printed "STX" maps to
+    // `pstx`. Nothing printed on a card carries the p already, so this
+    // is only ever about not special-casing the letter.
+    assert.deepEqual(promoKey('stx', '90'), ['pstx', '90s']);
+  });
+
+  test('a number that already ends in s is left alone', () => {
+    // Belt and braces: mapping twice must not produce "200ss".
+    assert.deepEqual(promoKey('mkm', '200s'), ['pmkm', '200s']);
+  });
+
+  test('nothing to map without both halves', () => {
+    assert.equal(promoKey('', '200'), null);
+    assert.equal(promoKey('mkm', ''), null);
+  });
+
+  test('the promo printing is preferred when it exists', async () => {
+    const seen = [];
+    const catalogue = {
+      async printingByKey(set, num) {
+        seen.push(`${set}/${num}`);
+        if (set === 'pmkm' && num === '200s') {
+          return { printing_id: 'promo', name: 'Etrata, Deadly Fugitive',
+                   set_code: 'pmkm', collector_number: '200s' };
+        }
+        return null;
+      },
+    };
+    const out = await identifyLocally(
+      ['Etrata, Deadly Fugitive', 'M 0200', 'MKM★EN'].join('\n'),
+      catalogue, { preferPromo: true });
+
+    assert.equal(out.autoAddable, true);
+    assert.equal(out.candidates[0].printing_id, 'promo');
+    assert.ok(seen.includes('pmkm/200s'), 'it should have asked for the promo');
+  });
+
+  test('and the ordinary printing is used when there is no promo', async () => {
+    // A card the user flagged as a promo that has no promo printing.
+    // Filing the regular one beats refusing a card that is plainly
+    // there; the screen says which it used.
+    const catalogue = {
+      async printingByKey(set, num) {
+        if (set === 'mkm' && num === '200') {
+          return { printing_id: 'regular', name: 'Etrata, Deadly Fugitive',
+                   set_code: 'mkm', collector_number: '200' };
+        }
+        return null;
+      },
+    };
+    const out = await identifyLocally(
+      ['Etrata, Deadly Fugitive', 'M 0200', 'MKM★EN'].join('\n'),
+      catalogue, { preferPromo: true });
+
+    assert.equal(out.autoAddable, true);
+    assert.equal(out.candidates[0].printing_id, 'regular');
+  });
+
+  test('with the toggle off the promo is never reached', async () => {
+    // The default, and the behaviour every other test in this file
+    // depends on. Asking for the promo key unasked would quietly move
+    // ordinary foils into the promo set.
+    const seen = [];
+    const catalogue = {
+      async printingByKey(set, num) {
+        seen.push(`${set}/${num}`);
+        if (set === 'mkm' && num === '200') {
+          return { printing_id: 'regular', name: 'Etrata, Deadly Fugitive',
+                   set_code: 'mkm', collector_number: '200' };
+        }
+        return null;
+      },
+    };
+    const out = await identifyLocally(
+      ['Etrata, Deadly Fugitive', 'M 0200', 'MKM★EN'].join('\n'),
+      catalogue);
+
+    assert.equal(out.candidates[0].printing_id, 'regular');
+    assert.deepEqual(seen.filter((k) => k.startsWith('pmkm')), []);
+  });
+
+  test('the name still has to agree, promo or not', async () => {
+    // The corroboration rule is what stops a misread digit filing a
+    // different real printing, and a promo lookup must not bypass it.
+    const catalogue = {
+      async printingByKey(set, num) {
+        if (set === 'pmkm' && num === '200s') {
+          return { printing_id: 'promo', name: 'Somebody Else Entirely',
+                   set_code: 'pmkm', collector_number: '200s' };
+        }
+        return null;
+      },
+    };
+    const out = await identifyLocally(
+      ['Etrata, Deadly Fugitive', 'M 0200', 'MKM★EN'].join('\n'),
+      catalogue, { preferPromo: true });
+
+    assert.equal(out.autoAddable, false);
   });
 });

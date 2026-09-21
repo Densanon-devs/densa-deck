@@ -16,6 +16,7 @@ import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
+import type { IdentifyOptions } from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
@@ -207,7 +208,14 @@ export class AppState {
    * Returns null when it cannot place the card, which is the signal to keep
    * the photo for the PC rather than to guess.
    */
-  async identifyOffline(imageUri: string, onText?: (text: string) => void): Promise<{
+  async identifyOffline(
+    imageUri: string,
+    onText?: (text: string) => void,
+    // The user's answer to a question no photograph can settle: whether
+    // this is the prerelease printing. The stamp that distinguishes it
+    // is in the art, not in the text.
+    options: IdentifyOptions = {},
+  ): Promise<{
     printing: { printing_id: string; name: string; set_code: string;
                 collector_number: string };
     foilHint: boolean;
@@ -247,7 +255,7 @@ export class AppState {
     // moving your hand, and is worth a buzz.
     onText?.(text);
     if (!text) return null;
-    const out = await identifyLocally(text, this.store);
+    const out = await identifyLocally(text, this.store, options);
     const hit = out.candidates[0];
     // Only what it is CERTAIN of. Anything less is a photo for the PC, which
     // has the fuzzy matcher and a person in front of it.

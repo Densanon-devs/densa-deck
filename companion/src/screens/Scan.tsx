@@ -82,6 +82,22 @@ export function ScanScreen({ state }: Props) {
   >(null);
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
+  /**
+   * Whether the cards being scanned are prerelease promos.
+   *
+   * A prerelease promo prints its original set code and number, and the
+   * catalogue files it somewhere else -- MKM 0200 on the card, pmkm
+   * 200s in the index. The only thing separating it from the ordinary
+   * foil is the holofoil date stamp in the art, which is a picture, not
+   * text, so no amount of OCR will ever settle it. The person holding
+   * the card can see it in a moment.
+   *
+   * Deliberately NOT remembered between sessions, unlike the target
+   * collection. A sticky promo flag would silently file an ordinary box
+   * into the promo set weeks later, and the cost of being wrong that
+   * way is much higher than one tap at the start of a stack.
+   */
+  const [promo, setPromo] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<CameraSettings>(
     DEFAULT_CAMERA_SETTINGS,
@@ -425,7 +441,8 @@ export function ScanScreen({ state }: Props) {
         let sawText = false;
         try {
           const local = await state.identifyOffline(
-            uri, (text) => { sawText = text.length > 0; });
+            uri, (text) => { sawText = text.length > 0; },
+            { preferPromo: promo });
           if (local) {
             // Proof the machinery works. Without this, a paired phone
             // placing cards locally never cleared failures, so three
@@ -583,7 +600,7 @@ export function ScanScreen({ state }: Props) {
     // it has resolved — so every failure reported "no card index on this
     // phone" on a phone holding all 105,000 cards. A stale closure that
     // says the opposite of the truth.
-    [state, file, target, alsoTag, index],
+    [state, file, target, alsoTag, index, promo],
   );
 
   /**
@@ -811,6 +828,35 @@ export function ScanScreen({ state }: Props) {
             {auto ? 'Auto on' : 'Auto scan'}
           </Text>
         </Pressable>
+      </View>
+
+      {/*
+        Next to the scan target rather than buried in settings, because
+        it has to be visible while a stack is going through: it changes
+        which printing every card lands on, and a forgotten toggle is a
+        box filed wrong.
+      */}
+      <View style={styles.header}>
+        <Pressable
+          style={[styles.chip, promo && styles.chipOn]}
+          onPress={() => {
+            setPromo((on) => {
+              setStatus(on
+                ? 'Back to ordinary printings.'
+                : 'Prerelease promos — the date-stamped ones.');
+              return !on;
+            });
+          }}
+        >
+          <Text style={[styles.chipText, promo && styles.chipTextOn]}>
+            {promo ? 'Prerelease promo' : 'Ordinary printing'}
+          </Text>
+        </Pressable>
+        <Text style={styles.promoHint}>
+          {promo
+            ? 'Filing as the stamped printing.'
+            : 'Turn on for date-stamped cards.'}
+        </Text>
       </View>
 
       <CollectionBar
@@ -1235,6 +1281,8 @@ const styles = StyleSheet.create({
   },
   chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
   chipText: { color: '#8a8f9c', fontSize: 13, fontWeight: '600' },
+  promoHint: { color: '#6b7079', flexShrink: 1, fontSize: 12,
+    textAlign: 'right' },
   chipTextOn: { color: '#fff' },
   cameraBox: {
     height: 360,

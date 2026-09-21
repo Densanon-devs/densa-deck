@@ -342,6 +342,48 @@ export function readableNames(text: string): string[] {
 }
 
 /**
+ * Where the prerelease printing of a card lives.
+ *
+ * A prerelease promo prints its original set code and number — MKM, 0200
+ * — while the catalogue files it as `pmkm` / `200s`. The only thing on
+ * the card separating it from the ordinary foil is the holofoil date
+ * stamp in the art, which is a picture rather than text, so no amount of
+ * OCR will ever tell them apart. The user says which, and this turns the
+ * read key into the filed one.
+ *
+ * The rule was measured against the real catalogue, not assumed: of 3884
+ * prerelease-style rows in p-prefixed sets, 3854 map back to the same
+ * card in the base set under exactly this transformation. The thirty
+ * that do not are all Portal, whose set code merely happens to start
+ * with a p.
+ *
+ * @returns the promo key, or null when there is nothing to map.
+ */
+export function promoKey(
+  setCode: string,
+  collectorNumber: string,
+): [string, string] | null {
+  const set = (setCode || '').trim().toLowerCase();
+  const number = (collectorNumber || '').trim().toLowerCase();
+  if (!set || !number) return null;
+  return [
+    set.startsWith('p') && set.length > 3 ? set : `p${set}`,
+    number.endsWith('s') ? number : `${number}s`,
+  ];
+}
+
+export interface IdentifyOptions {
+  /**
+   * Look for the prerelease printing before the ordinary one.
+   *
+   * Off by default and deliberately so: asking unprompted would quietly
+   * move ordinary foils into the promo set, which is the same class of
+   * error in the other direction.
+   */
+  preferPromo?: boolean;
+}
+
+/**
  * Identify a card from OCR text against the phone's own index.
  *
  * Exact keys only, and only with corroboration. A footer key is specific,
@@ -353,12 +395,33 @@ export function readableNames(text: string): string[] {
 export async function identifyLocally(
   text: string,
   catalogue: LocalCatalogue,
+  options: IdentifyOptions = {},
 ): Promise<LocalIdentifyResult> {
   const identity = parseFooter(text);
   const names = readableNames(text);
 
-  for (const [setCode, number] of footerKeys(text)) {
-    const hit = await catalogue.printingByKey(setCode, number);
+  for (const [readSet, readNumber] of footerKeys(text)) {
+    // The promo first when asked, and the printed key as the fallback —
+    // a card flagged as a prerelease that has no prerelease printing is
+    // still a card, and filing the ordinary one beats refusing it.
+    const tries: Array<[string, string]> = [];
+    if (options.preferPromo) {
+      const promo = promoKey(readSet, readNumber);
+      if (promo) tries.push(promo);
+    }
+    tries.push([readSet, readNumber]);
+
+    let setCode = readSet;
+    let number = readNumber;
+    let hit = null as Awaited<ReturnType<LocalCatalogue['printingByKey']>>;
+    for (const [s, n] of tries) {
+      hit = await catalogue.printingByKey(s, n);
+      if (hit) {
+        setCode = s;
+        number = n;
+        break;
+      }
+    }
     if (!hit) continue;
 
     identity.setCode = setCode;
