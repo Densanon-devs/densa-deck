@@ -58,6 +58,7 @@ import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
+import { whileBusy } from '../lib/busy.ts';
 import { FrameGuide } from './FrameGuide.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
@@ -375,139 +376,143 @@ export function ScanScreen({ state }: Props) {
     // over the wire. Passing one where the other was wanted is the bug
     // that made offline scanning fail from the day it shipped.
     async ({ uri, base64 }: { uri: string; base64: string }) => {
-      busyRef.current = true;
-      setBusy(true);
-      setStatus('Reading...');
-      // Local first, PC second.
+      // Raised and lowered by `whileBusy`, NOT by this body.
       //
-      // The phone can place a card by itself now, and doing that before
-      // asking the PC means a scan never waits on a network round trip to
-      // succeed — which is the difference between a box that files at the
-      // speed of the camera and one that files at the speed of the wifi.
-      //
-      // The PC is still better: it has the fuzzy name matcher and the whole
-      // catalogue, so anything the phone cannot place EXACTLY still goes to
-      // it. This is a fast path, not a replacement.
-      try {
-        const local = await state.identifyOffline(uri);
-        if (local) {
-          const decision = guard.current.consider(
-            local.printing.name, Date.now());
-          if (!decision.file) {
-            setStatus('Same card still in frame');
+      // It used to be set here and cleared in a `finally` attached to the
+      // second of the two try blocks below, so every early return from
+      // the first one left it stuck on. A stuck busy flag looks exactly
+      // like work still in progress, so auto scan filed one card and then
+      // waited for ever, in silence.
+      await whileBusy(busyRef, async () => {
+        setStatus('Reading...');
+        // Local first, PC second.
+        //
+        // The phone can place a card by itself now, and doing that before
+        // asking the PC means a scan never waits on a network round trip to
+        // succeed — which is the difference between a box that files at the
+        // speed of the camera and one that files at the speed of the wifi.
+        //
+        // The PC is still better: it has the fuzzy name matcher and the whole
+        // catalogue, so anything the phone cannot place EXACTLY still goes to
+        // it. This is a fast path, not a replacement.
+        try {
+          const local = await state.identifyOffline(uri);
+          if (local) {
+            const decision = guard.current.consider(
+              local.printing.name, Date.now());
+            if (!decision.file) {
+              setStatus('Same card still in frame');
+              return;
+            }
+            await state.addCard({
+              printing_id: local.printing.printing_id,
+              card_name: local.printing.name,
+              finish: local.foilHint ? 'foil' : 'nonfoil',
+              collection_uid: target,
+              also_collection_uids: alsoTag,
+            });
+            setFlash({
+              name: local.printing.name, copy: decision.copy, verb: 'ADDED',
+            });
+            setTimeout(() => setFlash(null), 950);
+            setStatus('Added — next card');
             return;
           }
-          await state.addCard({
-            printing_id: local.printing.printing_id,
-            card_name: local.printing.name,
-            finish: local.foilHint ? 'foil' : 'nonfoil',
-            collection_uid: target,
-            also_collection_uids: alsoTag,
-          });
-          setFlash({
-            name: local.printing.name, copy: decision.copy, verb: 'ADDED',
-          });
-          setTimeout(() => setFlash(null), 950);
-          setStatus('Added — next card');
-          return;
-        }
-      } catch (err) {
-        // The recogniser or the index let us down. The PC is the answer to
-        // that, and it is the next thing tried.
-        //
-        // Recorded rather than swallowed. A bare `catch {}` here is what
-        // hid a broken local scanner behind a working PC for the whole
-        // life of the feature: every phone silently fell through, and
-        // nothing anywhere said why.
-        recordCrash(err, 'reading the card on this phone', false);
-      }
-
-      try {
-        const reply = await identifyPhoto(state.scanClient, base64);
-        scanner.current.succeeded();
-        const top = reply.candidates?.[0];
-
-        if (reply.auto_addable && top) {
-          const decision = guard.current.consider(top.name, Date.now());
-          if (decision.file) {
-            await file(top, defaultFinish(top, reply), decision.copy);
-            setStatus('Added — next card');
-          } else {
-            setStatus('Same card still in frame');
-          }
-          return;
+        } catch (err) {
+          // The recogniser or the index let us down. The PC is the answer to
+          // that, and it is the next thing tried.
+          //
+          // Recorded rather than swallowed. A bare `catch {}` here is what
+          // hid a broken local scanner behind a working PC for the whole
+          // life of the feature: every phone silently fell through, and
+          // nothing anywhere said why.
+          recordCrash(err, 'reading the card on this phone', false);
         }
 
-        // Anything less than certain waits for a tap. A wrong card filed
-        // silently is worse than no card, because you will not know to look
-        // for it.
-        setResult(reply);
-        // "Could not read that one" is true and useless. What the desktop
-        // actually got off the card is the whole diagnosis: no text at all
-        // means the picture was the problem, text with the wrong name means
-        // the read was, and a name it could not find means the catalogue is.
-        const read = (reply.capture?.text ?? '').replace(/\s+/g, ' ').trim();
-        setStatus(
-          reply.candidates?.length
-            ? 'Which printing is this?'
-            : reply.capture?.card_detected === false
-              ? 'No card found in the picture. Fill more of the frame, or ' +
-                'zoom in so the phone uses the other lens.'
-              : read
-                ? `Read "${read.slice(0, 70)}" but matched nothing.`
-                : 'Nothing legible in that picture. Try more light, or lock ' +
-                  'the focus once it looks sharp.',
-        );
-      } catch (err) {
-        scanner.current.failed();
-
-        // On a phone with no PC there is nobody to keep it FOR.
-        //
-        // Queueing here promised "it files itself when you are back in
-        // range" to somebody who has no range to come back to: the queue
-        // would never drain, the photo would sit for ever, and a box
-        // scanned in bad light would quietly become four hundred stored
-        // pictures. If this phone could not read the card, nothing else
-        // is going to — so say so, and let them take another go at it
-        // while the card is still in their hand.
-        // Why it failed decides what to say. Getting that wrong sends
-        // somebody off to fix their lighting when the app simply has
-        // nothing to match against — which cost a tester a whole session.
-        if (!index.scanReady) {
-          setStatus(index.rows > 0
-            ? 'The card index is only part-downloaded, so nothing can be '
-              + 'matched yet. Tap "Get it" above to finish it.'
-            : 'No card index on this phone yet — scanning has nothing to '
-              + 'match against. Tap "Get it" above once, then this works '
-              + 'anywhere.');
-          return;
-        }
-
-        if (state.soloForever) {
-          setStatus('Could not read that one. Try more light, fill more of '
-                    + 'the frame, or type the name in from the Cards tab.');
-          return;
-        }
-
-        // There IS a PC, just not right now. The card in your hand is
-        // still real, so the picture is kept for it rather than discarded.
         try {
-          // Shrunk before storing, never before sending: the live path
-          // hands the PC everything it could have had.
-          await state.queueScan(await shrinkForQueue(base64), target, alsoTag);
-          setQueued(await state.queuedScans());
-          setFlash({ name: 'Saved for later', copy: 1, verb: 'QUEUED' });
-          setTimeout(() => setFlash(null), 950);
-          setStatus('No PC — kept the picture. It files itself when you are '
-                    + 'back in range.');
-        } catch {
-          // Queueing is the fallback; if IT fails, say the real thing.
-          setStatus(recordCrash(err, 'reading the card', false).message);
+          const reply = await identifyPhoto(state.scanClient, base64);
+          scanner.current.succeeded();
+          const top = reply.candidates?.[0];
+
+          if (reply.auto_addable && top) {
+            const decision = guard.current.consider(top.name, Date.now());
+            if (decision.file) {
+              await file(top, defaultFinish(top, reply), decision.copy);
+              setStatus('Added — next card');
+            } else {
+              setStatus('Same card still in frame');
+            }
+            return;
+          }
+
+          // Anything less than certain waits for a tap. A wrong card filed
+          // silently is worse than no card, because you will not know to look
+          // for it.
+          setResult(reply);
+          // "Could not read that one" is true and useless. What the desktop
+          // actually got off the card is the whole diagnosis: no text at all
+          // means the picture was the problem, text with the wrong name means
+          // the read was, and a name it could not find means the catalogue is.
+          const read = (reply.capture?.text ?? '').replace(/\s+/g, ' ').trim();
+          setStatus(
+            reply.candidates?.length
+              ? 'Which printing is this?'
+              : reply.capture?.card_detected === false
+                ? 'No card found in the picture. Fill more of the frame, or ' +
+                  'zoom in so the phone uses the other lens.'
+                : read
+                  ? `Read "${read.slice(0, 70)}" but matched nothing.`
+                  : 'Nothing legible in that picture. Try more light, or lock ' +
+                    'the focus once it looks sharp.',
+          );
+        } catch (err) {
+          scanner.current.failed();
+
+          // On a phone with no PC there is nobody to keep it FOR.
+          //
+          // Queueing here promised "it files itself when you are back in
+          // range" to somebody who has no range to come back to: the queue
+          // would never drain, the photo would sit for ever, and a box
+          // scanned in bad light would quietly become four hundred stored
+          // pictures. If this phone could not read the card, nothing else
+          // is going to — so say so, and let them take another go at it
+          // while the card is still in their hand.
+          // Why it failed decides what to say. Getting that wrong sends
+          // somebody off to fix their lighting when the app simply has
+          // nothing to match against — which cost a tester a whole session.
+          if (!index.scanReady) {
+            setStatus(index.rows > 0
+              ? 'The card index is only part-downloaded, so nothing can be '
+                + 'matched yet. Tap "Get it" above to finish it.'
+              : 'No card index on this phone yet — scanning has nothing to '
+                + 'match against. Tap "Get it" above once, then this works '
+                + 'anywhere.');
+            return;
+          }
+
+          if (state.soloForever) {
+            setStatus('Could not read that one. Try more light, fill more of '
+                      + 'the frame, or type the name in from the Cards tab.');
+            return;
+          }
+
+          // There IS a PC, just not right now. The card in your hand is
+          // still real, so the picture is kept for it rather than discarded.
+          try {
+            // Shrunk before storing, never before sending: the live path
+            // hands the PC everything it could have had.
+            await state.queueScan(await shrinkForQueue(base64), target, alsoTag);
+            setQueued(await state.queuedScans());
+            setFlash({ name: 'Saved for later', copy: 1, verb: 'QUEUED' });
+            setTimeout(() => setFlash(null), 950);
+            setStatus('No PC — kept the picture. It files itself when you are '
+                      + 'back in range.');
+          } catch {
+            // Queueing is the fallback; if IT fails, say the real thing.
+            setStatus(recordCrash(err, 'reading the card', false).message);
+          }
         }
-      } finally {
-        busyRef.current = false;
-        setBusy(false);
-      }
+      }, setBusy);
     },
     // `index` belongs here. Without it this callback is memoised with the
     // FIRST render's value — an empty index, before the lookup that fills
