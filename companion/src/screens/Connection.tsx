@@ -77,8 +77,23 @@ function allowanceLine(tier: TierSnapshot): string {
 }
 
 export function ConnectionScreen({
-  state, onClose, standalone = false, onConnectPc, onDisconnectPc,
+  state, onClose, standalone: told = false, onConnectPc, onDisconnectPc,
 }: Props) {
+  /*
+    Whether there is a PC in this phone's life, asked rather than told.
+
+    The prop comes down through a ref in App, and a ref does not
+    re-render -- so a screen mounted at the wrong moment reads the
+    value as it was rather than as it is. The state knows, directly
+    and always: `soloForever` is the flag the standalone choice
+    actually sets. The prop stays as a hint for the case where the
+    screen is shown before the state has one.
+
+    This matters because every PC-shaped thing on this screen hangs
+    off it, and getting it wrong shows a standalone phone a wall of
+    diagnostics about a machine it does not have.
+  */
+  const standalone = told || state.soloForever;
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   /**
    * Which tier this phone is on, and what that allows.

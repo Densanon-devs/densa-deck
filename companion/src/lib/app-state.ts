@@ -32,7 +32,8 @@ type BulkChunks = (
   url: string, watch?: DownloadWatcher,
 ) => AsyncIterable<Uint8Array>;
 import { chooseSource } from './index-source.ts';
-import { dueForCheck, missingSets } from './index-freshness.ts';
+import { absentAfterRefresh, dueForCheck, missingSets }
+  from './index-freshness.ts';
 import { priceBatches, pricesDue } from './price-refresh.ts';
 import { closerLookAtFooter, needsCloserLook } from './footer-crop.ts';
 import type { CheckReason, Release } from './index-freshness.ts';
@@ -164,6 +165,17 @@ const AUTOCHECK_KEY = 'index.autoCheck';
 
 /** When the prices of the cards this phone owns were last refreshed. */
 const PRICED_AT_KEY = 'prices.updatedAt';
+
+/**
+ * Released sets a complete download proved this phone cannot hold.
+ *
+ * The index keeps English paper cards, and some released sets have
+ * none -- Foreign Black Border, Renaissance, Rinascimento and a
+ * couple of dozen more. Without this the phone finished a 78 MB
+ * download and immediately reported the same 28 sets missing, with a
+ * button offering to download them again.
+ */
+const ABSENT_SETS_KEY = 'index.absentSets';
 
 /**
  * What free keeps, for a phone with no desktop to ask.
@@ -459,7 +471,20 @@ ${more}`;
       chunks,
       prefer,
       force,
-    ).finally(() => {
+    ).then(async (out) => {
+      /*
+        A complete download settles what this phone can never hold.
+
+        Only on the forced path, which is the one that reads both
+        files whole -- a resume skips whatever was already done, and
+        "not here" after a partial read means nothing at all.
+
+        Best effort: a failed lookup costs a wrong count next time
+        and must not turn a finished download into a failure.
+      */
+      if (force) await this.rememberAbsentSets().catch(() => undefined);
+      return out;
+    }).finally(() => {
       this.indexRun = null;
       this.emit({ indexFetch: null });
     });
@@ -871,12 +896,13 @@ ${more}`;
     /** Set codes that have been released and are not on this phone. */
     missing: string[];
   }> {
-    const [releases, held] = await Promise.all([
+    const [releases, held, absent] = await Promise.all([
       setReleases(this.plainFetch),
       this.store.catalogueSets(),
+      this.absentSets(),
     ]);
     await this.store.setMeta(LAST_CHECK_KEY, String(now));
-    const missing = missingSets(held, releases, now);
+    const missing = missingSets(held, releases, now, absent);
     return { stale: missing.length > 0, missing };
   }
 
@@ -940,6 +966,37 @@ ${more}`;
     { printings: number; oracle: number; source: IndexSource }
   > {
     return this.startIndexFetch(undefined, undefined, true);
+  }
+
+  /** Set codes a finished download has already ruled out. */
+  private async absentSets(): Promise<Set<string>> {
+    try {
+      const raw = (await this.store.getMeta(ABSENT_SETS_KEY)) ?? '[]';
+      const list = JSON.parse(raw) as unknown;
+      return new Set(Array.isArray(list)
+        ? list.map((c) => String(c).toLowerCase()).filter(Boolean)
+        : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Write down what a complete download did not bring.
+   *
+   * Called straight after a forced refresh, where the file just read
+   * is everything Scryfall has that this index keeps. Replaced rather
+   * than added to, so a set that later gains an English printing
+   * stops being written off on the next refresh.
+   */
+  private async rememberAbsentSets(now = Date.now()): Promise<string[]> {
+    const [releases, held] = await Promise.all([
+      setReleases(this.plainFetch),
+      this.store.catalogueSets(),
+    ]);
+    const absent = absentAfterRefresh(held, releases, now);
+    await this.store.setMeta(ABSENT_SETS_KEY, JSON.stringify(absent));
+    return absent;
   }
 
   /**

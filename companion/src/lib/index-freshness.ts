@@ -103,10 +103,66 @@ export function missingSets(
   held: Set<string>,
   releases: Release[],
   now: number,
+  /*
+    Sets a download has already proved this phone cannot hold.
+
+    The index keeps English paper cards, and some released sets have
+    none: Foreign Black Border, Fourth Edition Foreign Black Border,
+    Chronicles FBB, Renaissance, Rinascimento -- all of them
+    non-English printings of cards that exist in English elsewhere.
+    Scryfall lists them as released, the index will never contain
+    them, and so the phone reported "28 sets not on this phone"
+    immediately after finishing a complete download and reported the
+    same 28 for ever.
+
+    Which is worse than a cosmetic wrong number: the prompt asks for
+    78 MB to fix something no download can fix.
+  */
+  absent: Set<string> = new Set(),
 ): string[] {
   const out: string[] = [];
   for (const { code, at } of releases) {
     if (at > now) continue;
+    const key = code.toLowerCase();
+    if (!key || held.has(key) || absent.has(key)) continue;
+    out.push(key);
+  }
+  return out;
+}
+
+/**
+ * How long after a set's release day to still believe it is coming.
+ *
+ * Scryfall rebuilds the bulk files daily, so a set that is out and
+ * not in today's file is a matter of hours rather than a permanent
+ * absence. Two weeks is far more than that gap and far less than the
+ * gap to the next set, so nothing real gets written off and nothing
+ * imaginary survives a fortnight.
+ */
+export const SETTLE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Which released sets a COMPLETE download did not bring.
+ *
+ * Only meaningful straight after one. The reasoning is: the file just
+ * downloaded is everything Scryfall has that this index keeps, so a
+ * set released a fortnight ago that still is not here is not late --
+ * it is a set with no English paper cards in it, and no future
+ * download will contain one either.
+ *
+ * Recomputed on every full refresh rather than accumulated, so a set
+ * that later gains an English printing stops being written off
+ * without anybody having to notice.
+ */
+export function absentAfterRefresh(
+  held: Set<string>,
+  releases: Release[],
+  now: number,
+  settleMs = SETTLE_MS,
+): string[] {
+  const out: string[] = [];
+  for (const { code, at } of releases) {
+    if (at > now - settleMs) continue;
     const key = code.toLowerCase();
     if (!key || held.has(key)) continue;
     out.push(key);
