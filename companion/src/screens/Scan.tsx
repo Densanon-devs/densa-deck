@@ -61,6 +61,7 @@ import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
 import { SvgUri } from 'react-native-svg';
 import { asScanResult } from '../lib/scan-miss.ts';
+import { NAME_SHORTLIST } from '../lib/identify.ts';
 import { describeLocalMiss } from '../lib/scan-miss.ts';
 import { whileBusy } from '../lib/busy.ts';
 import { BuzzGuard } from '../lib/buzz-policy.ts';
@@ -1285,7 +1286,17 @@ export function ScanScreen({ state }: Props) {
           style={styles.picker}
           onLayout={(e) => { pickerY.current = e.nativeEvent.layout.y; }}
         >
-          {result.candidates.slice(0, 20).map((candidate, index) => (
+          {/*
+            Newest first. A 29-printing list spanning 1993 to 2024 is
+            only browsable in an order, and the card in somebody's hand
+            is far more often recent than not. Sets the phone has no
+            date for sink rather than jumping to the top.
+          */}
+          {[...result.candidates]
+            .sort((a, b) => (sets[b.set_code.toLowerCase()]?.year ?? 0)
+              - (sets[a.set_code.toLowerCase()]?.year ?? 0))
+            .slice(0, NAME_SHORTLIST)
+            .map((candidate, index) => (
             <Pressable
               key={`${candidate.printing_id}-${index}`}
               style={styles.candidate}

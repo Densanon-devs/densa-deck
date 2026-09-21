@@ -22,6 +22,7 @@ import { describe, test } from 'node:test';
 import {
   collectorNumbersIn,
   footerKeys,
+  NAME_SHORTLIST,
   identifyLocally,
   looksLikeSetCode,
   normaliseNumber,
@@ -543,6 +544,27 @@ describe('when the footer cannot be read but the title can', () => {
     assert.equal(out.autoAddable, false, 'which printing is a real question');
     assert.equal(out.candidates.length, 2);
     assert.match(out.reason, /which printing|printings/i);
+  });
+
+  test('the sizes people actually scan are all offered', async () => {
+    /*
+     * Measured against the real catalogue, not guessed. Every one of
+     * these is a card somebody tried to scan and was refused by a cap
+     * of eight, with the answer plainly on the list:
+     *
+     *   Assassinate 9, Go for the Throat 16, Deadly Dispute 19,
+     *   Royal Assassin 29.
+     */
+    for (const count of [9, 16, 19, 29, NAME_SHORTLIST]) {
+      const rows = Array.from({ length: count }, (_, i) => ({
+        printing_id: `p${i}`, name: 'Royal Assassin',
+        set_code: 's', collector_number: String(i),
+      }));
+      const out = await identifyLocally(
+        'Royal Assassin', catalogue({ 'Royal Assassin': rows }));
+      assert.equal(out.candidates.length, count, `${count} printings`);
+      assert.equal(out.autoAddable, false);
+    }
   });
 
   test('eight hundred printings is not a pick list', async () => {

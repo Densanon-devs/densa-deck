@@ -381,10 +381,20 @@ export function promoKey(
 /**
  * How many printings are worth showing as a pick list.
  *
- * Above this the answer is "read the footer", because scrolling a
- * hundred near-identical rows is not a choice anyone makes correctly.
+ * Forty, chosen against the real catalogue rather than by feel. Eight
+ * was the first guess and it was far too tight: Assassinate has 9
+ * printings, Go for the Throat 16, Deadly Dispute 19, Royal Assassin
+ * 29 — every one of them a card somebody actually tried to scan, and
+ * every one refused with "too many to choose from" when the answer was
+ * plainly on the list.
+ *
+ * At forty, 99.85% of card names can be offered. What falls outside is
+ * almost exactly the set of things that genuinely cannot be chosen from
+ * a list: the five basic lands at 820-864 printings each, then Sol
+ * Ring, Command Tower and Spirit. That is a real cliff rather than an
+ * arbitrary line, which is why the number sits on it.
  */
-export const NAME_SHORTLIST = 8;
+export const NAME_SHORTLIST = 40;
 
 export interface IdentifyOptions {
   /**
