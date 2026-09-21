@@ -59,13 +59,13 @@ import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
-import { SvgUri } from 'react-native-svg';
 import { asScanResult } from '../lib/scan-miss.ts';
 import { NAME_SHORTLIST } from '../lib/identify.ts';
 import { describeLocalMiss } from '../lib/scan-miss.ts';
 import { whileBusy } from '../lib/busy.ts';
 import { BuzzGuard } from '../lib/buzz-policy.ts';
 import { FrameGuide } from './FrameGuide.tsx';
+import { SetSymbol } from './SetSymbol.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 
@@ -1319,13 +1319,9 @@ export function ScanScreen({ state }: Props) {
                 */}
                 <View style={styles.symbol}>
                   {sets[candidate.set_code.toLowerCase()]?.iconUri ? (
-                    <SvgUri
-                      width={26}
-                      height={26}
+                    <SetSymbol
                       uri={sets[candidate.set_code.toLowerCase()]?.iconUri
-                        ?? null}
-                      // Scryfall's symbols are black; the app is not.
-                      color="#e4e6eb"
+                        ?? ''}
                     />
                   ) : null}
                 </View>
