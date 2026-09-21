@@ -821,6 +821,24 @@ export class LocalStore {
     return Number(rows[0]?.n ?? 0);
   }
 
+  /**
+   * Which sets this phone holds any card from.
+   *
+   * The honest way to ask "am I missing a new release". Comparing the
+   * bulk file's timestamp cannot answer it: Scryfall rebuilds those daily
+   * whether or not a card changed, so a timestamp check would announce
+   * new cards every single day and ask for a 74 MB download to prove
+   * itself wrong.
+   *
+   * Cheap: `catalogue` is already indexed on (set_code, collector_number).
+   */
+  async catalogueSets(): Promise<Set<string>> {
+    const rows = await this.db.all<{ set_code: string }>(
+      'SELECT set_code FROM catalogue GROUP BY set_code');
+    return new Set(rows.map((r) => String(r.set_code || '').toLowerCase())
+      .filter(Boolean));
+  }
+
   /** The exact key a readable footer gives you. */
   async printingByKey(
     setCode: string,

@@ -1126,4 +1126,51 @@ describe('finishing a half-done download does not redo the done half', () => {
         'the unfinished oracle file should have been fetched');
       assert.equal((await state.catalogueReady()).ready, true);
     });
+
+  test('but a deliberate refresh DOES fetch a complete file again',
+    async () => {
+      /*
+       * The other side of the skip, and the reason it needs a way out.
+       *
+       * Magic prints a set every few weeks. A phone whose index is
+       * complete is exactly the phone that needs the new cards, and the
+       * skip that stops a resume wasting the finished half would
+       * otherwise mean a standalone phone could never see a new set by
+       * any means at all.
+       */
+      const asked = [];
+      const { store, state } = await phone();
+      await store.putCatalogue([['p-1', 'Sol Ring', 'cmm', '410', 1, 'common']]);
+      await store.putOracle([
+        ['o-1', 'Sol Ring', 'Artifact', 'Add two colourless.', '{1}', 1, ''],
+      ]);
+      await store.setMeta('catalogue.cursor', '');
+      await store.setMeta('oracle.cursor', '');
+      assert.equal((await state.catalogueReady()).ready, true,
+        'precondition: this phone thinks it is finished');
+
+      const CARD = {
+        id: 'p-new', oracle_id: 'o-new', name: 'Brand New Card',
+        type_line: 'Instant', oracle_text: 'It is new.', mana_cost: '{R}',
+        cmc: 1, color_identity: ['R'], set: 'xyz', collector_number: '1',
+        lang: 'en', games: ['paper'], digital: false, rarity: 'rare',
+      };
+      const GZ = gzipSync(JSON.stringify(CARD) + String.fromCharCode(10));
+      async function* watched(url) {
+        asked.push(url);
+        for (let i = 0; i < GZ.length; i += 32) {
+          yield new Uint8Array(GZ.subarray(i, i + 32));
+        }
+      }
+
+      await state.fetchIndex(undefined, watched, 'scryfall', true);
+
+      assert.ok(asked.some((u) => u.includes('/d.jsonl')),
+        'a refresh must re-read the printings, that is where new cards are');
+      assert.ok(asked.some((u) => u.includes('/o.jsonl')),
+        'and the oracle, that is where their rules text is');
+      // And the new card actually landed rather than the download being
+      // performed and thrown away.
+      assert.equal((await state.catalogueReady()).rows, 2);
+    });
 });

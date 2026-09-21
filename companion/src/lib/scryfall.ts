@@ -91,6 +91,47 @@ export async function bulkSources(
 }
 
 /**
+ * When sets come out, straight from Scryfall.
+ *
+ * So the refresh can follow the actual release calendar instead of a
+ * timer that knows nothing. Scryfall lists sets that have not happened
+ * yet with their `released_at`, which is exactly the signal wanted: a
+ * hard-coded calendar in the app would be wrong the first time Wizards
+ * moved a date, and shipping a new build to fix a date is the thing this
+ * whole design avoids.
+ *
+ * Only real, paper, non-digital sets. Tokens, memorabilia and online-only
+ * sets have release dates too, and none of them put a card in a hand.
+ */
+export async function setReleases(
+  fetchImpl: typeof fetch = fetch,
+): Promise<Array<{ code: string; at: number }>> {
+  const response = await fetchImpl('https://api.scryfall.com/sets', {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  });
+  if (!response.ok) {
+    throw new Error(`Scryfall said ${response.status} asking for sets.`);
+  }
+  const body = (await response.json()) as {
+    data?: Array<Record<string, unknown>>;
+  };
+  const out: Array<{ code: string; at: number }> = [];
+  for (const entry of body.data ?? []) {
+    if (entry.digital === true) continue;
+    const kind = String(entry.set_type ?? '');
+    // The ones that actually print cards people own. `token` and
+    // `memorabilia` are neither scannable nor collectable here.
+    if (kind === 'token' || kind === 'memorabilia' || kind === 'minigame') {
+      continue;
+    }
+    const code = String(entry.code ?? '').toLowerCase();
+    const at = Date.parse(String(entry.released_at ?? ''));
+    if (code && Number.isFinite(at)) out.push({ code, at });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/**
  * Whether a card belongs in the index at all.
  *
  * English paper cards. The others are real cards and deliberately excluded:

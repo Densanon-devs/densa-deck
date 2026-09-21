@@ -151,6 +151,8 @@ function Shell() {
    * told him to improve his lighting.
    */
   const [indexed, setIndexed] = useState<boolean | null>(null);
+  // Set only by the scheduled check, and only when it found something.
+  const [newCards, setNewCards] = useState(false);
 
   /**
    * Nothing in the app is usable until the index is confirmed complete.
@@ -248,6 +250,27 @@ function Shell() {
       // Unknown must not read as "ready": that would open the app on an
       // index it has never confirmed, which is the state being guarded.
       .catch(() => { if (live) setIndexed(false); });
+    return () => { live = false; };
+  }, [phase]);
+
+  /*
+    The scheduled look for new cards, if the user asked for one.
+
+    Opt-in, rate-limited to once a day, and it only ever LOOKS -- a few
+    hundred bytes of manifest. Downloading is tens of megabytes on
+    somebody's phone plan and stays a decision they make, so all this
+    does is put a line in Settings saying there is something to get.
+
+    Deliberately not awaited and deliberately silent on failure: being
+    unable to reach Scryfall is not news, and an app that cannot open
+    because a background check failed would be a poor trade for it.
+  */
+  useEffect(() => {
+    if (phase.kind !== 'ready') return;
+    let live = true;
+    void phase.state.autoCheck()
+      .then((out) => { if (live && out) setNewCards(out.stale); })
+      .catch(() => undefined);
     return () => { live = false; };
   }, [phase]);
 
@@ -352,9 +375,10 @@ function Shell() {
           )}
           <Text style={[styles.bannerText,
             styles[`text_${quiet ? 'idle' : status.tone}`]]}>
-            {solo.current ? 'This phone only'
-              : locked ? 'Setting up'
-                : status.headline}
+            {locked ? 'Setting up'
+              : newCards ? 'New cards available'
+                : solo.current ? 'This phone only'
+                  : status.headline}
           </Text>
           <Text style={styles.bannerHint}>
             {showConnection ? 'Close' : 'Settings'}

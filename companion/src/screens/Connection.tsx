@@ -20,6 +20,7 @@ import type { EndpointReport } from '../lib/client.ts';
 import { checkArtReachable } from '../lib/images.ts';
 import type { ArtReach } from '../lib/images.ts';
 import { describeConnection } from '../lib/status.ts';
+import { lastCheckedInWords } from '../lib/index-freshness.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -104,6 +105,64 @@ export function ConnectionScreen({
   const [counts, setCounts] = useState<
     { phone: number; desktop: number | null } | null
   >(null);
+
+  /*
+    The card index, and whether it has fallen behind Magic.
+
+    A snapshot goes out of date every few weeks, and until now the phone
+    had no way to say so and no way to fix it -- a standalone phone could
+    not see a new set by any means at all.
+  */
+  const [checking, setChecking] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [autoCheck, setAutoCheckState] = useState(false);
+  const [lastLook, setLastLook] = useState(0);
+  // Null means "not asked yet", which is not the same as "up to date".
+  const [behind, setBehind] = useState<boolean | null>(null);
+  // Which sets, so the prompt names them rather than saying "newer data".
+  const [missing, setMissing] = useState<string[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const [on, at] = await Promise.all([
+        state.autoCheckEnabled(), state.lastCheckedAt(),
+      ]);
+      if (!live) return;
+      setAutoCheckState(on);
+      setLastLook(at);
+    })().catch(() => {});
+    return () => { live = false; };
+  }, [state]);
+
+  const lookNow = useCallback(async () => {
+    setChecking(true);
+    setProblem('');
+    try {
+      const { stale, missing: gaps } = await state.indexFreshness();
+      setBehind(stale);
+      setMissing(gaps);
+      setLastLook(await state.lastCheckedAt());
+    } catch (err) {
+      setProblem(`${(err as Error).message}. Checking needs the internet.`);
+    } finally {
+      setChecking(false);
+    }
+  }, [state]);
+
+  const refreshCards = useCallback(async () => {
+    setRefreshing(true);
+    setProblem('');
+    try {
+      await state.refreshIndex();
+      setBehind(false);
+      setMissing([]);
+    } catch (err) {
+      setProblem((err as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [state]);
 
   useEffect(() => state.subscribe(setSnapshot), [state]);
 
@@ -207,6 +266,83 @@ export function ConnectionScreen({
           </Pressable>
         </View>
       ) : null}
+
+      {/*
+        The card index. Above the PC diagnostics because it matters to
+        every phone, with or without one -- and because "I cannot find
+        the new set" is a far more common complaint than anything below.
+      */}
+      <View style={styles.pcOffer}>
+        <Text style={styles.pcTitle}>Card index</Text>
+        <Text style={styles.summary}>
+          {behind === null
+            ? 'Every card in Magic, as of when you downloaded it. New sets '
+              + 'come out every few weeks.'
+            : behind
+              ? `${missing.length} set${missing.length === 1 ? '' : 's'} not `
+                + 'on this phone: '
+                + missing.slice(0, 4).map((c) => c.toUpperCase()).join(', ')
+                + (missing.length > 4 ? ' and more.' : '.')
+              : 'Up to date — every released set is on this phone.'}
+        </Text>
+        <Text style={styles.muted}>
+          Last checked {lastCheckedInWords(lastLook, Date.now())}.
+        </Text>
+
+        {behind ? (
+          <Pressable
+            style={styles.pcButton}
+            disabled={refreshing}
+            onPress={() => void refreshCards()}
+          >
+            <Text style={styles.pcButtonText}>
+              {refreshing ? 'Downloading\u2026' : 'Get the new cards'}
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            style={styles.pcButton}
+            disabled={checking}
+            onPress={() => void lookNow()}
+          >
+            <Text style={styles.pcButtonText}>
+              {checking ? 'Checking\u2026' : 'Check for new cards'}
+            </Text>
+          </Pressable>
+        )}
+        {behind ? (
+          <Text style={styles.muted}>
+            A large download, so use wifi. Checking is tiny; downloading is
+            not, which is why it asks.
+          </Text>
+        ) : null}
+
+        {/*
+          Opt-in, and it only ever LOOKS. Downloading tens of megabytes on
+          someone's phone plan without asking is not a thing to do on a
+          timer, however convenient.
+        */}
+        <Pressable
+          style={styles.optRow}
+          onPress={() => {
+            const next = !autoCheck;
+            setAutoCheckState(next);
+            void state.setAutoCheck(next).catch(() => setAutoCheckState(!next));
+          }}
+        >
+          <View style={[styles.checkbox, autoCheck && styles.checkboxOn]}>
+            {autoCheck ? <Text style={styles.tick}>{'\u2713'}</Text> : null}
+          </View>
+          <Text style={styles.optLabel}>
+            Check for me when a set comes out
+          </Text>
+        </Pressable>
+        <Text style={styles.muted}>
+          Looks when a new set is released \u2014 the dates come from Scryfall,
+          so it follows the real schedule \u2014 and at least once a quarter
+          otherwise. It never downloads anything without asking.
+        </Text>
+      </View>
 
       {/*
         Both sides' totals, side by side. Not a diagnostic curiosity: when the
@@ -433,6 +569,20 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   pcTitle: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
+  optRow: { alignItems: 'center', flexDirection: 'row', gap: 10,
+    marginTop: 12, paddingVertical: 4 },
+  checkbox: {
+    alignItems: 'center',
+    borderColor: '#4a515f',
+    borderRadius: 4,
+    borderWidth: 2,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  checkboxOn: { backgroundColor: '#2f6f9f', borderColor: '#2f6f9f' },
+  tick: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  optLabel: { color: '#e4e6eb', flex: 1, fontSize: 15 },
   pcButton: {
     alignItems: 'center',
     borderColor: '#2f6f9f',

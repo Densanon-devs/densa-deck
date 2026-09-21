@@ -18,10 +18,18 @@ import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
+import { dueForCheck, missingSets } from './index-freshness.ts';
+import type { CheckReason, Release } from './index-freshness.ts';
 import type { IndexSource } from './index-source.ts';
 import { searchLocally } from './local-search.ts';
 import { deviceTextReader } from './ocr.ts';
-import { bulkSources, readBulk, toOracleRow, toPrintingRow } from './scryfall.ts';
+import {
+  bulkSources,
+  readBulk,
+  setReleases,
+  toOracleRow,
+  toPrintingRow,
+} from './scryfall.ts';
 import type { BulkSource } from './scryfall.ts';
 import { RepeatGuard } from './scanner.ts';
 import type { TextReader } from './ocr.ts';
@@ -119,6 +127,12 @@ const ORACLE_CURSOR_KEY = 'oracle.cursor';
  * unfinished without being taught anything new.
  */
 const BULK_IN_PROGRESS = 'bulk:in-progress';
+
+/** When we last asked Scryfall whether anything was new. */
+const LAST_CHECK_KEY = 'index.lastCheckedAt';
+
+/** Whether the user asked us to look on their behalf. Opt-in. */
+const AUTOCHECK_KEY = 'index.autoCheck';
 
 /**
  * What free keeps, for a phone with no desktop to ask.
@@ -326,6 +340,7 @@ export class AppState {
     // honoured for 'desktop' if the desktop actually answers; a preference
     // is not a reason to wait on a machine that is switched off.
     prefer?: IndexSource,
+    force = false,
   ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
     if (this.indexRun) return this.indexRun;
     // Before anything asynchronous, so the screen changes on the tap
@@ -338,6 +353,7 @@ export class AppState {
       (p) => this.emit({ indexFetch: p }),
       chunks,
       prefer,
+      force,
     ).finally(() => {
       this.indexRun = null;
       this.emit({ indexFetch: null });
@@ -362,6 +378,11 @@ export class AppState {
     // around it is worth testing.
     chunks: (url: string) => AsyncIterable<Uint8Array> = downloadedChunks,
     prefer?: IndexSource,
+    // A deliberate refresh, which is the one case where a file that is
+    // already complete SHOULD be fetched again. Without this the skip
+    // that stops a resume re-downloading finished work also stops a new
+    // set ever arriving.
+    force = false,
   ): Promise<{ printings: number; oracle: number; source: IndexSource }> {
     // Asking the PC costs a round trip to a machine that is often off, and
     // somebody who has just chosen to download from Scryfall should not
@@ -396,12 +417,15 @@ export class AppState {
       a cleared marker on an empty table is a file that never started.
     */
     const done = async (cursorKey: string, count: Promise<number>) =>
-      ((await this.store.getMeta(cursorKey)) ?? '') === '' && (await count) > 0;
+      !force
+      && ((await this.store.getMeta(cursorKey)) ?? '') === ''
+      && (await count) > 0;
 
     // Printings first: it is the one scanning turns on, so a download
     // interrupted halfway still leaves the scanner working.
-    const printings = await done(CATALOGUE_CURSOR_KEY,
-                                 this.store.catalogueSize())
+    const skipPrintings = await done(CATALOGUE_CURSOR_KEY,
+                                     this.store.catalogueSize());
+    const printings = skipPrintings
       ? await this.store.catalogueSize()
       : await this.pullBulk(
         sources.default_cards, toPrintingRow,
@@ -409,7 +433,8 @@ export class AppState {
         CATALOGUE_CURSOR_KEY, chunks,
         (d, total) => onProgress?.({ source, done: d, total, stage: 'printings' }),
       );
-    const oracle = await done(ORACLE_CURSOR_KEY, this.store.oracleSize())
+    const skipOracle = await done(ORACLE_CURSOR_KEY, this.store.oracleSize());
+    const oracle = skipOracle
       ? await this.store.oracleSize()
       : await this.pullBulk(
         sources.oracle_cards, toOracleRow,
@@ -497,6 +522,101 @@ export class AppState {
       scanReady,
       ready: scanReady && oracleRows > 0 && oracleCursor === '',
     };
+  }
+
+  /**
+   * Whether this phone has been asked to look for new cards on its own.
+   *
+   * Off unless turned on. An app that reaches out to the internet on a
+   * schedule should be told to, not assume it.
+   */
+  async autoCheckEnabled(): Promise<boolean> {
+    return (await this.store.getMeta(AUTOCHECK_KEY)) === 'yes';
+  }
+
+  async setAutoCheck(on: boolean): Promise<void> {
+    await this.store.setMeta(AUTOCHECK_KEY, on ? 'yes' : '');
+  }
+
+  /** When we last asked Scryfall anything, epoch ms; 0 for never. */
+  async lastCheckedAt(): Promise<number> {
+    return Number((await this.store.getMeta(LAST_CHECK_KEY)) ?? 0) || 0;
+  }
+
+  /**
+   * Ask Scryfall whether its files are newer than the ones we read.
+   *
+   * A few hundred bytes -- the manifest only. Deliberately separate from
+   * downloading: the download is tens of megabytes on someone's phone
+   * plan and stays their decision, made with the answer in front of them.
+   */
+  async indexFreshness(now = Date.now()): Promise<{
+    stale: boolean;
+    /** Set codes that have been released and are not on this phone. */
+    missing: string[];
+  }> {
+    const [releases, held] = await Promise.all([
+      setReleases(this.plainFetch),
+      this.store.catalogueSets(),
+    ]);
+    await this.store.setMeta(LAST_CHECK_KEY, String(now));
+    const missing = missingSets(held, releases, now);
+    return { stale: missing.length > 0, missing };
+  }
+
+  /**
+   * The scheduled look, if one is due.
+   *
+   * Returns null when nothing was done -- not enabled, too soon, or
+   * nothing new -- so a caller on every app open costs nothing and says
+   * nothing. Never downloads: it reports, and the user decides.
+   *
+   * Release dates come from Scryfall rather than a calendar in the build,
+   * so the check lands when a set actually ships rather than on a timer
+   * that knows nothing about Magic. If that list cannot be had, the
+   * quarterly floor still applies -- a failed lookup must not silently
+   * turn the feature off.
+   */
+  async autoCheck(now = Date.now()): Promise<
+    { stale: boolean; reason: CheckReason } | null
+  > {
+    if (!(await this.autoCheckEnabled())) return null;
+    const lastCheckedAt = await this.lastCheckedAt();
+
+    let releases: Release[] = [];
+    try {
+      releases = await setReleases(this.plainFetch);
+    } catch {
+      // Offline, or Scryfall having a bad day. The quarterly floor below
+      // is exactly the fallback for not knowing the calendar.
+    }
+
+    const reason = dueForCheck({
+      lastCheckedAt, now, releases, enabled: true,
+    });
+    if (!reason) return null;
+
+    try {
+      const { stale } = await this.indexFreshness();
+      return { stale, reason };
+    } catch {
+      // A failed check is not news, and must not be reported as "up to
+      // date" either. Saying nothing leaves it due again next time.
+      return null;
+    }
+  }
+
+  /**
+   * Fetch the index again from scratch, new cards and all.
+   *
+   * The forced path: a complete file is normally skipped, which is right
+   * for resuming an interrupted download and wrong for picking up a set
+   * that came out since.
+   */
+  async refreshIndex(): Promise<
+    { printings: number; oracle: number; source: IndexSource }
+  > {
+    return this.startIndexFetch(undefined, undefined, true);
   }
 
   /**
