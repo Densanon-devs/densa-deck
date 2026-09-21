@@ -59,6 +59,7 @@ import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
+import { SvgUri } from 'react-native-svg';
 import { asScanResult } from '../lib/scan-miss.ts';
 import { describeLocalMiss } from '../lib/scan-miss.ts';
 import { whileBusy } from '../lib/busy.ts';
@@ -107,6 +108,20 @@ export function ScanScreen({ state }: Props) {
   const [connection, setConnection] = useState<Connection>('unknown');
   const [indexFetch, setIndexFetch] = useState<IndexFetch | null>(null);
   const [collections, setCollections] = useState<CollectionRow[]>([]);
+  /**
+   * What each set code means.
+   *
+   * "GRN #184" is not an answer to "which of these seven am I holding",
+   * especially for an old card nobody has the codes memorised for. The
+   * name, the year and the set's own symbol are what people actually
+   * recognise a printing by.
+   *
+   * Empty until an index fetch has filled it, so every row falls back
+   * to the bare code rather than showing a blank.
+   */
+  const [sets, setSets] = useState<Record<string, {
+    name: string; year: number; iconUri: string;
+  }>>({});
   // Starts at the default rather than empty: a card filed in the moment
   // between mounting and the stored target arriving would go nowhere
   // nameable.
@@ -198,6 +213,11 @@ export function ScanScreen({ state }: Props) {
   }, []);
   const scanner = useRef(new AutoScanner());
   const camera = useRef<CameraView | null>(null);
+  // Where the pick list starts, and the scroller that has to reach it.
+  // A question rendered below a full-height camera box is a question
+  // nobody sees: the screen looks like it simply stopped.
+  const scroller = useRef<ScrollView | null>(null);
+  const pickerY = useRef(0);
   // The interval's closure would otherwise read whatever `busy` was when the
   // effect ran, and fire a second capture on top of the one in flight.
   const busyRef = useRef(false);
@@ -695,6 +715,22 @@ export function ScanScreen({ state }: Props) {
     await handlePhoto({ uri: shot.uri, base64: shot.base64 });
   }, [handlePhoto]);
 
+  // Asking a question means showing it. Scrolled to the TOP of the
+  // list rather than the bottom of the page, because seven printings
+  // are taller than the screen and `scrollToEnd` would land on "None
+  // of these".
+  useEffect(() => {
+    if (!result?.candidates?.length) return;
+    const at = pickerY.current;
+    const timer = setTimeout(
+      () => scroller.current?.scrollTo({ y: Math.max(0, at - 8),
+                                         animated: true }),
+      // One frame, so the list has been laid out and `pickerY` is real.
+      80,
+    );
+    return () => clearTimeout(timer);
+  }, [result]);
+
   // Both pickers, mirrored into a ref the interval can read.
   useEffect(() => {
     pickingRef.current = !!result?.candidates?.length || !!choosing?.length;
@@ -754,6 +790,7 @@ export function ScanScreen({ state }: Props) {
   // What is already waiting, on the way in.
   useEffect(() => {
     void state.queuedScans().then(setQueued).catch(() => {});
+    void state.setDirectory().then(setSets).catch(() => {});
     void state.catalogueReady().then(setIndex).catch(() => {});
   }, [state]);
 
@@ -813,6 +850,7 @@ export function ScanScreen({ state }: Props) {
       ) : null}
 
       <ScrollView
+        ref={scroller}
         style={styles.scroll}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -1243,7 +1281,10 @@ export function ScanScreen({ state }: Props) {
       ) : null}
 
       {result?.candidates?.length ? (
-        <View style={styles.picker}>
+        <View
+          style={styles.picker}
+          onLayout={(e) => { pickerY.current = e.nativeEvent.layout.y; }}
+        >
           {result.candidates.slice(0, 20).map((candidate, index) => (
             <Pressable
               key={`${candidate.printing_id}-${index}`}
@@ -1254,10 +1295,48 @@ export function ScanScreen({ state }: Props) {
                 );
               }}
             >
-              <Text style={styles.candidateName}>{candidate.name}</Text>
-              <Text style={styles.candidateMeta}>
-                {candidate.set_code.toUpperCase()} #{candidate.collector_number}
-              </Text>
+              <View style={styles.candidateRow}>
+                {/*
+                  The set symbol. Scryfall serves these as SVG and
+                  hotlinks are the rule for their art, so it is fetched
+                  rather than bundled — a thousand sets would be a
+                  thousand files that go stale every time one ships.
+
+                  Its own box whether or not a symbol loads, so the
+                  names below stay in a straight line instead of
+                  shuffling left as icons arrive.
+                */}
+                <View style={styles.symbol}>
+                  {sets[candidate.set_code.toLowerCase()]?.iconUri ? (
+                    <SvgUri
+                      width={26}
+                      height={26}
+                      uri={sets[candidate.set_code.toLowerCase()]?.iconUri
+                        ?? null}
+                      // Scryfall's symbols are black; the app is not.
+                      color="#e4e6eb"
+                    />
+                  ) : null}
+                </View>
+                <View style={styles.candidateText}>
+                  <Text style={styles.candidateName}>{candidate.name}</Text>
+                  <Text style={styles.candidateMeta}>
+                    {sets[candidate.set_code.toLowerCase()]?.name
+                      || candidate.set_code.toUpperCase()}
+                    {' · #'}{candidate.collector_number}
+                    {sets[candidate.set_code.toLowerCase()]?.year
+                      ? ` · ${sets[candidate.set_code.toLowerCase()]?.year}`
+                      : ''}
+                  </Text>
+                  {/*
+                    The code as well as the name. It is what is printed
+                    on the card, so it is the thing you can check.
+                  */}
+                  <Text style={styles.candidateCode}>
+                    {candidate.set_code.toUpperCase()}
+                  </Text>
+                </View>
+              </View>
             </Pressable>
           ))}
           <Pressable style={styles.none} onPress={() => setResult(null)}>
@@ -1482,6 +1561,12 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 6,
   },
+  candidateRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  symbol: { alignItems: 'center', height: 26, justifyContent: 'center',
+    width: 26 },
+  candidateText: { flex: 1 },
+  candidateCode: { color: '#6b7079', fontSize: 11, letterSpacing: 0.5,
+    marginTop: 1 },
   candidateName: { color: '#e4e6eb', fontSize: 15 },
   candidateMeta: { color: '#8a8f9c', fontSize: 12 },
   none: { padding: 12, alignItems: 'center' },

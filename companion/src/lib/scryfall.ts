@@ -103,9 +103,19 @@ export async function bulkSources(
  * Only real, paper, non-digital sets. Tokens, memorabilia and online-only
  * sets have release dates too, and none of them put a card in a hand.
  */
+export interface SetRow {
+  code: string;
+  /** "Guilds of Ravnica", not "GRN". */
+  name: string;
+  /** Epoch ms. */
+  at: number;
+  /** Scryfall's set symbol, an SVG. */
+  iconUri: string;
+}
+
 export async function setReleases(
   fetchImpl: typeof fetch = fetch,
-): Promise<Array<{ code: string; at: number }>> {
+): Promise<SetRow[]> {
   const response = await fetchImpl('https://api.scryfall.com/sets', {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
@@ -115,7 +125,7 @@ export async function setReleases(
   const body = (await response.json()) as {
     data?: Array<Record<string, unknown>>;
   };
-  const out: Array<{ code: string; at: number }> = [];
+  const out: SetRow[] = [];
   for (const entry of body.data ?? []) {
     if (entry.digital === true) continue;
     const kind = String(entry.set_type ?? '');
@@ -126,7 +136,18 @@ export async function setReleases(
     }
     const code = String(entry.code ?? '').toLowerCase();
     const at = Date.parse(String(entry.released_at ?? ''));
-    if (code && Number.isFinite(at)) out.push({ code, at });
+    // The name and the symbol come free with a request already being
+    // made for the release dates. "GRN #184" means nothing to someone
+    // deciding which of seven printings they are holding; "Guilds of
+    // Ravnica, 2018" is the answer to that question.
+    if (code && Number.isFinite(at)) {
+      out.push({
+        code,
+        name: String(entry.name ?? ''),
+        at,
+        iconUri: String(entry.icon_svg_uri ?? ''),
+      });
+    }
   }
   return out.sort((a, b) => a.at - b.at);
 }

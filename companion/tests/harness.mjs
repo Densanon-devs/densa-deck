@@ -165,6 +165,9 @@ export class MemoryDatabase {
       // oracle index appends a second copy of every card and a wishlist
       // row written twice becomes two wants.
       oracle: 'oracle_id',
+      // Without this every index refresh appends a second copy of every
+      // set, and the pick list shows each printing's set name twice.
+      card_sets: 'code',
       wishlist: ['card_name', 'deck_id', 'set_code', 'collector_number'],
     };
     const key = keys[table];
@@ -300,6 +303,8 @@ export class MemoryDatabase {
       }
       return [...rows];
     }
+    // What a set code means, for the pick list. One shape: the lot.
+    if (/FROM card_sets/i.test(text)) return [...this._table('card_sets')];
     throw new Error(`MemoryDatabase cannot select: ${text.slice(0, 90)}`);
   }
 

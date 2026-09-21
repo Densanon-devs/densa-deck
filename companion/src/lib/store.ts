@@ -219,6 +219,16 @@ export const SCHEMA: string[] = [
      ON catalogue(set_code, collector_number)`,
   // The fallback, when the footer is unreadable but the title is not.
   `CREATE INDEX IF NOT EXISTS idx_cat_name ON catalogue(name)`,
+  // What a set code means, so a pick list can say "Guilds of Ravnica,
+  // 2018" instead of "GRN". Roughly a thousand rows of three short
+  // fields, filled from the same Scryfall request the release calendar
+  // already makes.
+  `CREATE TABLE IF NOT EXISTS card_sets (
+     code TEXT PRIMARY KEY,
+     name TEXT NOT NULL DEFAULT '',
+     released_at INTEGER NOT NULL DEFAULT 0,
+     icon_uri TEXT NOT NULL DEFAULT ''
+   )`,
   `CREATE TABLE IF NOT EXISTS pending_scans (
      scan_uid TEXT PRIMARY KEY,
      image TEXT NOT NULL,
@@ -862,6 +872,42 @@ export class LocalStore {
   }
 
   /** Every printing of one card, for when only the title read. */
+  /** Remember what the set codes mean. */
+  async putSets(rows: Array<{
+    code: string; name: string; at: number; iconUri: string;
+  }>): Promise<void> {
+    for (const row of rows) {
+      await this.db.run(
+        `INSERT INTO card_sets (code, name, released_at, icon_uri)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(code) DO UPDATE SET
+           name = excluded.name,
+           released_at = excluded.released_at,
+           icon_uri = excluded.icon_uri`,
+        [row.code.toLowerCase(), row.name, row.at, row.iconUri]);
+    }
+  }
+
+  /** Code to name, year and symbol, for anything showing a printing. */
+  async setDirectory(): Promise<Record<string, {
+    name: string; year: number; iconUri: string;
+  }>> {
+    const rows = await this.db.all<{
+      code: string; name: string; released_at: number; icon_uri: string;
+    }>('SELECT * FROM card_sets');
+    const out: Record<string, {
+      name: string; year: number; iconUri: string;
+    }> = {};
+    for (const r of rows) {
+      out[String(r.code)] = {
+        name: String(r.name || ''),
+        year: r.released_at ? new Date(Number(r.released_at)).getFullYear() : 0,
+        iconUri: String(r.icon_uri || ''),
+      };
+    }
+    return out;
+  }
+
   async printingsByName(name: string): Promise<Array<{
     printing_id: string; name: string;
     set_code: string; collector_number: string;

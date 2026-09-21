@@ -444,6 +444,16 @@ export class AppState {
       return { printings: printings.rows, oracle: oracle.rows, source };
     }
 
+    // What the set codes mean, alongside the cards themselves. Best
+    // effort on purpose: a missing set name costs a nicer label in a
+    // pick list and nothing else, and it must never be the reason an
+    // index download fails.
+    try {
+      await this.store.putSets(await setReleases(this.plainFetch));
+    } catch {
+      // Nothing to say. The pick list falls back to the set code.
+    }
+
     const sources = await bulkSources(this.plainFetch);
 
     /*
@@ -534,6 +544,31 @@ export class AppState {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * What each set code means, for anything showing a printing.
+   *
+   * Empty until an index fetch has filled it, which is why every caller
+   * falls back to the bare code rather than showing a blank.
+   */
+  async setDirectory(): Promise<Record<string, {
+    name: string; year: number; iconUri: string;
+  }>> {
+    const held = await this.store.setDirectory();
+    if (Object.keys(held).length) return held;
+    // Empty means this phone downloaded its index before set names
+    // existed, which is every phone already in the wild. Fetched once,
+    // here, rather than making them re-download a hundred thousand
+    // cards to learn what "GRN" stands for.
+    try {
+      await this.store.putSets(await setReleases(this.plainFetch));
+    } catch {
+      // Offline. The pick list falls back to the set code, which is
+      // what it showed before any of this.
+      return held;
+    }
+    return this.store.setDirectory();
   }
 
   /** How much of the index this phone is holding. */

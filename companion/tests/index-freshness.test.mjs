@@ -198,9 +198,22 @@ describe('reading the release calendar', () => {
       { code: 'a', set_type: 'expansion', released_at: '2026-09-26' },
     ]));
     assert.deepEqual(out, [
-      { code: 'a', at: Date.parse('2026-09-26') },
-      { code: 'b', at: Date.parse('2026-11-14') },
+      { code: 'a', name: '', at: Date.parse('2026-09-26'), iconUri: '' },
+      { code: 'b', name: '', at: Date.parse('2026-11-14'), iconUri: '' },
     ]);
+  });
+
+  test('the name and symbol come along, for telling printings apart', () => {
+    // "GRN #184" means nothing to someone holding one of seven
+    // printings. The set name and its symbol are what identify it, and
+    // both are already in the response fetched for the dates.
+    const entry = { code: 'grn', set_type: 'expansion',
+                    released_at: '2018-10-05', name: 'Guilds of Ravnica',
+                    icon_svg_uri: 'https://svgs.scryfall.io/sets/grn.svg' };
+    return setReleases(reply([entry])).then((out) => {
+      assert.equal(out[0].name, 'Guilds of Ravnica');
+      assert.match(out[0].iconUri, /grn\.svg$/);
+    });
   });
 
   test('tokens and memorabilia are not releases', async () => {

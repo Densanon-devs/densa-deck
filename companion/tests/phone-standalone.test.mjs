@@ -374,7 +374,11 @@ describe('getting the index with no PC in the world', () => {
     await assert.rejects(
       () => state.fetchIndex(undefined, undefined, 'scryfall'),
       /reached Scryfall/);
-    assert.equal(askedScryfall, 1);
+    // More than one: fetchIndex also asks for the set list, so a pick
+    // list can say "Guilds of Ravnica, 2018" rather than "GRN". What
+    // this test is about is that it went to Scryfall at all rather than
+    // to the PC, not how many requests that took.
+    assert.ok(askedScryfall >= 1);
   });
 
   test('and the PC is not even asked, so nobody waits on a sleeping one',
@@ -422,7 +426,11 @@ describe('getting the index with no PC in the world', () => {
     });
 
     await assert.rejects(() => state.fetchIndex(), /reached Scryfall/);
-    assert.equal(askedScryfall, 1);
+    // More than one: fetchIndex also asks for the set list, so a pick
+    // list can say "Guilds of Ravnica, 2018" instead of "GRN". What
+    // matters here is that it went to Scryfall at all rather than to
+    // the PC, not how many requests that took.
+    assert.ok(askedScryfall >= 1);
   });
 
   test('a paired phone that is merely OUT OF RANGE also falls back',
@@ -441,7 +449,7 @@ describe('getting the index with no PC in the world', () => {
       });
 
       await assert.rejects(() => state.fetchIndex());
-      assert.equal(askedScryfall, 1);
+      assert.ok(askedScryfall >= 1);
     });
 });
 
