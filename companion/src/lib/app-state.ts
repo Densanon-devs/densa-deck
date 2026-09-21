@@ -16,7 +16,8 @@ import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { footerKeys, identifyLocally } from './identify.ts';
-import type { IdentifyOptions, LocalIdentifyResult } from './identify.ts';
+import type { CataloguePrintingRow, IdentifyOptions, LocalIdentifyResult }
+  from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
@@ -600,6 +601,51 @@ ${more}`;
       return held;
     }
     return this.store.setDirectory();
+  }
+
+  /** Every printing of a card this phone's index knows. */
+  async printingsOf(cardName: string): Promise<CataloguePrintingRow[]> {
+    return this.store.printingsByName?.(cardName) ?? [];
+  }
+
+  /**
+   * Move a stack onto a different printing of the same card.
+   *
+   * Scanning gets the name right far more often than it gets the
+   * version right -- a card with twenty-nine printings has one footer
+   * and twenty-nine ways to be filed wrong -- so being able to correct
+   * it afterwards matters as much as getting it right first time.
+   *
+   * ADDED before REMOVED, deliberately. If the second half fails the
+   * user has two stacks of the same card and can see it and fix it; in
+   * the other order they would have none, silently, and no way to know
+   * what was lost. Duplicates are an annoyance and a deletion is a
+   * missing card.
+   *
+   * Everything else about the stack travels with it: finish, condition
+   * and which collection it is filed in. Only the printing changes.
+   */
+  async changePrinting(
+    stack: {
+      printing_id: string; card_name: string; finish?: string;
+      condition?: string; collection_uid?: string; quantity: number;
+    },
+    toPrintingId: string,
+  ): Promise<void> {
+    const count = Math.abs(stack.quantity || 0);
+    if (!count || !toPrintingId || toPrintingId === stack.printing_id) return;
+    const common = {
+      card_name: stack.card_name,
+      finish: stack.finish,
+      condition: stack.condition,
+      collection_uid: stack.collection_uid,
+    };
+    await this.addCard({
+      ...common, printing_id: toPrintingId, quantity: count,
+    });
+    await this.addCard({
+      ...common, printing_id: stack.printing_id, quantity: -count,
+    });
   }
 
   /** How much of the index this phone is holding. */

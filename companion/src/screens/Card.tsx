@@ -41,6 +41,8 @@ import {
 import type { CardDetail, CardFace } from '../lib/protocol.ts';
 import type { CollectionRow, StackRow } from '../lib/store.ts';
 import { reporting } from './report.ts';
+import { SetSymbol } from './SetSymbol.tsx';
+import { rarityColour } from '../lib/set-symbol.ts';
 
 interface Props {
   state: AppState;
@@ -181,6 +183,60 @@ export function CardScreen({ state, stack, onClose }: Props) {
     void load().catch(reporting('the card details', setProblem));
   }, [load]);
 
+  /*
+    Every printing of this card, and whether the chooser is open.
+
+    Scanning gets the NAME right far more often than the version: a
+    card with twenty-nine printings has one footer and twenty-nine
+    ways to be filed wrong, and real passes did exactly that. The
+    correction belongs where the mistake is noticed, which is here,
+    looking at the card.
+  */
+  const [printings, setPrintings] = useState<Array<{
+    printing_id: string; name: string; set_code: string;
+    collector_number: string; rarity?: string;
+  }>>([]);
+  const [sets, setSets] = useState<Record<string, {
+    name: string; year: number; iconUri: string;
+  }>>({});
+  const [swapping, setSwapping] = useState(false);
+  const [moving, setMoving] = useState(false);
+
+  // Loaded on open, not on mount: most visits to this screen are not
+  // about fixing a printing, and this is two queries and a network
+  // round trip for the set names.
+  useEffect(() => {
+    if (!swapping) return;
+    let live = true;
+    void (async () => {
+      const [rows, directory] = await Promise.all([
+        state.printingsOf(stack.card_name),
+        state.setDirectory(),
+      ]);
+      if (!live) return;
+      setSets(directory);
+      setPrintings([...rows].sort(
+        (a, b) => (directory[(b.set_code || '').toLowerCase()]?.year ?? 0)
+          - (directory[(a.set_code || '').toLowerCase()]?.year ?? 0)));
+    })().catch(reporting('looking up the other printings', setProblem));
+    return () => { live = false; };
+  }, [swapping, state, stack.card_name]);
+
+  const swapTo = useCallback(async (printingId: string) => {
+    setMoving(true);
+    try {
+      await state.changePrinting(stack, printingId);
+      // Closed rather than refreshed. This stack is on another
+      // printing now, so the screen is about a card that is no longer
+      // the one it was opened for.
+      onClose();
+    } catch (err) {
+      reporting('changing the printing', setProblem)(err);
+    } finally {
+      setMoving(false);
+    }
+  }, [state, stack, onClose]);
+
   const art = cardImageUrl(stack.printing_id, 'normal');
   const page = scryfallPageUrl(stack.printing_id);
   const faces = detail?.faces ?? [];
@@ -262,6 +318,72 @@ export function CardScreen({ state, stack, onClose }: Props) {
           ) : null}
         </View>
       )}
+
+      {/*
+        Changing which printing these cards are.
+
+        Behind a tap rather than always open: it is a correction, not
+        a thing you do every visit, and a list of twenty-nine
+        near-identical rows above the price history would bury the
+        screen.
+      */}
+      <Pressable
+        style={styles.swapToggle}
+        onPress={() => setSwapping((open) => !open)}
+      >
+        <Text style={styles.swapToggleText}>
+          {swapping ? 'Keep this printing' : 'Wrong printing? Change it'}
+        </Text>
+      </Pressable>
+
+      {swapping ? (
+        <View style={styles.swapBox}>
+          {!printings.length ? (
+            <Text style={styles.muted}>Looking up the printings…</Text>
+          ) : null}
+          {printings.map((row) => {
+            const info = sets[(row.set_code || '').toLowerCase()];
+            const here = row.printing_id === stack.printing_id;
+            return (
+              <Pressable
+                key={row.printing_id}
+                style={[styles.swapRow, here && styles.swapRowHere]}
+                disabled={here || moving}
+                onPress={() => void swapTo(row.printing_id)}
+              >
+                <View style={styles.swapSymbol}>
+                  {info?.iconUri ? (
+                    <SetSymbol
+                      uri={info.iconUri}
+                      size={22}
+                      colour={rarityColour(row.rarity ?? '')}
+                    />
+                  ) : null}
+                </View>
+                <View style={styles.swapText}>
+                  <Text style={styles.swapSet}>
+                    {info?.name || (row.set_code || '').toUpperCase()}
+                  </Text>
+                  <Text style={styles.swapMeta}>
+                    {(row.set_code || '').toUpperCase()}
+                    {` · #${row.collector_number}`}
+                    {info?.year ? ` · ${info.year}` : ''}
+                    {row.rarity ? ` · ${row.rarity}` : ''}
+                  </Text>
+                </View>
+                {/*
+                  The one it is on already is shown and not tappable:
+                  seeing it in the list is how you confirm the app
+                  agrees with you about what you own.
+                */}
+                {here ? (
+                  <Text style={styles.swapHereTag}>on this</Text>
+                ) : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
 
       <View style={styles.ownedRow}>
         <Text style={styles.owned}>
@@ -400,6 +522,25 @@ const styles = StyleSheet.create({
     padding: 24,
     backgroundColor: '#1a1d27',
   },
+  swapToggle: { paddingVertical: 8 },
+  swapToggleText: { color: '#7db8e8', fontSize: 14 },
+  swapBox: { gap: 6, marginBottom: 6 },
+  swapRow: {
+    alignItems: 'center',
+    borderColor: '#242b3a',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    padding: 10,
+  },
+  swapRowHere: { backgroundColor: '#16203033', borderColor: '#2f6f9f' },
+  swapSymbol: { alignItems: 'center', height: 22, justifyContent: 'center',
+    width: 22 },
+  swapText: { flex: 1 },
+  swapSet: { color: '#e4e6eb', fontSize: 14 },
+  swapMeta: { color: '#8a8f9c', fontSize: 12, marginTop: 1 },
+  swapHereTag: { color: '#7db8e8', fontSize: 11 },
   ownedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   owned: { color: '#38a169', fontSize: 16, fontWeight: '700', flex: 1 },
   price: { color: '#8a8f9c', fontSize: 14 },

@@ -82,8 +82,25 @@ export function ScanScreen({ state }: Props) {
   const [result, setResult] = useState<ScanResult | null>(null);
   // The verb matters: filing a card and tagging one you already own look
   // identical on a green flash, and they are opposite operations.
+  /**
+   * The green confirmation, and WHICH printing it was.
+   *
+   * The name alone is not enough. Several earlier passes filed the
+   * right card in the wrong version, and nothing on screen would have
+   * shown it: the flash said "ADDED · Royal Assassin" for a card that
+   * exists twenty-nine times. The set symbol, the code and the number
+   * are the difference, and this is the one moment the card is still
+   * in your hand to check them against.
+   */
   const [flash, setFlash] = useState<
-    { name: string; copy: number; verb: string } | null
+    {
+      name: string;
+      copy: number;
+      verb: string;
+      setCode?: string;
+      number?: string;
+      rarity?: string;
+    } | null
   >(null);
   const [busy, setBusy] = useState(false);
   const [auto, setAuto] = useState(false);
@@ -327,6 +344,9 @@ export function ScanScreen({ state }: Props) {
           name: candidate.name,
           copy,
           verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
+          setCode: candidate.set_code,
+          number: candidate.collector_number,
+          rarity: candidate.rarity,
         });
         setTagged(out.stack_key
           ? { stackKey: out.stack_key, name: candidate.name }
@@ -346,6 +366,9 @@ export function ScanScreen({ state }: Props) {
         name: candidate.name,
         copy,
         verb: alsoTag.length ? `ADDED +${alsoTag.length}` : 'ADDED',
+        setCode: candidate.set_code,
+        number: candidate.collector_number,
+        rarity: candidate.rarity,
       });
       setLastAdded({ candidate, finish, copies: 1 });
       setResult(null);
@@ -525,7 +548,12 @@ export function ScanScreen({ state }: Props) {
               also_collection_uids: alsoTag,
             });
             setFlash({
-              name: local.printing.name, copy: decision.copy, verb: 'ADDED',
+              name: local.printing.name,
+              copy: decision.copy,
+              verb: 'ADDED',
+              setCode: local.printing.set_code,
+              number: local.printing.collector_number,
+              rarity: (local.printing as { rarity?: string }).rarity,
             });
             setTimeout(() => setFlash(null), 950);
             setStatus('Added — next card');
@@ -845,6 +873,27 @@ export function ScanScreen({ state }: Props) {
         <View style={[styles.flash, flash.copy > 1 && styles.flashDupe]}>
           <Text style={styles.flashTick}>{flash.verb}</Text>
           <Text style={styles.flashName}>{flash.name}</Text>
+          {/*
+            Which printing, while the card is still in your hand. The
+            symbol is the fastest check of the three -- you can match a
+            shape against the card without reading anything.
+          */}
+          {flash.setCode ? (
+            <View style={styles.flashPrinting}>
+              {sets[flash.setCode.toLowerCase()]?.iconUri ? (
+                <SetSymbol
+                  uri={sets[flash.setCode.toLowerCase()]?.iconUri ?? ''}
+                  size={22}
+                  colour={rarityColour(flash.rarity ?? '')}
+                />
+              ) : null}
+              <Text style={styles.flashMeta}>
+                {sets[flash.setCode.toLowerCase()]?.name
+                  || flash.setCode.toUpperCase()}
+                {flash.number ? ` · #${flash.number}` : ''}
+              </Text>
+            </View>
+          ) : null}
           {flash.copy > 1 ? (
             <Text style={styles.flashMeta}>copy #{flash.copy} of this card</Text>
           ) : null}
@@ -1597,5 +1646,7 @@ const styles = StyleSheet.create({
   flashDupe: { backgroundColor: 'rgba(214,158,46,0.95)' },
   flashTick: { fontSize: 34, color: '#fff', fontWeight: '700', letterSpacing: 2 },
   flashName: { fontSize: 24, color: '#fff', fontWeight: '700' },
+  flashPrinting: { alignItems: 'center', flexDirection: 'row', gap: 8,
+    marginTop: 6 },
   flashMeta: { fontSize: 15, color: '#fff' },
 });

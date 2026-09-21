@@ -336,6 +336,14 @@ export class MemoryDatabase {
   _selectStacks(text, params) {
     let rows = this._table('stacks').filter((r) => r.quantity > 0);
     let i = 0;
+    // `stacksByPrinting`. Unhandled, this returned EVERY stack whatever
+    // printing was asked for, so a test checking that cards had moved
+    // off one printing and onto another was reading the same list
+    // twice and could not tell the two apart.
+    if (/printing_id = \?/.test(text)) {
+      const printingId = params[i++];
+      rows = rows.filter((r) => r.printing_id === printingId);
+    }
     if (/stack_collections WHERE collection_uid = \?/.test(text)) {
       // The real query is "filed here OR a member here". Both parameters are
       // the same uid.
