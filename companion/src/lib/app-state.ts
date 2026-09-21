@@ -21,12 +21,14 @@ import type { CataloguePrintingRow, IdentifyOptions, LocalIdentifyResult }
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
+import { priceBatches, pricesDue } from './price-refresh.ts';
 import { closerLookAtFooter, needsCloserLook } from './footer-crop.ts';
 import type { CheckReason, Release } from './index-freshness.ts';
 import type { IndexSource } from './index-source.ts';
 import { searchLocally } from './local-search.ts';
 import { deviceTextReader } from './ocr.ts';
 import {
+  USER_AGENT,
   bulkSources,
   readBulk,
   setReleases,
@@ -136,6 +138,9 @@ const LAST_CHECK_KEY = 'index.lastCheckedAt';
 
 /** Whether the user asked us to look on their behalf. Opt-in. */
 const AUTOCHECK_KEY = 'index.autoCheck';
+
+/** When the prices of the cards this phone owns were last refreshed. */
+const PRICED_AT_KEY = 'prices.updatedAt';
 
 /**
  * What free keeps, for a phone with no desktop to ask.
@@ -603,6 +608,68 @@ ${more}`;
     return this.store.setDirectory();
   }
 
+  /** When the owned cards' prices were last brought up to date. */
+  async pricesUpdatedAt(): Promise<number> {
+    return Number((await this.store.getMeta(PRICED_AT_KEY)) ?? 0) || 0;
+  }
+
+  /**
+   * Bring the prices of the cards you own up to date.
+   *
+   * Prices ride in with the card index, because the bulk file carries
+   * them and every row is already being read -- but that file is
+   * 78 MB and prices move daily, so it cannot be how they are KEPT
+   * current. The ones worth keeping current are the ones attached to
+   * something you have, and Scryfall answers seventy-five at a time.
+   * A collection of 88 cards is two requests.
+   *
+   * Partial progress is kept: a refresh that dies on the fourth batch
+   * leaves the first three updated, because three-quarters current
+   * beats none.
+   */
+  async refreshPrices(now = Date.now()): Promise<{ priced: number }> {
+    const owned = await this.store.ownedPrintingIds();
+    const batches = priceBatches(owned);
+    let priced = 0;
+    for (const batch of batches) {
+      const response = await this.plainFetch(
+        'https://api.scryfall.com/cards/collection',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'User-Agent': USER_AGENT,
+          },
+          body: JSON.stringify({ identifiers: batch.map((id) => ({ id })) }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`Scryfall said ${response.status} asking for prices.`);
+      }
+      const body = (await response.json()) as {
+        data?: Array<Record<string, unknown>>;
+      };
+      const rows = (body.data ?? []).map((card) => {
+        const prices = (card.prices ?? {}) as Record<string, unknown>;
+        return {
+          printing_id: String(card.id ?? ''),
+          usd: asMoney(prices.usd),
+          usdFoil: asMoney(prices.usd_foil),
+        };
+      }).filter((r) => r.printing_id);
+      await this.store.putPrices(rows);
+      priced += rows.length;
+      // Stamped per batch, so an interrupted refresh is not mistaken
+      // for one that never happened.
+      await this.store.setMeta(PRICED_AT_KEY, String(now));
+    }
+    if (!batches.length) {
+      await this.store.setMeta(PRICED_AT_KEY, String(now));
+    }
+    return { priced };
+  }
+
   /**
    * Card names matching what somebody is typing.
    *
@@ -770,6 +837,13 @@ ${more}`;
 
     try {
       const { stale } = await this.indexFreshness();
+      // Prices ride along with the same permission and the same trip.
+      // Somebody who asked to be told about new cards is not asking
+      // to be shown month-old money, and this is two requests rather
+      // than a download.
+      if (pricesDue(await this.pricesUpdatedAt(), now)) {
+        await this.refreshPrices(now).catch(() => undefined);
+      }
       return { stale, reason };
     } catch {
       // A failed check is not news, and must not be reported as "up to
@@ -1508,8 +1582,23 @@ ${more}`;
       // the rest, so a deck opened out of range looks the same as one opened
       // at a desk rather than a grid of grey rectangles with no total.
       const remembered = await this.store.cachedSlotFacts();
-      answered = entries.map((entry) => {
-        const hit = remembered.get(entryKey(entry));
+      /*
+        And the phone's OWN index behind that.
+
+        The cache is warmed by the desktop, so a phone that has never
+        had one is empty: no printing, no colours, no price. That is
+        why a standalone phone said "82 cards couldn't be priced"
+        about a collection it otherwise knew everything about -- the
+        catalogue had every one of those cards, and nothing looked.
+      */
+      const local = await this.store.factsForEntries(entries.map((e) => ({
+        name: e.name,
+        printing_id: e.printing_id ?? '',
+        set_code: e.set_code ?? '',
+        collector_number: e.collector_number ?? '',
+      })));
+      answered = entries.map((entry, index) => {
+        const hit = remembered.get(entryKey(entry)) ?? local[index];
         if (!hit) return undefined as unknown as ResolvedSlot;
         return {
           name: entry.name,
@@ -2082,6 +2171,20 @@ export function looksLikeImageFile(value: string): boolean {
   // back file:// on Android and iOS both, so nothing legitimate needs
   // the looser form.
   return v.startsWith('file://') || v.startsWith('content://');
+}
+
+/**
+ * A price as a number, or null.
+ *
+ * Scryfall sends these as strings, and null for anything unpriced.
+ * Blank is NOT zero: `Number('')` is 0, which would put a confident
+ * $0.00 on a card nobody has priced.
+ */
+function asMoney(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 export function buildAppState(

@@ -210,7 +210,12 @@ export const SCHEMA: string[] = [
      -- does not hold. A number and a short word per printing, against
      -- megabytes of text.
      cmc REAL,
-     rarity TEXT NOT NULL DEFAULT ''
+     rarity TEXT NOT NULL DEFAULT '',
+     -- Scryfall's prices, carried in from the same bulk file the rest
+     -- of this row comes from. NULL is "nobody has priced this", which
+     -- is a different thing from free and must not become zero.
+     price_usd REAL,
+     price_usd_foil REAL
    )`,
   // The exact-key lookup: set code plus collector number is how a scan
   // identifies a card when the footer reads cleanly, and it is one indexed
@@ -308,7 +313,8 @@ export interface OracleCard {
 }
 
 export type CatalogueRow =
-  [string, string, string, string, (number | null)?, string?];
+  [string, string, string, string, (number | null)?, string?,
+   (number | null)?, (number | null)?];
 
 /**
  * The extra lists a queued scan was headed for.
@@ -707,21 +713,33 @@ export class LocalStore {
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
       if (!chunk.length) continue;
-      const holes = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ');
+      const holes = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
       await this.db.run(
         `INSERT INTO catalogue
-           (printing_id, name, set_code, collector_number, cmc, rarity)
+           (printing_id, name, set_code, collector_number, cmc, rarity,
+            price_usd, price_usd_foil)
          VALUES ${holes}
          ON CONFLICT(printing_id) DO UPDATE SET
            name = excluded.name,
            set_code = excluded.set_code,
            collector_number = excluded.collector_number,
+           price_usd = excluded.price_usd,
+           price_usd_foil = excluded.price_usd_foil,
            cmc = excluded.cmc,
            rarity = excluded.rarity`,
         // Padded, so a page from an older desktop that sends fewer fields
         // still writes rather than throwing a bind-count error and
         // stranding the whole download.
-        chunk.flatMap((r) => [r[0], r[1], r[2], r[3], r[4] ?? null, r[5] ?? '']),
+        // Eight per row, always. A row with fewer -- the desktop's
+        // catalogue page sends six, and every older caller does --
+        // would otherwise leave two holes unfilled and the NEXT row's
+        // values would slide into them, so a batch of four hundred
+        // printings came out shifted by two columns from the second
+        // one onward.
+        chunk.flatMap((r) => [
+          r[0], r[1], r[2], r[3], r[4] ?? null, r[5] ?? '',
+          r[6] ?? null, r[7] ?? null,
+        ]),
       );
     }
   }
@@ -899,6 +917,127 @@ export class LocalStore {
     return rows.map((r) => ({
       name: String(r.name), printings: Number(r.n || 0),
     }));
+  }
+
+  /**
+   * What this phone's own index knows about a list of deck slots.
+   *
+   * The last resort behind the desktop and behind the cache the
+   * desktop warmed -- and the only one a phone that never had a PC
+   * can use. Without it such a phone showed no prices and no colour
+   * identity for cards its catalogue held in full, which is why a
+   * standalone deck reported "82 cards couldn't be priced".
+   *
+   * Resolved in the order a slot is specific: the exact printing if
+   * the slot names one, then set and number, then any printing of
+   * that name. Colour identity comes from the oracle index, keyed by
+   * name because identity belongs to the card rather than to the
+   * printing.
+   */
+  async factsForEntries(entries: Array<{
+    name: string; printing_id: string; set_code: string;
+    collector_number: string;
+  }>): Promise<Array<{
+    printing_id: string; set_code: string; collector_number: string;
+    price_usd: number | null; color_identity: string[]; type_line: string;
+  } | undefined>> {
+    type Row = {
+      printing_id: string; set_code: string; collector_number: string;
+      price_usd: number | null;
+    };
+    const out: Array<{
+      printing_id: string; set_code: string; collector_number: string;
+      price_usd: number | null; color_identity: string[]; type_line: string;
+    } | undefined> = [];
+    for (const entry of entries) {
+      let row: Row | undefined;
+      if (entry.printing_id) {
+        row = await this.db.get<Row>(
+          'SELECT * FROM catalogue WHERE printing_id = ?',
+          [entry.printing_id]);
+      }
+      if (!row && entry.set_code && entry.collector_number) {
+        row = await this.db.get<Row>(
+          'SELECT * FROM catalogue WHERE set_code = ? AND '
+          + 'collector_number = ?',
+          [entry.set_code.toLowerCase(), entry.collector_number]);
+      }
+      if (!row) {
+        row = await this.db.get<Row>(
+          'SELECT * FROM catalogue WHERE name = ?', [entry.name]);
+      }
+      if (!row) {
+        out.push(undefined);
+        continue;
+      }
+      const card = await this.db.get<{
+        color_identity: string; type_line: string;
+      }>('SELECT * FROM oracle WHERE name = ?', [entry.name]);
+      out.push({
+        printing_id: String(row.printing_id ?? ''),
+        set_code: String(row.set_code ?? ''),
+        collector_number: String(row.collector_number ?? ''),
+        price_usd: row.price_usd ?? null,
+        // The two index sources spell colours differently, so keep
+        // only the five letters and ignore brackets and commas.
+        color_identity: [...String(card?.color_identity ?? '').toUpperCase()]
+          .filter((c) => 'WUBRG'.includes(c)),
+        type_line: String(card?.type_line ?? ''),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Printing ids this phone owns at least one of.
+   *
+   * The set worth keeping prices current for. Everything else in the
+   * catalogue keeps whatever the index download gave it, which is
+   * fine for a card nobody here has.
+   */
+  async ownedPrintingIds(): Promise<string[]> {
+    const rows = await this.db.all<{ printing_id: string }>(
+      `SELECT DISTINCT printing_id FROM stacks
+        WHERE quantity > 0 AND printing_id <> ''`);
+    return rows.map((r) => String(r.printing_id)).filter(Boolean);
+  }
+
+  /** Write fresh prices onto printings already in the catalogue. */
+  async putPrices(rows: Array<{
+    printing_id: string; usd: number | null; usdFoil: number | null;
+  }>): Promise<void> {
+    for (const row of rows) {
+      if (!row.printing_id) continue;
+      // UPDATE, not upsert: a price for a printing the index does not
+      // hold is a price for a card this phone cannot show, and
+      // inserting a row with nothing but an id and a number would put
+      // a nameless entry in the catalogue.
+      await this.db.run(
+        `UPDATE catalogue SET price_usd = ?, price_usd_foil = ?
+          WHERE printing_id = ?`,
+        [row.usd, row.usdFoil, row.printing_id]);
+    }
+  }
+
+  /** What the catalogue knows about these printings. */
+  async pricesFor(printingIds: string[]): Promise<Record<string, {
+    usd: number | null; usdFoil: number | null;
+  }>> {
+    const out: Record<string, { usd: number | null; usdFoil: number | null }>
+      = {};
+    for (const id of printingIds) {
+      if (!id) continue;
+      const row = await this.db.get<{
+        price_usd: number | null; price_usd_foil: number | null;
+      }>('SELECT price_usd, price_usd_foil FROM catalogue WHERE printing_id = ?',
+        [id]);
+      if (!row) continue;
+      out[id] = {
+        usd: row.price_usd ?? null,
+        usdFoil: row.price_usd_foil ?? null,
+      };
+    }
+    return out;
   }
 
   /** Remember what the set codes mean. */

@@ -56,10 +56,36 @@ describe('what belongs in the index', () => {
 
 describe('what a card becomes', () => {
   test('a printing row carries the exact key a scan matches on', () => {
-    // Six: the four a scan matches on, plus mana value and rarity, which
-    // match nothing but are filters somebody expects to work.
-    assert.deepEqual(toPrintingRow(CARD),
-      ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common']);
+    // Eight: the four a scan matches on, mana value and rarity, which
+    // match nothing but are filters somebody expects to work, and the
+    // two prices -- which come free from a file already being read and
+    // are the only way a phone with no PC can value a deck.
+    assert.deepEqual(toPrintingRow({ ...CARD, prices: { usd: '3.09', usd_foil: '4.69' } }),
+      ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common', 3.09, 4.69]);
+  });
+
+  test('an unpriced card is null, never zero', () => {
+    // Scryfall sends null for a card nobody has priced. Folding that
+    // into a deck total as zero makes the number look authoritative
+    // and wrong.
+    assert.deepEqual(toPrintingRow({ ...CARD, prices: { usd: null } }).slice(6),
+      [null, null]);
+    assert.deepEqual(toPrintingRow(CARD).slice(6), [null, null]);
+  });
+
+  test('prices arrive as strings and are stored as numbers', () => {
+    // "10.00" and "9.00" sort the wrong way round as text, and adding
+    // them concatenates.
+    const row = toPrintingRow({ ...CARD, prices: { usd: '10.00' } });
+    assert.equal(typeof row[6], 'number');
+    assert.equal(row[6], 10);
+  });
+
+  test('nonsense in the price field is treated as no price', () => {
+    for (const bad of ['', 'n/a', '-1', {}]) {
+      assert.equal(toPrintingRow({ ...CARD, prices: { usd: bad } })[6], null,
+        String(bad));
+    }
   });
 
   test('an oracle row carries what the card does', () => {

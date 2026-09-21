@@ -40,9 +40,20 @@ export interface BulkSource {
   updatedAt: string;
 }
 
-/** One row of the printing index: id, name, set, number, mana value. */
+/**
+ * One row of the printing index.
+ *
+ * id, name, set, number, mana value, rarity, and the two prices.
+ *
+ * The prices come free. The bulk file carries `usd` and `usd_foil` on
+ * every card and we already stream past all hundred thousand of them;
+ * not keeping them meant a phone with no PC could not put a number on
+ * a deck it had just built, and said "82 cards couldn't be priced"
+ * about a collection it knew everything else about.
+ */
 export type PrintingRow =
-  [string, string, string, string, number | null, string];
+  [string, string, string, string, number | null, string,
+   number | null, number | null];
 
 /** One row of the oracle index. */
 export type OracleIndexRow =
@@ -177,6 +188,7 @@ export function toPrintingRow(
   const name = String(card.name ?? '');
   if (!id || !name) return null;
   const cmc = card.cmc;
+  const prices = (card.prices ?? {}) as Record<string, unknown>;
   return [
     id,
     name,
@@ -184,7 +196,28 @@ export function toPrintingRow(
     String(card.collector_number ?? ''),
     typeof cmc === 'number' ? cmc : null,
     String(card.rarity ?? ''),
+    money(prices.usd),
+    money(prices.usd_foil),
   ];
+}
+
+/**
+ * A price as a number, or null when there isn't one.
+ *
+ * Scryfall sends these as STRINGS -- "3.09" -- and null for a card
+ * nobody has priced. Storing the string would sort "10.00" before
+ * "9.00" and adding them up would concatenate; null has to stay null
+ * rather than becoming zero, because a deck total that silently folds
+ * in the cards it could not price looks authoritative and is not.
+ */
+function money(value: unknown): number | null {
+  if (value == null) return null;
+  // Blank is not zero. `Number('')` is 0, so an empty price field
+  // would have become a confident $0.00 -- the exact failure this
+  // function exists to avoid, in the one case easiest to miss.
+  if (typeof value === 'string' && !value.trim()) return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /** The oracle-index row for one card, or null. */

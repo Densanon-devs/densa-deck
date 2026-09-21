@@ -21,6 +21,7 @@ import { checkArtReachable } from '../lib/images.ts';
 import type { ArtReach } from '../lib/images.ts';
 import { describeConnection } from '../lib/status.ts';
 import { lastCheckedInWords } from '../lib/index-freshness.ts';
+import { pricedInWords } from '../lib/price-refresh.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -117,6 +118,17 @@ export function ConnectionScreen({
   const [refreshing, setRefreshing] = useState(false);
   const [autoCheck, setAutoCheckState] = useState(false);
   const [lastLook, setLastLook] = useState(0);
+  /*
+    Prices, and when they were last made current.
+
+    They arrive with the card index, because the bulk file carries
+    them -- but that file is 78 MB and prices move daily, so it cannot
+    be how they are kept current. Refreshing only the printings this
+    phone OWNS is two requests for a collection of 88, which is cheap
+    enough to offer as a button and to do on a schedule.
+  */
+  const [pricedAt, setPricedAt] = useState(0);
+  const [pricing, setPricing] = useState(false);
   // Null means "not asked yet", which is not the same as "up to date".
   const [behind, setBehind] = useState<boolean | null>(null);
   // Which sets, so the prompt names them rather than saying "newer data".
@@ -125,12 +137,14 @@ export function ConnectionScreen({
   useEffect(() => {
     let live = true;
     void (async () => {
-      const [on, at] = await Promise.all([
+      const [on, at, priced] = await Promise.all([
         state.autoCheckEnabled(), state.lastCheckedAt(),
+        state.pricesUpdatedAt(),
       ]);
       if (!live) return;
       setAutoCheckState(on);
       setLastLook(at);
+      setPricedAt(priced);
     })().catch(() => {});
     return () => { live = false; };
   }, [state]);
@@ -147,6 +161,23 @@ export function ConnectionScreen({
       setProblem(`${(err as Error).message}. Checking needs the internet.`);
     } finally {
       setChecking(false);
+    }
+  }, [state]);
+
+  const refreshPrices = useCallback(async () => {
+    setPricing(true);
+    setProblem('');
+    try {
+      const { priced } = await state.refreshPrices();
+      setPricedAt(await state.pricesUpdatedAt());
+      setProblem('');
+      if (!priced) {
+        setProblem('No cards to price yet — scan or add some first.');
+      }
+    } catch (err) {
+      setProblem(`${(err as Error).message}. Prices need the internet.`);
+    } finally {
+      setPricing(false);
     }
   }, [state]);
 
@@ -341,6 +372,36 @@ export function ConnectionScreen({
           Looks when a new set is released \u2014 the dates come from Scryfall,
           so it follows the real schedule \u2014 and at least once a quarter
           otherwise. It never downloads anything without asking.
+        </Text>
+      </View>
+
+      {/*
+        Money. Separate from the card index because they go stale on
+        completely different clocks: a set arrives every few weeks, a
+        price moves every day.
+      */}
+      <View style={styles.pcOffer}>
+        <Text style={styles.pcTitle}>Prices</Text>
+        <Text style={styles.summary}>
+          Card values come from Scryfall. They arrive with the card index
+          and are refreshed for the cards you own — a couple of requests,
+          not another download.
+        </Text>
+        <Text style={styles.muted}>
+          Last updated {pricedInWords(pricedAt, Date.now())}.
+        </Text>
+        <Pressable
+          style={styles.pcButton}
+          disabled={pricing}
+          onPress={() => void refreshPrices()}
+        >
+          <Text style={styles.pcButtonText}>
+            {pricing ? 'Updating…' : 'Update prices now'}
+          </Text>
+        </Pressable>
+        <Text style={styles.muted}>
+          Updated automatically along with the card check above, when they
+          are more than a week old.
         </Text>
       </View>
 

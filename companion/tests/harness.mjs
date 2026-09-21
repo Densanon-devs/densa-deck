@@ -241,6 +241,15 @@ export class MemoryDatabase {
   async all(sql, params = []) {
     const text = sql.trim().replace(/\s+/g, ' ');
 
+    // Which printings are owned, for the price refresh. Distinct,
+    // because four copies of a card is one printing and one price.
+    if (/SELECT DISTINCT printing_id FROM stacks/i.test(text)) {
+      const seen = new Set();
+      for (const row of this._table('stacks')) {
+        if (row.quantity > 0 && row.printing_id) seen.add(row.printing_id);
+      }
+      return [...seen].map((printing_id) => ({ printing_id }));
+    }
     if (/FROM stacks/i.test(text) && /SELECT \*/i.test(text)) {
       return this._selectStacks(text, params);
     }
@@ -468,6 +477,26 @@ export class MemoryDatabase {
     }
     if (/COUNT\(\*\) AS n FROM sync_events/i.test(text)) {
       return { n: this._table('sync_events').filter((r) => r.pushed === 0).length };
+    }
+    // One row out of the card index. `factsForEntries` asks for a
+    // printing three ways -- by id, by set and number, by name -- so
+    // that a deck slot can be priced from the phone's own catalogue
+    // when there is no desktop and no cache to ask.
+    if (/FROM catalogue/i.test(text)) {
+      const rows = this._table('catalogue');
+      if (/WHERE printing_id = \?/i.test(text)) {
+        return rows.find((r) => r.printing_id === params[0]);
+      }
+      if (/WHERE set_code = \? AND collector_number = \?/i.test(text)) {
+        return rows.find((r) => r.set_code === params[0]
+          && r.collector_number === params[1]);
+      }
+      if (/WHERE name = \?/i.test(text)) {
+        return rows.find((r) => r.name === params[0]);
+      }
+    }
+    if (/FROM oracle/i.test(text) && /WHERE name = \?/i.test(text)) {
+      return this._table('oracle').find((r) => r.name === params[0]);
     }
     throw new Error(`MemoryDatabase cannot get: ${text.slice(0, 90)}`);
   }
