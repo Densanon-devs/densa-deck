@@ -370,7 +370,11 @@ export function ScanScreen({ state }: Props) {
   }, [lastAdded, state, target]);
 
   const handlePhoto = useCallback(
-    async (base64: string) => {
+    // BOTH, because the two readers want different things: the on-device
+    // recogniser opens a file off the disk, and the PC is sent the bytes
+    // over the wire. Passing one where the other was wanted is the bug
+    // that made offline scanning fail from the day it shipped.
+    async ({ uri, base64 }: { uri: string; base64: string }) => {
       busyRef.current = true;
       setBusy(true);
       setStatus('Reading...');
@@ -385,7 +389,7 @@ export function ScanScreen({ state }: Props) {
       // catalogue, so anything the phone cannot place EXACTLY still goes to
       // it. This is a fast path, not a replacement.
       try {
-        const local = await state.identifyOffline(base64);
+        const local = await state.identifyOffline(uri);
         if (local) {
           const decision = guard.current.consider(
             local.printing.name, Date.now());
@@ -407,9 +411,15 @@ export function ScanScreen({ state }: Props) {
           setStatus('Added — next card');
           return;
         }
-      } catch {
+      } catch (err) {
         // The recogniser or the index let us down. The PC is the answer to
         // that, and it is the next thing tried.
+        //
+        // Recorded rather than swallowed. A bare `catch {}` here is what
+        // hid a broken local scanner behind a working PC for the whole
+        // life of the feature: every phone silently fell through, and
+        // nothing anywhere said why.
+        recordCrash(err, 'reading the card on this phone', false);
       }
 
       try {
@@ -544,8 +554,15 @@ export function ScanScreen({ state }: Props) {
       setStatus('The camera returned an empty picture.');
       return;
     }
+    if (!shot.uri) {
+      setStatus('The camera did not save the picture anywhere to read it '
+                + 'from.');
+      return;
+    }
+    // Frame-sameness is judged on the BYTES: two shots of a frozen camera
+    // are identical data at different paths, so the path cannot detect it.
     scanner.current.captured(shot.base64);
-    await handlePhoto(shot.base64);
+    await handlePhoto({ uri: shot.uri, base64: shot.base64 });
   }, [handlePhoto]);
 
   // The auto loop. Every decision it makes lives in AutoScanner, which is

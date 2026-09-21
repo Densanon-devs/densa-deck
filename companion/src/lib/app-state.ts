@@ -218,6 +218,27 @@ export class AppState {
     // the match never looks at.
     const { scanReady } = await this.catalogueReady();
     if (!scanReady) return null;
+
+    /*
+      A path, not the picture itself.
+
+      ML Kit opens the image off the filesystem, so it needs a URI. The
+      scan screen handed it `shot.base64` for the entire life of this
+      feature, ML Kit threw, and a bare `catch {}` upstream turned the
+      throw into "ask the PC instead". With a PC in reach that looked
+      perfect; on a phone with no PC there was nothing underneath, and
+      every scan failed with a message about the lighting.
+
+      Refused loudly rather than passed on, because the silence is what
+      made it survive so long.
+    */
+    if (!looksLikeImageFile(imageUri)) {
+      throw new Error(
+        'The card recogniser needs a file path, not image data. '
+        + `Got ${imageUri.slice(0, 24)}...`,
+      );
+    }
+
     const text = await this.textReader.read(imageUri);
     if (!text) return null;
     const out = await identifyLocally(text, this.store);
@@ -1861,6 +1882,24 @@ export class AppState {
 }
 
 /** Wire up a store, an engine and a client into something the UI can hold. */
+/**
+ * Whether this is something the native recogniser can open.
+ *
+ * Deliberately a whitelist. `data:` URLs are rejected along with raw
+ * base64: both are the picture rather than a path to it, and the native
+ * side wants a file it can read.
+ */
+export function looksLikeImageFile(value: string): boolean {
+  const v = (value || '').trim();
+  // A real scheme, and nothing else. A bare absolute path was in this
+  // list for one draft and is exactly the hole it must not have: a
+  // base64 JPEG begins "/9j/", so "starts with a slash" waves the
+  // picture itself through as though it were a path. expo-camera hands
+  // back file:// on Android and iOS both, so nothing legitimate needs
+  // the looser form.
+  return v.startsWith('file://') || v.startsWith('content://');
+}
+
 export function buildAppState(
   store: LocalStore,
   pairing: Pairing,

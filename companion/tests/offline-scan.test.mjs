@@ -657,3 +657,73 @@ describe('organising never needs the PC', () => {
       false);
   });
 });
+
+describe('what the recogniser is actually handed', () => {
+  /**
+   * The bug this exists to stop coming back.
+   *
+   * ML Kit reads an image off the FILESYSTEM -- `TextRecognition.recognize`
+   * takes a file URI. The scan screen was handing it `shot.base64`, the
+   * raw image data, from the first commit that added offline scanning.
+   * `shot.uri` was never used anywhere in the screen.
+   *
+   * On a device that throws inside ML Kit, the throw was swallowed by a
+   * bare `catch {}`, and the photo quietly went to the PC instead. So with
+   * a PC in reach everything looked perfect, and local identification had
+   * in fact never once worked. Standalone took the PC away and left
+   * nothing underneath it.
+   *
+   * No test caught it because every test injects TEXT through the
+   * TextReader seam -- which is the right seam for the matcher and is
+   * blind, by construction, to what the real reader is given. So this
+   * checks the argument itself.
+   */
+  function reader(seen) {
+    return { async read(uri) { seen.push(uri); return ''; } };
+  }
+
+  async function phone(seen) {
+    const db = new MemoryDatabase();
+    const store = new LocalStore(db);
+    await store.init();
+    const state = buildAppState(store, { baseUrl: '', token: '' }, 'phone-1',
+                                testUuid, undefined, undefined, reader(seen));
+    await store.putCatalogue([['p-sol', 'Sol Ring', 'cmm', '410', 1, 'u']]);
+    await store.putOracle([
+      ['o-sol', 'Sol Ring', 'Artifact', 'Adds mana.', '{1}', 1, ''],
+    ]);
+    return { store, state };
+  }
+
+  test('a file URI reaches the recogniser unchanged', async () => {
+    const seen = [];
+    const { state } = await phone(seen);
+    await state.identifyOffline('file:///data/user/0/com.densanon.densadeck/x.jpg');
+    assert.deepEqual(seen,
+      ['file:///data/user/0/com.densanon.densadeck/x.jpg']);
+  });
+
+  test('raw image data is refused, loudly, instead of being passed on',
+    async () => {
+      // What the screen was passing. ML Kit parses it as a relative path,
+      // fails to open it, and throws -- into a catch that said nothing.
+      const seen = [];
+      const { state } = await phone(seen);
+      await assert.rejects(
+        () => state.identifyOffline('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAg'),
+        /file/i);
+      assert.deepEqual(seen, [],
+        'it should not have reached the recogniser at all');
+    });
+
+  test('and a data: URL is refused too', async () => {
+    // The plausible "fix" that is also wrong: the native side wants a
+    // path it can open, not an inline payload.
+    const seen = [];
+    const { state } = await phone(seen);
+    await assert.rejects(
+      () => state.identifyOffline('data:image/jpeg;base64,/9j/4AAQSkZJRg'),
+      /file/i);
+    assert.deepEqual(seen, []);
+  });
+});
