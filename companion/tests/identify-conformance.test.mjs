@@ -484,3 +484,135 @@ describe('a power/toughness box that reads like a collector number', () => {
     assert.deepEqual(asked, ['mkm/1'], 'it should have stopped at the hit');
   });
 });
+
+describe('when the footer cannot be read but the title can', () => {
+  /**
+   * Two real scans that came to nothing with the name sitting right
+   * there at the top of the picture:
+   *
+   *   * an M11 Island. Cards printed before the 2014 frame carry NO set
+   *     code at all -- there is a set symbol, which is a picture, and
+   *     the copyright line. There is nothing to read, and no amount of
+   *     light or zoom will produce a set code that was never printed.
+   *     That is most of Magic's history.
+   *   * a sleeved Lazav at an angle, whose collector line simply did
+   *     not come back.
+   *
+   * The name did, both times, and `idx_cat_name` has existed since the
+   * index was designed with the comment "the fallback, when the footer
+   * is unreadable but the title is not". This is that fallback.
+   *
+   * Exact equality only, never fuzzy: a misread name matches nothing,
+   * which is safe, while a fuzzy one matches the wrong card, which is
+   * the entire class of error this matcher exists to avoid. The fuzzy
+   * half stays on the desktop.
+   *
+   * It is worth having because of how the catalogue is shaped: 46% of
+   * card names have exactly one printing and 77% have three or fewer,
+   * so for most cards a name IS an identification. The exceptions are
+   * the basic lands, with eight hundred printings each.
+   */
+  function catalogue(byName) {
+    return {
+      async printingByKey() { return null; },
+      async printingsByName(name) { return byName[name] ?? []; },
+    };
+  }
+
+  const LAZAV = { printing_id: 'rna-212', name: 'Lazav, the Multifarious',
+                  set_code: 'rna', collector_number: '212' };
+
+  test('a name with exactly one printing is identified outright', async () => {
+    // No ambiguity to resolve: the name picks out one row in the whole
+    // catalogue, which is a stronger claim than a footer key plus a
+    // name that agrees.
+    const out = await identifyLocally(
+      'Lazav, the Multifarious\nLegendary Creature - Shapeshifter',
+      catalogue({ 'Lazav, the Multifarious': [LAZAV] }));
+
+    assert.equal(out.autoAddable, true);
+    assert.equal(out.candidates[0].printing_id, 'rna-212');
+  });
+
+  test('a handful of printings are offered rather than guessed', async () => {
+    const printings = [LAZAV, { ...LAZAV, printing_id: 'rvr-1', set_code: 'rvr' }];
+    const out = await identifyLocally(
+      'Lazav, the Multifarious',
+      catalogue({ 'Lazav, the Multifarious': printings }));
+
+    assert.equal(out.autoAddable, false, 'which printing is a real question');
+    assert.equal(out.candidates.length, 2);
+    assert.match(out.reason, /which printing|printings/i);
+  });
+
+  test('eight hundred printings is not a pick list', async () => {
+    // A basic Island. Offering the user 828 rows is not help, and
+    // guessing one of them is worse.
+    const islands = Array.from({ length: 828 }, (_, i) => ({
+      printing_id: `i${i}`, name: 'Island',
+      set_code: 's', collector_number: String(i),
+    }));
+    const out = await identifyLocally('Island\nBasic Land - Island',
+                                      catalogue({ Island: islands }));
+
+    assert.equal(out.autoAddable, false);
+    assert.equal(out.candidates.length, 0, 'no useful shortlist exists');
+    assert.match(out.reason, /828|too many/i);
+  });
+
+  test('a misread name matches nothing, which is the safe answer', async () => {
+    // "Shapeshifrer" is what the recogniser actually returned. Exact
+    // equality means a damaged name simply fails rather than landing on
+    // a neighbour.
+    const out = await identifyLocally(
+      'Lazav, the Multifarous\nLegendary Creature - Shapeshifrer',
+      catalogue({ 'Lazav, the Multifarious': [LAZAV] }));
+
+    assert.equal(out.autoAddable, false);
+    assert.equal(out.candidates.length, 0);
+  });
+
+  test('a good footer still wins and the names are never consulted',
+    async () => {
+      // The fallback must not slow down or second-guess the common path.
+      let askedNames = 0;
+      const cat = {
+        async printingByKey(set, num) {
+          return set === 'rna' && num === '212' ? LAZAV : null;
+        },
+        async printingsByName(name) { askedNames += 1; return []; },
+      };
+      const out = await identifyLocally(
+        'Lazav, the Multifarious\n212 R\nRNA • EN', cat);
+
+      assert.equal(out.autoAddable, true);
+      assert.equal(askedNames, 0);
+    });
+
+  test('a name beats a footer key whose card disagreed', async () => {
+    // The key resolved to a real but different printing, and the card
+    // says its own name plainly. The name is the better evidence.
+    const cat = {
+      async printingByKey() {
+        return { printing_id: 'wrong', name: 'Something Else',
+                 set_code: 'rna', collector_number: '1' };
+      },
+      async printingsByName(name) {
+        return name === 'Lazav, the Multifarious' ? [LAZAV] : [];
+      },
+    };
+    const out = await identifyLocally(
+      'Lazav, the Multifarious\n1/4\nRNA • EN', cat);
+
+    assert.equal(out.autoAddable, true);
+    assert.equal(out.candidates[0].printing_id, 'rna-212');
+  });
+
+  test('an index with no name lookup at all still works', async () => {
+    // `printingsByName` is optional so every existing caller and fake
+    // keeps working untouched.
+    const out = await identifyLocally('Lazav, the Multifarious',
+                                      { async printingByKey() { return null; } });
+    assert.equal(out.autoAddable, false);
+  });
+});

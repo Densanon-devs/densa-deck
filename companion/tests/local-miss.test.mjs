@@ -36,7 +36,9 @@ describe('why a local scan came to nothing', () => {
       ['Etrata, Deadly Fugitive', 'Legendary Creature - Vampire Assassin',
        'Deathtouch'].join('\n'));
     assert.match(out, /bottom edge|set code/i);
-    assert.match(out, /Etrata/, 'it should quote what it did read');
+    assert.match(out, /Deathtouch/,
+      'the END of the read, where the footer would be — quoting the '
+      + 'title back shows the part that plainly worked');
     assert.doesNotMatch(out, /not in this phone/i,
       'nothing was looked up, so nothing can be missing from the index');
   });
@@ -50,6 +52,16 @@ describe('why a local scan came to nothing', () => {
   test('a long read is truncated rather than filling the screen', () => {
     const out = describeLocalMiss('x'.repeat(400));
     assert.ok(out.length < 250, `status was ${out.length} characters`);
+  });
+
+  test('and truncation keeps the END, which is where the footer is', () => {
+    // The footer is the last thing on a card. Quoting the first sixty
+    // characters showed the title and type line -- the part that
+    // plainly worked -- and hid the only region in question.
+    const out = describeLocalMiss(`STARTMARK ${'pad '.repeat(40)}TAILMARK`);
+    assert.match(out, /TAILMARK/, 'the end is what matters');
+    assert.doesNotMatch(out, /STARTMARK/, 'the beginning is not');
+    assert.match(out, /Read "\.\.\./, 'and it says it was cut');
   });
 
   test('a key that was read but matched nothing says so', () => {

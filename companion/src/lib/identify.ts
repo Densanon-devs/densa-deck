@@ -41,6 +41,12 @@ export interface LocalCatalogue {
     setCode: string,
     collectorNumber: string,
   ): Promise<CataloguePrintingRow | null>;
+  /**
+   * Every printing of a card with exactly this name.
+   *
+   * Optional so an index without it, or a test fake, keeps working.
+   */
+  printingsByName?(name: string): Promise<CataloguePrintingRow[]>;
 }
 
 export interface LocalIdentifyResult {
@@ -372,6 +378,14 @@ export function promoKey(
   ];
 }
 
+/**
+ * How many printings are worth showing as a pick list.
+ *
+ * Above this the answer is "read the footer", because scrolling a
+ * hundred near-identical rows is not a choice anyone makes correctly.
+ */
+export const NAME_SHORTLIST = 8;
+
 export interface IdentifyOptions {
   /**
    * Look for the prerelease printing before the ordinary one.
@@ -460,6 +474,61 @@ export async function identifyLocally(
       continue;
     }
     return { identity, candidates: [hit], autoAddable: true, reason: '' };
+  }
+
+  /*
+    No key worked. Try the title.
+
+    Cards printed before the 2014 frame carry NO set code at all — a set
+    symbol, which is a picture, and a copyright line. There is nothing
+    to read and no amount of light or zoom will produce one, and that is
+    most of Magic's history. A sleeved card at an angle loses the
+    collector line the same way, for a different reason.
+
+    The name survives both, and the catalogue is shaped so that it is
+    usually enough: 46% of card names have exactly one printing and 77%
+    have three or fewer. `idx_cat_name` has existed since the index was
+    designed, with the comment "the fallback, when the footer is
+    unreadable but the title is not". This is that fallback.
+
+    Exact equality, never fuzzy. A damaged name matches nothing, which
+    is safe; a fuzzy one matches a neighbour, which is the whole class
+    of error this matcher exists to avoid. The fuzzy half stays on the
+    desktop, where a person is looking at the screen.
+  */
+  if (catalogue.printingsByName) {
+    const tried = new Set<string>();
+    for (const name of names) {
+      if (tried.has(name)) continue;
+      tried.add(name);
+      const printings = await catalogue.printingsByName(name);
+      if (!printings.length) continue;
+
+      identity.name = printings[0]?.name ?? name;
+      if (printings.length === 1) {
+        // The name picks out one row in the entire catalogue, which is
+        // a stronger claim than a key plus a name that agrees with it.
+        return {
+          identity, candidates: printings, autoAddable: true, reason: '',
+        };
+      }
+      if (printings.length <= NAME_SHORTLIST) {
+        return {
+          identity, candidates: printings, autoAddable: false,
+          reason: `Read '${identity.name}' but not the set and number, `
+            + `so which of its ${printings.length} printings this is `
+            + 'needs a tap.',
+        };
+      }
+      // A basic land. Eight hundred rows is not a shortlist, and
+      // picking one of them is worse than saying so.
+      return {
+        identity, candidates: [], autoAddable: false,
+        reason: `Read '${identity.name}', which has ${printings.length} `
+          + 'printings — too many to choose from without the set code '
+          + 'and number along the bottom edge.',
+      };
+    }
   }
 
   // Every key tried and none confirmed. An unconfirmed hit still beats

@@ -34,7 +34,13 @@ export function describeLocalMiss(text: string, reason = ''): string {
   }
   const keys = footerKeys(read);
   if (!keys.length) {
-    return `Read "${read.slice(0, 60)}" but no set code and number in it. `
+    // The TAIL, not the head. The footer is the last thing on a card,
+    // so quoting the first sixty characters showed the title and the
+    // type line -- the part that plainly worked -- and hid the only
+    // region in question. It sent me looking at glare on the artwork
+    // twice.
+    const tail = read.length > 60 ? `...${read.slice(-60)}` : read;
+    return `Read "${tail}" but no set code and number in it. `
       + 'The small line along the bottom edge is the part that matters — '
       + 'zoom in on it, or tilt the card away from the glare.';
   }
