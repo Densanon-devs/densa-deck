@@ -910,7 +910,7 @@ export class LocalStore {
 
   async printingsByName(name: string): Promise<Array<{
     printing_id: string; name: string;
-    set_code: string; collector_number: string;
+    set_code: string; collector_number: string; rarity?: string;
   }>> {
     return this.db.all('SELECT * FROM catalogue WHERE name = ?', [name]);
   }

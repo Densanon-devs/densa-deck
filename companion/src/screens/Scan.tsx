@@ -66,6 +66,7 @@ import { whileBusy } from '../lib/busy.ts';
 import { BuzzGuard } from '../lib/buzz-policy.ts';
 import { FrameGuide } from './FrameGuide.tsx';
 import { SetSymbol } from './SetSymbol.tsx';
+import { rarityColour } from '../lib/set-symbol.ts';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
 
@@ -1322,6 +1323,9 @@ export function ScanScreen({ state }: Props) {
                     <SetSymbol
                       uri={sets[candidate.set_code.toLowerCase()]?.iconUri
                         ?? ''}
+                      // On a real card the symbol's colour IS its
+                      // rarity, so the list shows what the card shows.
+                      colour={rarityColour(candidate.rarity ?? '')}
                     />
                   ) : null}
                 </View>
@@ -1341,6 +1345,7 @@ export function ScanScreen({ state }: Props) {
                   */}
                   <Text style={styles.candidateCode}>
                     {candidate.set_code.toUpperCase()}
+                    {candidate.rarity ? ` · ${candidate.rarity}` : ''}
                   </Text>
                 </View>
               </View>

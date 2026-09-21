@@ -13,7 +13,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { isColoured, recolourSvg } from '../src/lib/set-symbol.ts';
+import { isColoured, rarityColour, recolourSvg }
+  from '../src/lib/set-symbol.ts';
 
 const WHITE = '#e4e6eb';
 
@@ -88,5 +89,49 @@ describe('telling a coloured mark from a black one', () => {
 
   test('a palette is', () => {
     assert.equal(isColoured(COLOURED), true);
+  });
+});
+
+describe('the colour a set symbol is printed in', () => {
+  /**
+   * Scryfall's symbol file is a single-colour silhouette and carries
+   * no rarity, so whitening them lost nothing -- but it also threw
+   * away something the phone already knows. The index stores a rarity
+   * per printing, and on a real card the symbol's colour IS its
+   * rarity. The pick list can show what the card shows.
+   */
+  test('the four rarities are four different colours', () => {
+    const seen = ['mythic', 'rare', 'uncommon', 'common'].map(rarityColour);
+    assert.equal(new Set(seen).size, 4, 'each has to be distinguishable');
+  });
+
+  test('special frames get their own colour too', () => {
+    // 392 printings in the real catalogue, so not hypothetical.
+    assert.notEqual(rarityColour('special'), rarityColour('rare'));
+    assert.notEqual(rarityColour('special'), rarityColour('common'));
+  });
+
+  test('common is light, never black', () => {
+    // It is printed black, and black on this screen is the unreadable
+    // symbol the whole module exists to fix.
+    const out = rarityColour('common').toLowerCase();
+    assert.notEqual(out, '#000');
+    assert.notEqual(out, '#000000');
+    // Bright enough to read on a near-black background.
+    const n = parseInt(out.slice(1), 16);
+    const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587
+      + (n & 255) * 0.114;
+    assert.ok(lum > 140, `too dark to read: ${out} (luminance ${lum})`);
+  });
+
+  test('an unknown or missing rarity falls back rather than vanishing', () => {
+    // A phone whose index predates the rarity column has '' here, and
+    // an invisible symbol would be worse than an uncoloured one.
+    assert.equal(rarityColour(''), rarityColour('common'));
+    assert.equal(rarityColour('nonsense'), rarityColour('common'));
+  });
+
+  test('case and padding do not decide it', () => {
+    assert.equal(rarityColour('  Mythic '), rarityColour('mythic'));
   });
 });

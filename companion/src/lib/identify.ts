@@ -33,6 +33,14 @@ export interface CataloguePrintingRow {
   name: string;
   set_code: string;
   collector_number: string;
+  /**
+   * Optional because a phone whose index predates the column has none.
+   *
+   * The pick list draws each set symbol in its rarity's colour, which
+   * is what the colour means on the printed card. A row without one
+   * falls back rather than vanishing.
+   */
+  rarity?: string;
 }
 
 /** Somewhere to look printings up — the phone's own index, in practice. */

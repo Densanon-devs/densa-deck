@@ -69,3 +69,34 @@ export function recolourSvg(svg: string, colour: string): string {
   // Put the colour on the root and let it inherit.
   return text.replace(/<svg\b/i, `<svg fill="${colour}"`);
 }
+
+/**
+ * The colour a set symbol is printed in, which is its rarity.
+ *
+ * Worth saying because it is easy to assume otherwise: Scryfall's
+ * `icon_svg_uri` is a single-colour silhouette and carries no rarity
+ * at all. Painting them white lost nothing, because there was never
+ * anything there to lose — but it also threw away the chance to say
+ * something the phone already knows. The index stores a rarity per
+ * printing, and on a real card that is exactly what the symbol's
+ * colour means.
+ *
+ * So the pick list shows what the card shows: gold for rare, silver
+ * for uncommon, the mythic orange, and purple for the special frames.
+ *
+ * Common is the one that cannot be faithful. It is printed black, and
+ * black on this screen is the unreadable symbol this whole module
+ * exists to fix, so it takes a plain light grey — which reads as "no
+ * special colour", the same thing black means on paper.
+ */
+export function rarityColour(rarity: string): string {
+  switch ((rarity || '').trim().toLowerCase()) {
+    case 'mythic': return '#E0662B';
+    case 'rare': return '#D3B25A';
+    case 'uncommon': return '#A9B3BD';
+    case 'special':
+    case 'bonus': return '#B07FD0';
+    // Common, and anything the catalogue has not got a rarity for.
+    default: return '#D8DDE3';
+  }
+}

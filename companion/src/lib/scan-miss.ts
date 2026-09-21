@@ -89,6 +89,7 @@ export function asScanResult(local: LocalIdentifyResult): ScanResult {
       set_name: '',
       collector_number: row.collector_number,
       finishes: foil ? ['nonfoil', 'foil'] : ['nonfoil'],
+      rarity: row.rarity ?? '',
     })),
   };
 }

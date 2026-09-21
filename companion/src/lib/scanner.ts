@@ -21,6 +21,8 @@ export interface ScanCandidate {
   set_name: string;
   collector_number: string;
   finishes: string[];
+  /** For drawing the set symbol in the colour the card prints it. */
+  rarity?: string;
   price_usd?: number | null;
   price_usd_foil?: number | null;
 }
