@@ -2004,11 +2004,30 @@ ${more}`;
       // the browser can send — one that quietly returned nothing unless a
       // name was typed read as the app refusing to find cards.
       const limit = Number(query.limit ?? 60);
-      const owned = new Set(
-        (await this.store.listStacks())
-          .filter((s) => s.quantity > 0)
-          .map((s) => s.card_name.trim().toLowerCase()),
-      );
+      /*
+        What is owned, and WHICH printings of it.
+
+        The ids are the point. A name answers "do I have one of
+        these"; it cannot answer "show me the one I have", and Only
+        Mine asks the second -- so the deck builder was offering the
+        newest reprint of every card to somebody holding older copies.
+
+        Scoped to one collection when asked. `owned_in` and the chips
+        that set it have existed in the browser since collections did;
+        only this search ignored them, so picking a collection while
+        offline silently widened back out to everything owned.
+      */
+      const scope = typeof query.owned_in === 'string' && query.owned_in
+        ? query.owned_in
+        : undefined;
+      const owned = new Map<string, Set<string>>();
+      for (const stack of await this.store.listStacks(scope)) {
+        if (stack.quantity <= 0) continue;
+        const key = stack.card_name.trim().toLowerCase();
+        const ids = owned.get(key) ?? new Set<string>();
+        if (stack.printing_id) ids.add(stack.printing_id);
+        owned.set(key, ids);
+      }
       const cards = searchLocally(
         query,
         {

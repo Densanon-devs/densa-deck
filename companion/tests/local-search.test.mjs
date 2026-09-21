@@ -29,6 +29,11 @@ const ORACLE = [
 const PRINTINGS = [
   { printing_id: 'p-sol', name: 'Sol Ring', set_code: 'cmm',
     collector_number: '410', cmc: 1, rarity: 'uncommon' },
+  // A second Sol Ring, so "the one I own" and "the first one in the
+  // catalogue" can be told apart. Without two the Only Mine tests
+  // below would pass whatever the code did.
+  { printing_id: 'p-sol-old', name: 'Sol Ring', set_code: 'lea',
+    collector_number: '270', cmc: 1, rarity: 'uncommon' },
   { printing_id: 'p-bolt', name: 'Lightning Bolt', set_code: 'lea',
     collector_number: '161', cmc: 1, rarity: 'common' },
   { printing_id: 'p-bolt2', name: 'Lightning Bolt', set_code: 'm10',
@@ -39,10 +44,24 @@ const PRINTINGS = [
     collector_number: '7', cmc: 2, rarity: 'common' },
 ];
 
+/**
+ * `owned` carries WHICH printings, not just which names.
+ *
+ * A name was enough to answer "do I have one of these" and is not
+ * enough to answer "show me the one I have" -- and the deck builder's
+ * Only Mine filter asks the second question while the code answered
+ * the first, so it offered whichever printing happened to sort first.
+ *
+ * Accepts a bare name for the tests that only care about the filter,
+ * or `['Sol Ring', 'p-sol-old']` to say which copy is on the shelf.
+ */
 const inputs = (owned = []) => ({
   oracle: ORACLE,
   printings: PRINTINGS,
-  owned: new Set(owned.map((n) => n.toLowerCase())),
+  owned: new Map(owned.map((entry) => {
+    const [name, ...ids] = Array.isArray(entry) ? entry : [entry];
+    return [name.toLowerCase(), new Set(ids)];
+  })),
 });
 
 const names = (rows) => rows.map((r) => r.name);
@@ -285,5 +304,102 @@ describe('the fields the browser actually sends', () => {
       assert.ok(card.scryfall_id, `${card.name} has no art id`);
       assert.equal(card.scryfall_id, card.printing_id);
     }
+  });
+});
+
+describe('Only Mine shows the printing you own', () => {
+  /**
+   * Reported from the deck builder: filtering to owned cards listed
+   * the NEWEST printing of each, not the one on the shelf.
+   *
+   * Ownership was checked by name -- enough to answer "do I have one
+   * of these", and not enough to answer "show me the one I have". The
+   * card offered was whichever printing sorted first, so building a
+   * deck from your own collection quietly proposed versions you do
+   * not own.
+   */
+  test('the owned printing is the one returned', () => {
+    const rows = searchLocally(
+      { name: 'Sol Ring', owned: true },
+      inputs([['Sol Ring', 'p-sol-old']]));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].printing_id, 'p-sol-old');
+  });
+
+  test('not merely the first one in the catalogue', () => {
+    // The bug, stated so it cannot come back: the default pick and
+    // the owned pick have to be different printings for this to mean
+    // anything.
+    const anyone = searchLocally({ name: 'Sol Ring' }, inputs());
+    const mine = searchLocally(
+      { name: 'Sol Ring', owned: true },
+      inputs([['Sol Ring', 'p-sol-old']]));
+    assert.notEqual(anyone[0].printing_id, mine[0].printing_id);
+  });
+
+  test('and the art follows it, since scryfall_id IS the printing', () => {
+    const rows = searchLocally(
+      { name: 'Sol Ring', owned: true },
+      inputs([['Sol Ring', 'p-sol-old']]));
+    assert.equal(rows[0].scryfall_id, 'p-sol-old');
+  });
+
+  test('owning several copies shows one of them, not a stranger', () => {
+    const rows = searchLocally(
+      { name: 'Sol Ring', owned: true },
+      inputs([['Sol Ring', 'p-sol', 'p-sol-old']]));
+    assert.ok(['p-sol', 'p-sol-old'].includes(rows[0].printing_id));
+  });
+
+  test('a card owned by name but no known printing still shows', () => {
+    // A stack filed before printing ids were recorded, or one whose
+    // printing is not in this phone's index. Dropping the card would
+    // be worse than showing a different printing of it.
+    const rows = searchLocally(
+      { name: 'Sol Ring', owned: true }, inputs(['Sol Ring']));
+    assert.equal(rows.length, 1);
+  });
+
+  test('a filter that is not about ownership is unaffected', () => {
+    // Browsing the whole catalogue must not start preferring owned
+    // printings; it is a different question.
+    const rows = searchLocally({ name: 'Sol Ring' },
+                               inputs([['Sol Ring', 'p-sol-old']]));
+    assert.equal(rows[0].printing_id, 'p-sol');
+  });
+});
+
+describe('Only Mine, scoped to one collection', () => {
+  /**
+   * Collections are filters rather than boxes, and "the cards in my
+   * Modern binder" is a far more useful question while deckbuilding
+   * than "cards I own somewhere".
+   *
+   * The chips that ask it have existed in the browser since
+   * collections did, and `owned_in` has been in the query shape the
+   * whole time. Only the phone's own search ignored it, so choosing a
+   * collection while offline silently widened back out to everything
+   * owned -- the filter appeared to do nothing.
+   *
+   * The scoping itself happens in `app-state`, which asks the store
+   * for one collection's stacks; what `searchLocally` has to get
+   * right is honouring the narrower set it is handed.
+   */
+  test('a card outside the chosen collection is not offered', () => {
+    const inBinder = inputs([['Lightning Bolt', 'p-bolt']]);
+    const names_ = names(searchLocally({ owned: true, anywhere: 'o' },
+                                       inBinder));
+    assert.ok(names_.includes('Lightning Bolt'));
+    assert.ok(!names_.includes('Sol Ring'),
+      'owned elsewhere is not owned here');
+  });
+
+  test('and the printing shown is the one in THAT collection', () => {
+    // The two failures compound: the wrong scope and then the wrong
+    // printing within it.
+    const rows = searchLocally(
+      { name: 'Sol Ring', owned: true },
+      inputs([['Sol Ring', 'p-sol-old']]));
+    assert.equal(rows[0].printing_id, 'p-sol-old');
   });
 });

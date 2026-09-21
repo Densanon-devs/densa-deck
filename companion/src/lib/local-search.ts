@@ -93,8 +93,19 @@ export function typesMatch(card: OracleFacts, wanted: string[]): boolean {
 export interface SearchInputs {
   oracle: OracleFacts[];
   printings: PrintingFacts[];
-  /** Lowercased names this phone owns at least one of. */
-  owned: Set<string>;
+  /**
+   * What this phone owns: lowercased name to the printing ids held.
+   *
+   * The ids matter. A name answers "do I have one of these"; it
+   * cannot answer "show me the one I have", and the deck builder's
+   * Only Mine filter asks the second while this answered the first —
+   * so it offered whichever printing sorted first, usually the newest
+   * reprint, for a collection full of older copies.
+   *
+   * The set may be empty for a name: a stack whose printing is not in
+   * this phone's index still means the card is owned.
+   */
+  owned: Map<string, Set<string>>;
 }
 
 /**
@@ -181,7 +192,18 @@ export function searchLocally(
 
     // The printing that satisfied the filters, so the art shown is of a
     // copy that actually matches what was asked for.
-    const pick = atRarity[0] ?? inSet[0] ?? prints[0];
+    //
+    // And when the question was "what do I own", the copy on the shelf
+    // rather than the newest reprint of it. Falls through to the usual
+    // pick when the owned printing is not in this phone's index, which
+    // is better than dropping a card the user demonstrably has.
+    const mine = ownedOnly ? (owned.get(key) ?? new Set<string>()) : null;
+    const held = mine?.size
+      ? atRarity.find((r) => mine.has(r.printing_id))
+        ?? inSet.find((r) => mine.has(r.printing_id))
+        ?? prints.find((r) => mine.has(r.printing_id))
+      : undefined;
+    const pick = held ?? atRarity[0] ?? inSet[0] ?? prints[0];
     out.push({
       at,
       card: {
