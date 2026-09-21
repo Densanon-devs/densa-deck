@@ -392,6 +392,43 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * is also visible: the strip says what tapping will do while it is on.
    */
   const [pickingCommander, setPickingCommander] = useState(false);
+  /**
+   * A printing to draw the commander from, when the entry has none.
+   *
+   * Decks typed or imported as text are names only, and a commander
+   * promoted out of such a list carries no printing id -- so the card
+   * art rendered nothing and the strip fell back to the name, which
+   * is exactly what it did before there was any art at all.
+   *
+   * Looked up by name from the phone's own index. Newest first, on the
+   * same reasoning as the pick lists: with nothing else to go on, the
+   * current printing is the likeliest one to be recognised.
+   */
+  const [commanderArt, setCommanderArt] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const missing = (deck?.commander ?? [])
+      .filter((c) => !c.printing_id && !commanderArt[c.name]);
+    if (!missing.length) return;
+    let live = true;
+    void (async () => {
+      const directory = await state.setDirectory();
+      const found: Record<string, string> = {};
+      for (const entry of missing) {
+        const rows = await state.printingsOf(entry.name);
+        if (!rows.length) continue;
+        const newest = [...rows].sort(
+          (a, b) => (directory[(b.set_code || '').toLowerCase()]?.year ?? 0)
+            - (directory[(a.set_code || '').toLowerCase()]?.year ?? 0));
+        found[entry.name] = newest[0]?.printing_id ?? '';
+      }
+      if (live && Object.keys(found).length) {
+        setCommanderArt((held) => ({ ...held, ...found }));
+      }
+    })().catch(() => {
+      // No art is the state it was already in. Not worth a message.
+    });
+  }, [deck?.commander, state, commanderArt]);
   /** Open while choosing a format, so the twelve chips are not always here. */
   const [pickingFormat, setPickingFormat] = useState(false);
   const fold = useCallback(
@@ -873,10 +910,11 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                     key={`${c.printing_id ?? c.name}-${i}`}
                     style={styles.commanderCardBox}
                   >
-                    {c.printing_id ? (
+                    {c.printing_id || commanderArt[c.name] ? (
                       <Image
                         style={styles.commanderArt}
-                        source={artSource(c.printing_id, 'small')}
+                        source={artSource(
+                          c.printing_id || commanderArt[c.name] || '', 'small')}
                         // Contain, not cover: a commander with its
                         // corners cropped off looks like a mistake.
                         resizeMode="contain"
@@ -968,7 +1006,8 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       {/* Over the line, not blocked at it. Half of deckbuilding is holding
           a pile that is not legal yet. */}
       {deck
-        ? deckWarnings(deck.decklist, deck.sideboard, deck.format).map((w) => (
+        ? deckWarnings(deck.decklist, deck.sideboard, deck.format,
+                       undefined, deck.commander ?? []).map((w) => (
             <Text key={w.text} style={styles.overLimit}>
               {w.text}
             </Text>
