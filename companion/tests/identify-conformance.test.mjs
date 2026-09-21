@@ -378,3 +378,109 @@ describe('scanning a prerelease promo', () => {
     assert.equal(out.autoAddable, false);
   });
 });
+
+describe('a power/toughness box that reads like a collector number', () => {
+  /**
+   * The Etrata scan, finally diagnosed by the app itself: "Read MKM #1,
+   * which is not in this phone's index."
+   *
+   * The footer was read perfectly. `1/4` is the creature's
+   * power/toughness, in the bottom-right box, and it is indistinguishable
+   * from the old-style "49/264" collector number that the same pattern
+   * exists to catch. So the keys come out as MKM #1 first and MKM #200
+   * second.
+   *
+   * MKM #1 is a real printing. The lookup hit it, the name on the card
+   * disagreed with it -- correctly -- and the search STOPPED there,
+   * never reaching the key that was right all along.
+   *
+   * The desktop has the same early break and gets away with it, because
+   * a failed key falls through to a fuzzy search by name. The phone has
+   * no such fallback by design: exact key or nothing. So on the phone a
+   * wrong-but-real key is fatal, and it must keep looking instead.
+   */
+  const ETRATA = [
+    'Etrata, Deadly Fugitive',
+    'Legendary Creature - Vampire Assassin',
+    'Deathtouch',
+    '1/4',
+    'M 0200',
+    'MKM★EN  Livia Prima',
+  ].join('\n');
+
+  const CATALOGUE = {
+    async printingByKey(set, num) {
+      if (set !== 'mkm') return null;
+      if (num === '1') {
+        return { printing_id: 'wrong', name: 'Absolutely Other Card',
+                 set_code: 'mkm', collector_number: '1' };
+      }
+      if (num === '200') {
+        return { printing_id: 'right', name: 'Etrata, Deadly Fugitive',
+                 set_code: 'mkm', collector_number: '200' };
+      }
+      return null;
+    },
+  };
+
+  test('the P/T is read as a collector number, as it always was', () => {
+    // Not fixed here, deliberately: this pattern is shared with the
+    // desktop and the 2800-case corpus pins it. The cure is to survive
+    // it, not to narrow a regex the other implementation still has.
+    assert.ok(collectorNumbersIn(ETRATA).includes('1'));
+    assert.ok(collectorNumbersIn(ETRATA).includes('200'));
+  });
+
+  test('and the right card is still identified', async () => {
+    const out = await identifyLocally(ETRATA, CATALOGUE);
+    assert.equal(out.autoAddable, true);
+    assert.equal(out.candidates[0].printing_id, 'right');
+    assert.equal(out.identity.collectorNumber, '200');
+  });
+
+  test('a hit whose name disagrees does not end the search', async () => {
+    // The mechanism, stated on its own so a future refactor cannot
+    // quietly restore the early break.
+    const asked = [];
+    const watched = {
+      async printingByKey(set, num) {
+        asked.push(`${set}/${num}`);
+        return CATALOGUE.printingByKey(set, num);
+      },
+    };
+    await identifyLocally(ETRATA, watched);
+    assert.ok(asked.includes('mkm/1'), 'it should have tried the P/T key');
+    assert.ok(asked.includes('mkm/200'), 'and gone on to the real one');
+  });
+
+  test('when nothing corroborates, the first real hit is still offered',
+    async () => {
+      // Unchanged behaviour for the case this rule was written for: a
+      // key that resolves but cannot be confirmed is shown to a person
+      // rather than filed, and is one tap instead of a retype.
+      const out = await identifyLocally(
+        ['1/4', 'M 0200', 'MKM★EN'].join('\n'), CATALOGUE);
+      assert.equal(out.autoAddable, false);
+      assert.equal(out.candidates.length, 1);
+      assert.match(out.reason, /could not be read|name/i);
+    });
+
+  test('and a corroborated FIRST key still wins immediately', async () => {
+    // The common path must not get slower or change answer.
+    const asked = [];
+    const watched = {
+      async printingByKey(set, num) {
+        asked.push(`${set}/${num}`);
+        if (set === 'mkm' && num === '1') {
+          return { printing_id: 'right', name: 'Absolutely Other Card',
+                   set_code: 'mkm', collector_number: '1' };
+        }
+        return null;
+      },
+    };
+    const out = await identifyLocally(
+      ['Absolutely Other Card', '1/4', 'MKM★EN'].join('\n'), watched);
+    assert.equal(out.autoAddable, true);
+    assert.deepEqual(asked, ['mkm/1'], 'it should have stopped at the hit');
+  });
+});

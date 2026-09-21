@@ -26,7 +26,7 @@ import { footerKeys } from './identify.ts';
  * Saying which turns "it does not work" into something to act on, and
  * is what the desktop path has always done with `capture.text`.
  */
-export function describeLocalMiss(text: string): string {
+export function describeLocalMiss(text: string, reason = ''): string {
   const read = (text || '').replace(/\s+/g, ' ').trim();
   if (!read) {
     return 'Nothing legible in that picture. Try more light, or lock the '
@@ -38,6 +38,11 @@ export function describeLocalMiss(text: string): string {
       + 'The small line along the bottom edge is the part that matters — '
       + 'zoom in on it, or tilt the card away from the glare.';
   }
+  // The matcher's own account, when it has one. It knows which key it
+  // actually looked up and what came back; this function only knows
+  // what the first key WOULD have been, which is not the same thing and
+  // was confidently wrong about it.
+  if (reason) return reason;
   const [setCode, number] = keys[0] ?? ['', ''];
   return `Read ${setCode.toUpperCase()} #${number}, which is not in this `
     + "phone's index. If it is a date-stamped prerelease, turn that on "

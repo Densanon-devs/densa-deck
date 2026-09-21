@@ -400,6 +400,24 @@ export async function identifyLocally(
   const identity = parseFooter(text);
   const names = readableNames(text);
 
+  /*
+    The best key that resolved but could not be confirmed.
+
+    A wrong key can be a REAL printing, and used to end the search. The
+    creature's power and toughness is the everyday way this happens:
+    "1/4" in the bottom-right box is indistinguishable from the
+    old-style "49/264" collector number, so a Murders at Karlov Manor
+    card produced the keys MKM #1 and MKM #200, in that order. MKM #1
+    exists, the name on the card disagreed with it — correctly — and the
+    search stopped there, never reaching the key that was right.
+
+    The desktop breaks early too and gets away with it, because a failed
+    key falls through to a fuzzy search by name. This has no such
+    fallback by design: exact key or nothing. So it keeps looking, and
+    only falls back to an unconfirmed hit once every key has been tried.
+  */
+  let unconfirmed: LocalIdentifyResult | null = null;
+
   for (const [readSet, readNumber] of footerKeys(text)) {
     // The promo first when asked, and the printed key as the fallback —
     // a card flagged as a prerelease that has no prerelease printing is
@@ -432,15 +450,22 @@ export async function identifyLocally(
     // which is why this turns on agreement rather than on any name existing.
     const corroborated = names.some((n) => namesRoughlyMatch(n, hit.name));
     if (!corroborated) {
-      return {
-        identity, candidates: [hit], autoAddable: false,
+      // Remembered, not returned. A later key may be the right one.
+      unconfirmed ??= {
+        identity: { ...identity }, candidates: [hit], autoAddable: false,
         reason: `${setCode.toUpperCase()} #${number} reads as `
           + `'${hit.name}', but the card's name could not be read to `
           + 'confirm it',
       };
+      continue;
     }
     return { identity, candidates: [hit], autoAddable: true, reason: '' };
   }
+
+  // Every key tried and none confirmed. An unconfirmed hit still beats
+  // nothing: the printing is offered so it is one tap rather than a
+  // retype, and a person looks at it.
+  if (unconfirmed) return unconfirmed;
 
   return {
     identity,

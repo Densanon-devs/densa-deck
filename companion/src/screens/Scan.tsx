@@ -448,9 +448,19 @@ export function ScanScreen({ state }: Props) {
         // reported what it got off the card; this is the same thing for
         // a phone with no PC, which is now most of them.
         let readText = '';
+        // Why it failed, from the matcher rather than guessed at from
+        // the text. The screen cannot tell "no footer in the picture"
+        // from "a footer that matched nothing", and inventing an answer
+        // produced a message that blamed the index for a key it had
+        // never looked up.
+        let missReason = '';
         try {
           const local = await state.identifyOffline(
-            uri, (text) => { readText = text; },
+            uri,
+            ({ text, result }) => {
+              readText = text;
+              missReason = result?.reason ?? '';
+            },
             { preferPromo: promo });
           if (local) {
             // Proof the machinery works. Without this, a paired phone
@@ -572,7 +582,7 @@ export function ScanScreen({ state }: Props) {
             // Pass or fail, a card being THERE is worth feeling: it means
             // stop moving your hand. An empty frame is not.
             buzz(readText ? { kind: 'unreadable' } : { kind: 'nothing' });
-            setStatus(describeLocalMiss(readText));
+            setStatus(describeLocalMiss(readText, missReason));
             return;
           }
 

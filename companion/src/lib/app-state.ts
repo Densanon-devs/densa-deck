@@ -16,7 +16,7 @@ import { DesktopClient, Unreachable } from './client.ts';
 import type { EndpointReport } from './client.ts';
 import type { Pairing } from './client.ts';
 import { identifyLocally } from './identify.ts';
-import type { IdentifyOptions } from './identify.ts';
+import type { IdentifyOptions, LocalIdentifyResult } from './identify.ts';
 import { downloadedChunks } from './bulk-download.ts';
 import { chooseSource } from './index-source.ts';
 import { dueForCheck, missingSets } from './index-freshness.ts';
@@ -210,7 +210,14 @@ export class AppState {
    */
   async identifyOffline(
     imageUri: string,
-    onText?: (text: string) => void,
+    // Reported once the attempt is over, with everything it learned.
+    // The screen cannot re-derive WHY a match failed -- "no footer in
+    // the picture" and "a footer that matched nothing" want opposite
+    // things from the user -- and guessing at it from the text alone
+    // produced a message that confidently blamed the index for a key it
+    // had never looked up.
+    onRead?: (info: { text: string; result: LocalIdentifyResult | null })
+      => void,
     // The user's answer to a question no photograph can settle: whether
     // this is the prerelease printing. The stamp that distinguishes it
     // is in the art, not in the text.
@@ -248,14 +255,17 @@ export class AppState {
     }
 
     const text = await this.textReader.read(imageUri);
-    // Reported before the match is attempted, because the caller needs a
-    // distinction this return value cannot make: "no card in the frame"
-    // and "a card I could not place" both come back null, and they are
-    // opposite news. The first means keep looking; the second means stop
-    // moving your hand, and is worth a buzz.
-    onText?.(text);
-    if (!text) return null;
+    // Nothing legible at all is its own answer, and the only one that
+    // can be given before a match is attempted: "no card in the frame"
+    // and "a card I could not place" both come back null from here, and
+    // they are opposite news. The first means keep looking; the second
+    // means stop moving your hand.
+    if (!text) {
+      onRead?.({ text: '', result: null });
+      return null;
+    }
     const out = await identifyLocally(text, this.store, options);
+    onRead?.({ text, result: out });
     const hit = out.candidates[0];
     // Only what it is CERTAIN of. Anything less is a photo for the PC, which
     // has the fuzzy matcher and a person in front of it.
