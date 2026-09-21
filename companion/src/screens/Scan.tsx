@@ -59,6 +59,7 @@ import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
+import { describeLocalMiss } from '../lib/scan-miss.ts';
 import { whileBusy } from '../lib/busy.ts';
 import { BuzzGuard } from '../lib/buzz-policy.ts';
 import { FrameGuide } from './FrameGuide.tsx';
@@ -438,10 +439,18 @@ export function ScanScreen({ state }: Props) {
         // both come back null from identifyOffline. Declared out here
         // because the branches that need it are past the end of this
         // block.
-        let sawText = false;
+        // The TEXT, not just whether there was any.
+        //
+        // "Saw a card but could not place it" is true and useless: it
+        // cannot distinguish a footer the recogniser never read from one
+        // it read and could not match, and those want opposite fixes —
+        // better light versus a missing printing. The PC path has always
+        // reported what it got off the card; this is the same thing for
+        // a phone with no PC, which is now most of them.
+        let readText = '';
         try {
           const local = await state.identifyOffline(
-            uri, (text) => { sawText = text.length > 0; },
+            uri, (text) => { readText = text; },
             { preferPromo: promo });
           if (local) {
             // Proof the machinery works. Without this, a paired phone
@@ -562,12 +571,8 @@ export function ScanScreen({ state }: Props) {
             scanner.current.missed();
             // Pass or fail, a card being THERE is worth feeling: it means
             // stop moving your hand. An empty frame is not.
-            buzz(sawText ? { kind: 'unreadable' } : { kind: 'nothing' });
-            setStatus(sawText
-              ? 'Saw a card but could not place it. More light, or fill '
-                + 'more of the frame.'
-              : 'Nothing legible in that picture. Try more light, or lock '
-                + 'the focus once it looks sharp.');
+            buzz(readText ? { kind: 'unreadable' } : { kind: 'nothing' });
+            setStatus(describeLocalMiss(readText));
             return;
           }
 
