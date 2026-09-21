@@ -207,7 +207,7 @@ export class AppState {
    * Returns null when it cannot place the card, which is the signal to keep
    * the photo for the PC rather than to guess.
    */
-  async identifyOffline(imageUri: string): Promise<{
+  async identifyOffline(imageUri: string, onText?: (text: string) => void): Promise<{
     printing: { printing_id: string; name: string; set_code: string;
                 collector_number: string };
     foilHint: boolean;
@@ -240,6 +240,12 @@ export class AppState {
     }
 
     const text = await this.textReader.read(imageUri);
+    // Reported before the match is attempted, because the caller needs a
+    // distinction this return value cannot make: "no card in the frame"
+    // and "a card I could not place" both come back null, and they are
+    // opposite news. The first means keep looking; the second means stop
+    // moving your hand, and is worth a buzz.
+    onText?.(text);
     if (!text) return null;
     const out = await identifyLocally(text, this.store);
     const hit = out.candidates[0];

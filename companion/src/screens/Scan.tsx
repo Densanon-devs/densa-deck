@@ -32,6 +32,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  Vibration,
   View,
 } from 'react-native';
 
@@ -59,6 +60,7 @@ import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
 import { whileBusy } from '../lib/busy.ts';
+import { BuzzGuard } from '../lib/buzz-policy.ts';
 import { FrameGuide } from './FrameGuide.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
@@ -156,6 +158,26 @@ export function ScanScreen({ state }: Props) {
   } | null>(null);
 
   const guard = useRef(new RepeatGuard());
+  /**
+   * Whether this frame is worth feeling.
+   *
+   * Separate from the repeat guard because they answer different
+   * questions: that one decides whether to FILE a card, this one decides
+   * whether to say anything about having seen one. A card that cannot be
+   * placed is never filed and is still worth a buzz.
+   */
+  const buzzer = useRef(new BuzzGuard());
+  /** A short tap. The VIBRATE permission has always been in the build. */
+  const buzz = useCallback((sighting: Parameters<BuzzGuard['consider']>[0]) => {
+    if (!buzzer.current.consider(sighting, Date.now())) return;
+    // Wrapped: a device with no motor, or one that refuses, must not
+    // take a scan down with it.
+    try {
+      Vibration.vibrate(25);
+    } catch {
+      // Nothing to say. A missing buzz is not worth a message.
+    }
+  }, []);
   const scanner = useRef(new AutoScanner());
   const camera = useRef<CameraView | null>(null);
   // The interval's closure would otherwise read whatever `busy` was when the
@@ -395,9 +417,17 @@ export function ScanScreen({ state }: Props) {
         // The PC is still better: it has the fuzzy name matcher and the whole
         // catalogue, so anything the phone cannot place EXACTLY still goes to
         // it. This is a fast path, not a replacement.
+        // Whether the recogniser saw ANY text decides between "no card
+        // in frame" and "a card I could not place" -- opposite news, and
+        // both come back null from identifyOffline. Declared out here
+        // because the branches that need it are past the end of this
+        // block.
+        let sawText = false;
         try {
-          const local = await state.identifyOffline(uri);
+          const local = await state.identifyOffline(
+            uri, (text) => { sawText = text.length > 0; });
           if (local) {
+            buzz({ kind: 'card', name: local.printing.name });
             const decision = guard.current.consider(
               local.printing.name, Date.now());
             if (!decision.file) {
@@ -435,6 +465,7 @@ export function ScanScreen({ state }: Props) {
           const top = reply.candidates?.[0];
 
           if (reply.auto_addable && top) {
+            buzz({ kind: 'card', name: top.name });
             const decision = guard.current.consider(top.name, Date.now());
             if (decision.file) {
               await file(top, defaultFinish(top, reply), decision.copy);
@@ -449,6 +480,11 @@ export function ScanScreen({ state }: Props) {
           // silently is worse than no card, because you will not know to look
           // for it.
           setResult(reply);
+          // The desktop answers "was there a card" directly, so this
+          // does not have to be inferred from whether the match landed.
+          buzz(reply.capture?.card_detected === false
+            ? { kind: 'nothing' }
+            : { kind: 'unreadable' });
           // "Could not read that one" is true and useless. What the desktop
           // actually got off the card is the whole diagnosis: no text at all
           // means the picture was the problem, text with the wrong name means
@@ -491,8 +527,14 @@ export function ScanScreen({ state }: Props) {
           }
 
           if (state.soloForever) {
-            setStatus('Could not read that one. Try more light, fill more of '
-                      + 'the frame, or type the name in from the Cards tab.');
+            // Pass or fail, a card being THERE is worth feeling: it means
+            // stop moving your hand. An empty frame is not.
+            buzz(sawText ? { kind: 'unreadable' } : { kind: 'nothing' });
+            setStatus(sawText
+              ? 'Saw a card but could not place it. More light, or fill '
+                + 'more of the frame.'
+              : 'Nothing legible in that picture. Try more light, or lock '
+                + 'the focus once it looks sharp.');
             return;
           }
 
@@ -554,6 +596,11 @@ export function ScanScreen({ state }: Props) {
       base64: true,
       quality: 0.9,
       skipProcessing: false,
+      // Auto scan photographs the frame every second or so and most of
+      // those pictures hold nothing. Clicking on every one of them was a
+      // constant rattle that reported nothing; the buzz replaces it, on
+      // the frames where a card was actually seen.
+      shutterSound: false,
     });
     if (!shot?.base64) {
       setStatus('The camera returned an empty picture.');
@@ -734,6 +781,7 @@ export function ScanScreen({ state }: Props) {
             setStatus(
               auto ? 'Point at a card' : 'Auto scan on — show it a card',
             );
+            buzzer.current.reset();
             setAuto((on) => !on);
           }}
         >
