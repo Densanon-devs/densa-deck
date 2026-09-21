@@ -53,7 +53,7 @@ export interface BulkSource {
  */
 export type PrintingRow =
   [string, string, string, string, number | null, string,
-   number | null, number | null];
+   number | null, number | null, string, number | null];
 
 /** One row of the oracle index. */
 export type OracleIndexRow =
@@ -198,7 +198,28 @@ export function toPrintingRow(
     String(card.rarity ?? ''),
     money(prices.usd),
     money(prices.usd_foil),
+    String(card.artist ?? ''),
+    releaseYear(card.released_at),
   ];
+}
+
+/**
+ * The year printed along the bottom of the card.
+ *
+ * Together with the artist, this is what makes a basic land
+ * identifiable at all. A name lookup gives 828 rows for Island and
+ * the scanner rightly refuses to guess between them; artist alone
+ * only gets 10% of them down to one row, because John Avon painted
+ * seventy-nine Islands. Artist and year together put 68-74% of
+ * printings on a shortlist of three.
+ *
+ * Scryfall's `released_at` rather than the set's: a promo or a deck
+ * reprint carries its own date, and the copyright line on the card
+ * follows the printing.
+ */
+function releaseYear(value: unknown): number | null {
+  const year = Number(String(value ?? '').slice(0, 4));
+  return Number.isInteger(year) && year > 1990 && year < 2200 ? year : null;
 }
 
 /**

@@ -216,7 +216,17 @@ export const SCHEMA: string[] = [
      -- of this row comes from. NULL is "nobody has priced this", which
      -- is a different thing from free and must not become zero.
      price_usd REAL,
-     price_usd_foil REAL
+     price_usd_foil REAL,
+     -- What makes a basic land identifiable at all.
+     --
+     -- A name lookup gives 828 rows for Island and the scanner
+     -- rightly refuses to guess between them. Artist alone gets 10%
+     -- of them to one row -- John Avon painted seventy-nine Islands
+     -- -- and the year alone gets none. Together they put 68-74% of
+     -- printings on a shortlist of three, and both are text in the
+     -- same footer strip the collector number is read from.
+     artist TEXT NOT NULL DEFAULT '',
+     released_year INTEGER
    )`,
   // The exact-key lookup: set code plus collector number is how a scan
   // identifies a card when the footer reads cleanly, and it is one indexed
@@ -225,6 +235,11 @@ export const SCHEMA: string[] = [
      ON catalogue(set_code, collector_number)`,
   // The fallback, when the footer is unreadable but the title is not.
   `CREATE INDEX IF NOT EXISTS idx_cat_name ON catalogue(name)`,
+  // The land fallback: every printing of one name by one artist. Over
+  // a name with eight hundred rows this is the difference between a
+  // shortlist and a refusal.
+  `CREATE INDEX IF NOT EXISTS idx_cat_name_artist
+     ON catalogue(name, artist)`,
   // What a set code means, so a pick list can say "Guilds of Ravnica,
   // 2018" instead of "GRN". Roughly a thousand rows of three short
   // fields, filled from the same Scryfall request the release calendar
@@ -315,7 +330,7 @@ export interface OracleCard {
 
 export type CatalogueRow =
   [string, string, string, string, (number | null)?, string?,
-   (number | null)?, (number | null)?];
+   (number | null)?, (number | null)?, string?, (number | null)?];
 
 /**
  * The extra lists a queued scan was headed for.
@@ -766,11 +781,12 @@ export class LocalStore {
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
       if (!chunk.length) continue;
-      const holes = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const holes = chunk.map(
+        () => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
       await this.db.run(
         `INSERT INTO catalogue
            (printing_id, name, set_code, collector_number, cmc, rarity,
-            price_usd, price_usd_foil)
+            price_usd, price_usd_foil, artist, released_year)
          VALUES ${holes}
          ON CONFLICT(printing_id) DO UPDATE SET
            name = excluded.name,
@@ -778,20 +794,24 @@ export class LocalStore {
            collector_number = excluded.collector_number,
            price_usd = excluded.price_usd,
            price_usd_foil = excluded.price_usd_foil,
+           artist = excluded.artist,
+           released_year = excluded.released_year,
            cmc = excluded.cmc,
            rarity = excluded.rarity`,
         // Padded, so a page from an older desktop that sends fewer fields
         // still writes rather than throwing a bind-count error and
         // stranding the whole download.
-        // Eight per row, always. A row with fewer -- the desktop's
+        // TEN per row, always. A row with fewer -- the desktop's
         // catalogue page sends six, and every older caller does --
-        // would otherwise leave two holes unfilled and the NEXT row's
+        // would otherwise leave holes unfilled and the NEXT row's
         // values would slide into them, so a batch of four hundred
         // printings came out shifted by two columns from the second
-        // one onward.
+        // one onward. That happened once already, when this went from
+        // six to eight; the padding is the fix and it has to grow
+        // with the row.
         chunk.flatMap((r) => [
           r[0], r[1], r[2], r[3], r[4] ?? null, r[5] ?? '',
-          r[6] ?? null, r[7] ?? null,
+          r[6] ?? null, r[7] ?? null, r[8] ?? '', r[9] ?? null,
         ]),
       );
     }
@@ -1166,8 +1186,36 @@ export class LocalStore {
   async printingsByName(name: string): Promise<Array<{
     printing_id: string; name: string;
     set_code: string; collector_number: string; rarity?: string;
+    artist?: string; released_year?: number | null;
   }>> {
     return this.db.all('SELECT * FROM catalogue WHERE name = ?', [name]);
+  }
+
+  /**
+   * Who has painted this card, for narrowing a name with too many
+   * printings.
+   *
+   * A couple of hundred strings at the very worst -- 168 for Island,
+   * the longest list in the game -- which is small enough to hand to
+   * a text search. The alternative, holding every artist in Magic on
+   * the phone to match against, is forty thousand.
+   */
+  async artistsForName(name: string): Promise<string[]> {
+    const rows = await this.db.all<{ artist: string }>(
+      `SELECT DISTINCT artist FROM catalogue
+        WHERE name = ? AND artist <> ''`, [name]);
+    return rows.map((r) => String(r.artist ?? '')).filter(Boolean);
+  }
+
+  /** Every printing of this card by this artist. */
+  async printingsByNameArtist(name: string, artist: string): Promise<Array<{
+    printing_id: string; name: string;
+    set_code: string; collector_number: string; rarity?: string;
+    artist?: string; released_year?: number | null;
+  }>> {
+    return this.db.all(
+      'SELECT * FROM catalogue WHERE name = ? AND artist = ?',
+      [name, artist]);
   }
 
   /** Put a photographed card in the queue. */

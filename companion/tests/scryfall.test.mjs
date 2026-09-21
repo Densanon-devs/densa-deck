@@ -30,7 +30,7 @@ const CARD = {
   type_line: 'Artifact', oracle_text: 'Add two colourless.',
   mana_cost: '{1}', cmc: 1, color_identity: [], set: 'cmm',
   collector_number: '410', lang: 'en', games: ['paper'], digital: false,
-  rarity: 'common',
+  rarity: 'common', artist: 'Mike Bierek', released_at: '2023-11-03',
 };
 
 describe('what belongs in the index', () => {
@@ -56,21 +56,47 @@ describe('what belongs in the index', () => {
 
 describe('what a card becomes', () => {
   test('a printing row carries the exact key a scan matches on', () => {
-    // Eight: the four a scan matches on, mana value and rarity, which
-    // match nothing but are filters somebody expects to work, and the
-    // two prices -- which come free from a file already being read and
-    // are the only way a phone with no PC can value a deck.
+    // Ten: the four a scan matches on, mana value and rarity, which
+    // match nothing but are filters somebody expects to work, the two
+    // prices -- which come free from a file already being read and
+    // are the only way a phone with no PC can value a deck -- and the
+    // credit line, which is the only thing that tells 828 Islands
+    // apart when the collector number will not read.
     assert.deepEqual(toPrintingRow({ ...CARD, prices: { usd: '3.09', usd_foil: '4.69' } }),
-      ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common', 3.09, 4.69]);
+      ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common', 3.09, 4.69,
+       'Mike Bierek', 2023]);
+  });
+
+  test('the credit line rides in with the rest', () => {
+    const row = toPrintingRow(CARD);
+    assert.equal(row[8], 'Mike Bierek');
+    assert.equal(row[9], 2023);
+  });
+
+  test('a card with no artist recorded stores an empty one, not null', () => {
+    // The column is NOT NULL, and a blank artist has to mean "not
+    // known" rather than matching every search for one.
+    const row = toPrintingRow({ ...CARD, artist: undefined });
+    assert.equal(row[8], '');
+  });
+
+  test('a release date that is not one is no year', () => {
+    // Better no year than a wrong one: the year is used to cut a
+    // shortlist down, and a bogus one cuts the right answer out.
+    assert.equal(toPrintingRow({ ...CARD, released_at: '' })[9], null);
+    assert.equal(toPrintingRow({ ...CARD, released_at: 'soon' })[9], null);
+    assert.equal(toPrintingRow({ ...CARD, released_at: '1066-01-01' })[9],
+      null);
   });
 
   test('an unpriced card is null, never zero', () => {
     // Scryfall sends null for a card nobody has priced. Folding that
     // into a deck total as zero makes the number look authoritative
     // and wrong.
-    assert.deepEqual(toPrintingRow({ ...CARD, prices: { usd: null } }).slice(6),
+    assert.deepEqual(
+      toPrintingRow({ ...CARD, prices: { usd: null } }).slice(6, 8),
       [null, null]);
-    assert.deepEqual(toPrintingRow(CARD).slice(6), [null, null]);
+    assert.deepEqual(toPrintingRow(CARD).slice(6, 8), [null, null]);
   });
 
   test('prices arrive as strings and are stored as numbers', () => {

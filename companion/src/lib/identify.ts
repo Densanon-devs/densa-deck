@@ -20,6 +20,8 @@
  * the two shows up as a failure rather than as a card filed wrong.
  */
 
+import { artistIn, narrowByCredits, yearsIn } from './footer-credits.ts';
+
 /** What we managed to read off a card face. */
 export interface ReadIdentity {
   name: string;
@@ -41,6 +43,16 @@ export interface CataloguePrintingRow {
    * falls back rather than vanishing.
    */
   rarity?: string;
+  /**
+   * The credit line, which is the only thing that makes a basic land
+   * identifiable when its collector number will not read.
+   *
+   * Optional for the same reason rarity is: an index written before
+   * the column existed has none, and a row without one should narrow
+   * nothing rather than disappear.
+   */
+  artist?: string;
+  released_year?: number | null;
 }
 
 /** Somewhere to look printings up — the phone's own index, in practice. */
@@ -55,6 +67,17 @@ export interface LocalCatalogue {
    * Optional so an index without it, or a test fake, keeps working.
    */
   printingsByName?(name: string): Promise<CataloguePrintingRow[]>;
+  /**
+   * The artists who have painted this card, and their printings.
+   *
+   * Both optional, and both only ever asked for when a name has more
+   * printings than a person can usefully be shown -- which in
+   * practice means the six basic lands and almost nothing else.
+   */
+  artistsForName?(name: string): Promise<string[]>;
+  printingsByNameArtist?(
+    name: string, artist: string,
+  ): Promise<CataloguePrintingRow[]>;
 }
 
 export interface LocalIdentifyResult {
@@ -416,6 +439,40 @@ export interface IdentifyOptions {
 }
 
 /**
+ * Cut a card name's printings down by who painted it and when.
+ *
+ * Only ever reached for a name with more printings than anyone can
+ * be shown, which in practice is the six basic lands. Returns [] when
+ * the index cannot answer -- an older index has no artist column --
+ * or when the credit line did not read, both of which leave the
+ * caller saying so rather than guessing.
+ */
+async function narrowByCredit(
+  text: string,
+  name: string,
+  catalogue: LocalCatalogue,
+): Promise<{ rows: CataloguePrintingRow[]; why: CreditMiss }> {
+  const none = (why: CreditMiss) => ({ rows: [], why });
+  if (!catalogue.artistsForName || !catalogue.printingsByNameArtist) {
+    return none('no-artists');
+  }
+  const artists = await catalogue.artistsForName(name);
+  // An index downloaded before the artist column existed has the
+  // column -- the migration adds it -- and nothing in it. That is a
+  // different problem from a card whose credit line would not read,
+  // and it has a different answer, so it must not be reported as
+  // the same thing.
+  if (!artists.length) return none('no-artists');
+  const artist = artistIn(text, artists);
+  if (!artist) return none('unread');
+  const byArtist = await catalogue.printingsByNameArtist(name, artist);
+  return { rows: narrowByCredits(byArtist, yearsIn(text)), why: 'ok' };
+}
+
+/** Why a credit line did not narrow anything. */
+type CreditMiss = 'ok' | 'unread' | 'no-artists';
+
+/**
  * Identify a card from OCR text against the phone's own index.
  *
  * Exact keys only, and only with corroboration. A footer key is specific,
@@ -538,13 +595,44 @@ export async function identifyLocally(
             + 'needs a tap.',
         };
       }
-      // A basic land. Eight hundred rows is not a shortlist, and
-      // picking one of them is worse than saying so.
+      /*
+        A basic land. Eight hundred rows is not a shortlist.
+
+        Before giving up, read the credit line. The artist and the
+        copyright year sit in the same footer strip the collector
+        number does, and measured over 2,319 real basic printings
+        they put 68-74% of them on a list of three. Artist alone
+        manages 24%, because John Avon painted seventy-nine Islands;
+        the year alone manages none.
+
+        Never auto-added, whatever it narrows to. This is a shortlist
+        to tap, which is what a card earns by not showing its number.
+      */
+      const { rows, why } = await narrowByCredit(
+        text, identity.name, catalogue);
+      if (rows.length && rows.length <= NAME_SHORTLIST) {
+        return {
+          identity, candidates: rows, autoAddable: false,
+          reason: `Read '${identity.name}' and its artist, which leaves `
+            + `${rows.length} printing${rows.length === 1 ? '' : 's'}`
+            + ' to choose from.',
+        };
+      }
+
       return {
         identity, candidates: [], autoAddable: false,
         reason: `Read '${identity.name}', which has ${printings.length} `
-          + 'printings — too many to choose from without the set code '
-          + 'and number along the bottom edge.',
+          + 'printings — too many to choose from. '
+          + (why === 'no-artists'
+            // Actionable, and it has to be said: the migration gives
+            // an existing install the column and only a fresh index
+            // download fills it, so this phone would otherwise never
+            // scan a basic land and never say why.
+            ? 'This card index was downloaded before it kept '
+              + 'artist names, and the artist is what tells 800 Islands '
+              + 'apart — refresh the index in Settings.'
+            : 'The artist line along the bottom edge did not read '
+              + 'either.'),
       };
     }
   }

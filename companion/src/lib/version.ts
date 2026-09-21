@@ -10,4 +10,4 @@
  * hardcoded version that has drifted is worse than none, because it is
  * believed.
  */
-export const VERSION = '0.45.2';
+export const VERSION = '0.46.0';

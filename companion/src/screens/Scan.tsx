@@ -26,8 +26,15 @@
  * the tab changed would quietly scatter half a box into the wrong place.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -39,6 +46,8 @@ import {
 
 import type { AppState, Connection, IndexFetch } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
+import { artSource } from '../lib/images.ts';
+import { orderPrintings, pickerCount } from '../lib/printing-picker.ts';
 import {
   DEFAULT_CAMERA_SETTINGS,
   ZOOM_DEADZONE,
@@ -96,7 +105,19 @@ export function ScanScreen({ state }: Props) {
   const [flash, setFlash] = useState<
     {
       name: string;
+      /** Which copy of this card this is -- duplicate detection. */
       copy: number;
+      /** So the flash can show the card rather than describe it. */
+      printingId?: string;
+      /**
+       * How many went in at once, which is a different question.
+       *
+       * `copy` says "this is the third time you have scanned this
+       * card"; this says "ten of them were just filed". Reusing one
+       * for the other would have the flash announce copy #10 of a
+       * card you own ten of for the first time.
+       */
+      added?: number;
       verb: string;
       setCode?: string;
       number?: string;
@@ -195,6 +216,27 @@ export function ScanScreen({ state }: Props) {
     choose a printing and one way to file it.
   */
   const [typed, setTyped] = useState('');
+  /*
+    How many of the card you are about to tap.
+
+    Thirty-seven basics go into a deck and nobody scans them one at a
+    time; the honest way in for those is to say Island, say ten, and
+    tap the printing once. It applies to a scanned card too -- a
+    playset out of a box is four taps otherwise.
+
+    Deliberately NOT sticky. It resets to one after every card,
+    because a quantity left at ten by the last card is how you end up
+    owning ten of the next one.
+  */
+  const [howMany, setHowMany] = useState(1);
+  /*
+    Which set, when the list is longer than a list should be.
+
+    A typed Island offers 671 printings. Sorting them newest-first
+    makes the top of the list reasonable and leaves the other 631
+    unreachable, so this filters on set name or code before the sort.
+  */
+  const [setFilter, setSetFilter] = useState('');
   const [suggestions, setSuggestions] = useState<Array<{
     name: string; printings: number;
   }>>([]);
@@ -376,7 +418,8 @@ export function ScanScreen({ state }: Props) {
   );
 
   const file = useCallback(
-    async (candidate: ScanCandidate, finish: string, copy = 1) => {
+    async (candidate: ScanCandidate, finish: string, copy = 1,
+           added = 1) => {
       if (mode === 'tag') {
         const out = await state.tagIntoGroup(
           candidate.printing_id, target, finish,
@@ -401,6 +444,7 @@ export function ScanScreen({ state }: Props) {
           name: candidate.name,
           copy,
           verb: out.tagged ? 'TAGGED' : 'ALREADY IN',
+          printingId: candidate.printing_id,
           setCode: candidate.set_code,
           number: candidate.collector_number,
           rarity: candidate.rarity,
@@ -418,16 +462,20 @@ export function ScanScreen({ state }: Props) {
         finish,
         collection_uid: target,
         also_collection_uids: alsoTag,
+        quantity: added,
       });
       setFlash({
         name: candidate.name,
         copy,
+        added,
         verb: alsoTag.length ? `ADDED +${alsoTag.length}` : 'ADDED',
+        printingId: candidate.printing_id,
         setCode: candidate.set_code,
         number: candidate.collector_number,
         rarity: candidate.rarity,
       });
-      setLastAdded({ candidate, finish, copies: 1 });
+      // What Undo takes back out: all of them, not one.
+      setLastAdded({ candidate, finish, copies: added });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
@@ -607,6 +655,7 @@ export function ScanScreen({ state }: Props) {
             setFlash({
               name: local.printing.name,
               copy: decision.copy,
+              printingId: local.printing.printing_id,
               verb: 'ADDED',
               setCode: local.printing.set_code,
               number: local.printing.collector_number,
@@ -806,6 +855,30 @@ export function ScanScreen({ state }: Props) {
   // list rather than the bottom of the page, because seven printings
   // are taller than the screen and `scrollToEnd` would land on "None
   // of these".
+  /**
+   * The printings on offer, filtered and ordered.
+   *
+   * Newest first because the card in somebody's hand is far more
+   * often recent than not, and a set box in front of that because no
+   * ordering rescues 671 Islands -- sorting them makes the top of
+   * the list reasonable and leaves the other 631 unreachable.
+   */
+  const matching = useMemo(
+    () => orderPrintings(result?.candidates ?? [], setFilter, sets),
+    [result, setFilter, sets]);
+
+  /*
+    A new card on screen starts from one, and from no filter.
+
+    Filing clears `result`, so this is also what puts the quantity
+    back after a batch of ten goes in. A ten left over from the last
+    card is how you come to own ten of the next one.
+  */
+  useEffect(() => {
+    setHowMany(1);
+    setSetFilter('');
+  }, [result]);
+
   useEffect(() => {
     if (!result?.candidates?.length) return;
     const at = pickerY.current;
@@ -929,6 +1002,22 @@ export function ScanScreen({ state }: Props) {
       {flash ? (
         <View style={[styles.flash, flash.copy > 1 && styles.flashDupe]}>
           <Text style={styles.flashTick}>{flash.verb}</Text>
+          {/*
+            The card that just went in, not a description of it.
+
+            The set symbol and number below answer "which printing"
+            for someone who knows the codes. The picture answers it
+            for everyone, while the card is still in your hand --
+            which is the only moment the answer is any use.
+          */}
+          {flash.printingId ? (
+            <Image
+              style={styles.flashArt}
+              source={artSource(flash.printingId, 'small')}
+              resizeMode="contain"
+              accessibilityLabel={flash.name}
+            />
+          ) : null}
           <Text style={styles.flashName}>{flash.name}</Text>
           {/*
             Which printing, while the card is still in your hand. The
@@ -950,6 +1039,9 @@ export function ScanScreen({ state }: Props) {
                 {flash.number ? ` · #${flash.number}` : ''}
               </Text>
             </View>
+          ) : null}
+          {(flash.added ?? 1) > 1 ? (
+            <Text style={styles.flashCount}>{'×'}{flash.added}</Text>
           ) : null}
           {flash.copy > 1 ? (
             <Text style={styles.flashMeta}>copy #{flash.copy} of this card</Text>
@@ -1431,26 +1523,104 @@ export function ScanScreen({ state }: Props) {
           onLayout={(e) => { pickerY.current = e.nativeEvent.layout.y; }}
         >
           {/*
+            How many, before which one.
+
+            One tap files one copy, which is right for a box of
+            singles and wrong for the ten Islands a deck wants. The
+            number applies to whichever printing is tapped next and
+            then goes back to one.
+          */}
+          <View style={styles.qtyRow}>
+            <Text style={styles.qtyLabel}>How many</Text>
+            <Pressable
+              style={styles.qtyBtn}
+              onPress={() => setHowMany((n) => Math.max(1, n - 1))}
+            >
+              <Text style={styles.qtyBtnText}>-</Text>
+            </Pressable>
+            <Text style={styles.qtyValue}>{howMany}</Text>
+            <Pressable
+              style={styles.qtyBtn}
+              onPress={() => setHowMany((n) => Math.min(99, n + 1))}
+            >
+              <Text style={styles.qtyBtnText}>+</Text>
+            </Pressable>
+            {howMany !== 1 ? (
+              <Pressable style={styles.qtyBtn}
+                         onPress={() => setHowMany(1)}>
+                <Text style={styles.qtyBtnText}>reset</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {/*
+            The set box, for the lists no amount of sorting rescues.
+
+            Only when there are more printings than the picker can
+            show: below that the list IS the answer and a filter over
+            it is one more thing to read.
+          */}
+          {result.candidates.length > NAME_SHORTLIST ? (
+            <>
+              <TextInput
+                style={styles.typedInput}
+                value={setFilter}
+                onChangeText={setSetFilter}
+                placeholder="Filter by set — name or code"
+                placeholderTextColor="#6b7079"
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              <Text style={styles.pickerCount}>
+                {pickerCount(result.candidates.length, matching.length,
+                             NAME_SHORTLIST)}
+              </Text>
+            </>
+          ) : null}
+
+          {/*
             Newest first. A 29-printing list spanning 1993 to 2024 is
             only browsable in an order, and the card in somebody's hand
             is far more often recent than not. Sets the phone has no
             date for sink rather than jumping to the top.
           */}
-          {[...result.candidates]
-            .sort((a, b) => (sets[b.set_code.toLowerCase()]?.year ?? 0)
-              - (sets[a.set_code.toLowerCase()]?.year ?? 0))
+          {matching
             .slice(0, NAME_SHORTLIST)
             .map((candidate, index) => (
             <Pressable
               key={`${candidate.printing_id}-${index}`}
               style={styles.candidate}
               onPress={() => {
-                void file(candidate, defaultFinish(candidate, result)).catch(
+                void file(candidate, defaultFinish(candidate, result),
+                          howMany).catch(
                   (err) => setStatus(recordCrash(err, 'filing', false).message),
                 );
               }}
             >
               <View style={styles.candidateRow}>
+                {/*
+                  The card itself.
+
+                  Every row in this list is the same card name, so the
+                  name is the one thing that cannot tell them apart.
+                  For a basic land it is ALL they have in common --
+                  nobody knows an Island as BLB #280, they know it as
+                  the one with the lighthouse -- which makes the
+                  picture the identifier and the text the footnote.
+
+                  `small` rather than `art_crop`: 12 KB against 93,
+                  and on a land the art is most of the card anyway.
+                  Forty rows of the larger one is 3.7 MB to choose a
+                  fifty-cent card.
+                */}
+                <Image
+                  style={styles.candidateArt}
+                  source={artSource(candidate.printing_id, 'small')}
+                  resizeMode="cover"
+                  accessibilityLabel={`${candidate.name}, `
+                    + `${candidate.set_code.toUpperCase()} `
+                    + `${candidate.collector_number}`}
+                />
                 {/*
                   The set symbol. Scryfall serves these as SVG and
                   hotlinks are the rule for their art, so it is fetched
@@ -1552,6 +1722,37 @@ const styles = StyleSheet.create({
   },
   alsoLabel: { color: '#8a8f9c', fontSize: 12 },
   alsoChips: { flexDirection: 'row', gap: 6 },
+  candidateArt: {
+    // A Magic card is 63x88. Anything else crops the art off.
+    aspectRatio: 63 / 88,
+    backgroundColor: '#11151d',
+    borderRadius: 4,
+    width: 54,
+  },
+  flashArt: {
+    aspectRatio: 63 / 88,
+    borderRadius: 6,
+    marginVertical: 6,
+    width: 104,
+  },
+  qtyRow: { alignItems: 'center', flexDirection: 'row', gap: 8,
+            paddingBottom: 4 },
+  qtyLabel: { color: '#8a8f9c', flex: 1, fontSize: 13 },
+  qtyBtn: {
+    borderColor: '#2f6f9f',
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 38,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  qtyBtnText: { color: '#8ec5ff', fontSize: 15, textAlign: 'center' },
+  qtyValue: {
+    color: '#e4e6eb', fontSize: 17, fontWeight: '700',
+    minWidth: 28, textAlign: 'center',
+  },
+  pickerCount: { color: '#8a8f9c', fontSize: 12, paddingBottom: 2 },
+  flashCount: { color: '#68d391', fontSize: 26, fontWeight: '800' },
   typedBox: { gap: 6, marginTop: 10 },
   typedInput: {
     backgroundColor: '#141924',
