@@ -195,3 +195,62 @@ describe('identifying end to end', () => {
     assert.match(out.reason, /Could not read the set and number/);
   });
 });
+
+describe('a footer that prints the rarity first', () => {
+  /**
+   * From a real scan that would not go in: a Murders at Karlov Manor
+   * prerelease promo, photographed well, in good light, filling the
+   * frame. The app said "saw a card but could not place it".
+   *
+   * Its collector line reads
+   *
+   *     M 0200
+   *     MKM(star)EN   Livia Prima
+   *
+   * and every pattern here wanted the rarity AFTER the number. With no
+   * collector number parsed there was no key to look up, so a perfectly
+   * readable card produced nothing at all. The set code came back fine,
+   * which is exactly why it reported seeing a card rather than seeing
+   * nothing.
+   *
+   * Whether the card prints it in that order or ML Kit returns the
+   * blocks that way does not matter: the reading happens, and accepting
+   * the rarity on either side costs nothing.
+   */
+  const FOOTER = ['Etrata, Deadly Fugitive', 'M 0200',
+                  'MKM★EN  Livia Prima'].join('\n');
+
+  test('the collector number is found', () => {
+    assert.deepEqual(collectorNumbersIn(FOOTER), ['200']);
+  });
+
+  test('and it makes a key with the set', () => {
+    assert.deepEqual(footerKeys(FOOTER), [['mkm', '200']]);
+  });
+
+  test('the star is still read as foil', () => {
+    // It has always meant foil here, and a prerelease promo is foil.
+    assert.equal(parseFooter(FOOTER).foilHint, true);
+  });
+
+  test('rarity after the number still works', () => {
+    // The overwhelmingly common layout, and the regression guard.
+    assert.deepEqual(
+      collectorNumbersIn(['0200 M', 'MKM • EN'].join('\n')), ['200']);
+  });
+
+  test('a small number before a capital is NOT a collector number', () => {
+    // Why the rarity-first form is restricted to the padded 3-4 digit
+    // style: rules text is full of small numbers beside capitals, and
+    // "R 3" must never become a lookup key.
+    assert.deepEqual(collectorNumbersIn('Sacrifice a creature: R 3'), []);
+    assert.deepEqual(collectorNumbersIn('Add C 2 to your mana pool'), []);
+  });
+
+  test('nor a year, which is the other four-digit number down there', () => {
+    // "TM & (c) 2024 Wizards of the Coast" sits on the same footer, and
+    // a stray capital beside it must not read as rarity plus number.
+    assert.deepEqual(
+      collectorNumbersIn('TM & © 2024 Wizards of the Coast'), []);
+  });
+});

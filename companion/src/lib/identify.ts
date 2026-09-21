@@ -74,6 +74,37 @@ const COLLECTOR_RE =
   /(?<![\w/])([A-Z0-9]{1,6}(?:-[A-Z0-9]{1,6})?[a-z★]?)\s*\/\s*\d{1,4}(?![\d/])/gi;
 const COLLECTOR_BARE_RE = /(?<![\w/])(\d{1,4}[a-z★]?)\s+[CURMLST](?![\w])/g;
 
+// The same thing with the rarity on the other side: "M 0200".
+//
+// A prerelease promo came back unreadable in good light, filling the
+// frame, with the set code parsed perfectly — because every pattern here
+// wanted the rarity AFTER the number, so no collector number was found
+// and there was no key to look up at all.
+//
+// Deliberately narrower than its mirror: three or four digits only, which
+// is the zero-padded style this layout uses. One and two digit numbers
+// beside a capital are everywhere in rules text — "R 3", "C 2" — and each
+// one would become a lookup key. The other four-digit number on a card is
+// the copyright year, which has no rarity letter in front of it.
+// Same line only — `[ \t]+`, never `\s+`.
+//
+// With `\s+` this reached across the line break and read the rarity at
+// the end of one line together with the set code at the start of the
+// next: "49/264 U" over "S99 • EN" became the number 599, because
+// `repairDigits` reads S99 as a damaged 599. Ten of the 2800 conformance
+// cases caught it, all of them Starter 1999.
+// And zero-padded — `0200`, not `200`.
+//
+// Which is not cosmetic: it is the only thing separating this from a set
+// code. "49/264 U S99 EN" collapsed onto one line reads as rarity U
+// followed by 599, because `repairDigits` sees S99 as a damaged number.
+// Padding is what the layout this exists for actually prints, and no set
+// code starts with a zero, so requiring it keeps the repair pass — a
+// number OCR mangled to "O200" still resolves — while Starter 1999 stops
+// matching. Both remaining conformance cases were that set.
+const COLLECTOR_RARITY_FIRST_RE =
+  /(?<![\w/])[CURMLST][ \t]+(0\d{2,3}[a-z★]?)(?![\w])/g;
+
 const SET_LANG_RE = new RegExp(
   `\\b([0-9A-Z]{3,6})\\s*(?:${SEPARATORS}\\s*)?(${LANG_ALT})\\b`, 'gi');
 const SET_ONLY_RE = new RegExp(`\\b([A-Z0-9]{3,6})\\s*${SEPARATORS}`);
@@ -152,7 +183,8 @@ export function looksLikeSetCode(raw: string): boolean {
 export function collectorNumbersIn(text: string): string[] {
   const out: string[] = [];
   for (const candidate of [text || '', repairDigits(text || '')]) {
-    for (const pattern of [COLLECTOR_RE, COLLECTOR_BARE_RE]) {
+    for (const pattern of [COLLECTOR_RE, COLLECTOR_BARE_RE,
+                           COLLECTOR_RARITY_FIRST_RE]) {
       pattern.lastIndex = 0;
       for (const m of candidate.matchAll(pattern)) {
         const number = normaliseNumber(m[1] ?? '');
@@ -166,7 +198,11 @@ export function collectorNumbersIn(text: string): string[] {
 /** Where the collector number sits in the text, or -1. */
 export function collectorPosition(text: string): number {
   for (const candidate of [text || '', repairDigits(text || '')]) {
-    for (const pattern of [COLLECTOR_RE, COLLECTOR_BARE_RE]) {
+    // Same three patterns as `collectorNumbersIn`. A number this can find
+    // but cannot locate leaves the set-code search unanchored, which is
+    // how a word elsewhere on the card wins over the real set code.
+    for (const pattern of [COLLECTOR_RE, COLLECTOR_BARE_RE,
+                           COLLECTOR_RARITY_FIRST_RE]) {
       pattern.lastIndex = 0;
       const m = pattern.exec(candidate);
       if (m) return m.index;
