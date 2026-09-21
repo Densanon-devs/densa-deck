@@ -852,20 +852,67 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         <View style={styles.commanderStrip}>
           {(deck.commander ?? []).length ? (
             <>
-              <Text style={styles.commanderLabel}>Commander</Text>
-              <Text style={styles.commanderName}>
-                {(deck.commander ?? []).map((c) => c.name).join(' & ')}
-              </Text>
-              <Pressable style={styles.commanderBtn}
-                         onPress={() => setPickingCommander((v) => !v)}>
-                <Text style={styles.commanderBtnText}>
-                  {pickingCommander ? 'Cancel' : 'Change'}
-                </Text>
-              </Pressable>
-              <Pressable style={styles.commanderBtn}
-                         onPress={() => void clearCommander()}>
-                <Text style={styles.commanderBtnText}>Clear</Text>
-              </Pressable>
+              {/*
+                The card, not its name.
+
+                A commander is the one card in the deck you look at
+                most, and it is the thing the whole list is built
+                around -- the colour lock, the plan, the reason a card
+                is in or out. A line of text is a poor stand-in for
+                something you would recognise instantly, and it hid
+                the other half of the problem: the name is the same
+                whichever printing it is, so nothing here showed
+                WHICH one had been chosen.
+
+                Two of them side by side for a partner pair, which is
+                why this is a row rather than one image.
+              */}
+              <View style={styles.commanderCards}>
+                {(deck.commander ?? []).map((c, i) => (
+                  <View
+                    key={`${c.printing_id ?? c.name}-${i}`}
+                    style={styles.commanderCardBox}
+                  >
+                    {c.printing_id ? (
+                      <Image
+                        style={styles.commanderArt}
+                        source={artSource(c.printing_id, 'small')}
+                        // Contain, not cover: a commander with its
+                        // corners cropped off looks like a mistake.
+                        resizeMode="contain"
+                        accessibilityLabel={c.name}
+                      />
+                    ) : null}
+                    {/*
+                      The name stays under it. Art can fail to load,
+                      an older deck may have no printing recorded at
+                      all, and a picture with no caption is useless to
+                      anyone using a screen reader.
+                    */}
+                    <Text style={styles.commanderName} numberOfLines={2}>
+                      {c.name}
+                    </Text>
+                    {c.set_code ? (
+                      <Text style={styles.commanderPrinting}>
+                        {c.set_code.toUpperCase()}
+                        {c.collector_number ? ` #${c.collector_number}` : ''}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+              <View style={styles.commanderActions}>
+                <Pressable style={styles.commanderBtn}
+                           onPress={() => setPickingCommander((v) => !v)}>
+                  <Text style={styles.commanderBtnText}>
+                    {pickingCommander ? 'Cancel' : 'Change'}
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.commanderBtn}
+                           onPress={() => void clearCommander()}>
+                  <Text style={styles.commanderBtnText}>Clear</Text>
+                </Pressable>
+              </View>
             </>
           ) : (
             <>
@@ -1323,7 +1370,23 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
-  commanderName: { color: '#e4e6eb', flexGrow: 1, fontSize: 15, fontWeight: '600' },
+  commanderName: {
+    color: '#e4e6eb',
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  commanderCards: { flexDirection: 'row', gap: 12 },
+  commanderCardBox: { alignItems: 'center', width: 96 },
+  commanderArt: {
+    // A Magic card is 63x88. Anything else crops or letterboxes it.
+    aspectRatio: 63 / 88,
+    backgroundColor: '#11151d',
+    borderRadius: 6,
+    width: 96,
+  },
+  commanderPrinting: { color: '#6b7079', fontSize: 11, marginTop: 1 },
+  commanderActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
   commanderBtn: {
     borderColor: '#4a5568',
     borderRadius: 8,

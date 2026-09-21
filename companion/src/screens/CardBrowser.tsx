@@ -587,8 +587,16 @@ export function CardBrowser({
         WHICH of your cards. Only while "Only mine" is on, because on its own
         it would read as "cards in this collection and also every card in
         Magic", which is not a question anyone is asking.
+
+        Shown from the FIRST collection, not the second. It used to wait
+        for two on the reasoning that choosing between one thing is not a
+        choice -- true, and it meant the row did not exist on a phone with
+        a single collection, so nobody discovered it was there and it
+        appeared from nowhere the day they made another. Building a deck
+        out of one box is the main reason collections exist, and a filter
+        you cannot see is a filter you do not have.
       */}
-      {ownedOnly && shelves.length > 1 ? (
+      {ownedOnly && shelves.length ? (
         <ScrollView
           horizontal
           style={styles.filterRow}
@@ -600,7 +608,12 @@ export function CardBrowser({
             onPress={() => setOwnedIn('')}
           >
             <Text style={[styles.chipText, !ownedIn && styles.chipTextOn]}>
-              Anywhere
+              {/*
+                "Anywhere" reads as the whole catalogue next to a row of
+                collection names. It means every collection of YOURS,
+                which is a different thing and the one this row is about.
+              */}
+              Any of mine
             </Text>
           </Pressable>
           {shelves.map((shelf) => {
