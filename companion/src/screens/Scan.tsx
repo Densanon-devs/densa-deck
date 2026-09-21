@@ -59,7 +59,6 @@ import type { CollectionRow } from '../lib/store.ts';
 import { CameraGate, CameraView } from './Camera.tsx';
 import { describeStage } from '../lib/index-source.ts';
 import { whileBusy } from '../lib/busy.ts';
-import { deviceChime as chime } from '../lib/chime.ts';
 import { FrameGuide } from './FrameGuide.tsx';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
@@ -250,10 +249,6 @@ export function ScanScreen({ state }: Props) {
           setStatus(`${candidate.name} isn't in your collection — nothing tagged.`);
           return;
         }
-        // Only when it actually went in. "ALREADY IN" is a card that was
-        // in the group before you pointed at it, and a sound there says
-        // "done" about something that did not happen.
-        if (out.tagged) chime.play();
         setFlash({
           name: candidate.name,
           copy,
@@ -273,7 +268,6 @@ export function ScanScreen({ state }: Props) {
         collection_uid: target,
         also_collection_uids: alsoTag,
       });
-      chime.play();
       setFlash({
         name: candidate.name,
         copy,
@@ -292,7 +286,6 @@ export function ScanScreen({ state }: Props) {
       setChoosing(null);
       try {
         const out = await state.tagStack(candidate.stack_key ?? '', target);
-        if (out.tagged) chime.play();
         setFlash({
           name: candidate.card_name,
           copy: 1,
@@ -418,7 +411,6 @@ export function ScanScreen({ state }: Props) {
               collection_uid: target,
               also_collection_uids: alsoTag,
             });
-            chime.play();
             setFlash({
               name: local.printing.name, copy: decision.copy, verb: 'ADDED',
             });
@@ -562,13 +554,6 @@ export function ScanScreen({ state }: Props) {
       base64: true,
       quality: 0.9,
       skipProcessing: false,
-      // Auto scan photographs the frame every second or so and most of
-      // those pictures hold nothing -- a hand, the edge of the box, the
-      // same card still sitting there. Clicking on every one of them was
-      // a continuous rattle that said nothing about whether anything had
-      // been recognised. `chime` replaces it on the one event worth
-      // hearing: a card went in.
-      shutterSound: false,
     });
     if (!shot?.base64) {
       setStatus('The camera returned an empty picture.');

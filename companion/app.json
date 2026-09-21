@@ -2,7 +2,7 @@
   "expo": {
     "name": "Densa Deck",
     "slug": "densa-deck-companion",
-    "version": "0.33.0",
+    "version": "0.33.1",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "android": {
@@ -10,31 +10,17 @@
       "permissions": [
         "CAMERA"
       ],
-      "versionCode": 92,
+      "versionCode": 93,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F7F7F9"
-      },
-      "blockedPermissions": [
-        "android.permission.RECORD_AUDIO"
-      ]
+      }
     },
     "plugins": [
       "expo-sqlite",
-      [
-        "expo-camera",
-        {
-          "recordAudioAndroid": false
-        }
-      ],
+      "expo-camera",
       "./plugins/with-immersive.cjs",
-      "./plugins/with-cleartext.cjs",
-      [
-        "expo-audio",
-        {
-          "recordAudioAndroid": false
-        }
-      ]
+      "./plugins/with-cleartext.cjs"
     ],
     "icon": "./assets/icon.png"
   }
