@@ -2028,16 +2028,30 @@ ${more}`;
         if (stack.printing_id) ids.add(stack.printing_id);
         owned.set(key, ids);
       }
-      const cards = searchLocally(
-        query,
-        {
-          oracle: await this.store.allOracle(),
-          printings: await this.store.allPrintings(),
-          owned,
-        },
+      const all = searchLocally(query, {
+        oracle: await this.store.allOracle(),
+        printings: await this.store.allPrintings(),
+        owned,
+      });
+      /*
+        Cut here, where the whole list is in hand.
+
+        `total` is how many matched, not how many fit on a page: the
+        browser decides whether to ask for more from that number, and
+        reporting the page size meant it never asked. 88 owned cards
+        showed 60 and stopped.
+
+        And the offset asked for is the offset reported, because the
+        browser works the next page out from it. A constant zero asks
+        for the same page for ever.
+      */
+      const offset = Math.max(0, Number(query.offset ?? 0) || 0);
+      return {
+        cards: all.slice(offset, offset + limit),
+        total: all.length,
+        offset,
         limit,
-      );
-      return { cards, total: cards.length, offset: 0, limit };
+      };
     }
   }
 

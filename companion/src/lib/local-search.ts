@@ -115,10 +115,18 @@ export interface SearchInputs {
  * card whose name STARTS with what you typed is what you meant, and one
  * that merely contains it is a coincidence you scroll past.
  */
+/**
+ * Every match, in order. NOT a page of them.
+ *
+ * It used to slice to a limit and ignore any offset, so every page was
+ * page one: a collection of 88 cards showed 60 and stopped, and asking
+ * for more returned the same 60 again. Paging needs the whole list to
+ * count and to cut, and only the caller knows which page is wanted.
+ */
 export function searchLocally(
   query: CardQuery,
   { oracle, printings, owned }: SearchInputs,
-  limit = 60,
+  limit = Number.POSITIVE_INFINITY,
 ): CatalogueCard[] {
   // The browser sends what you typed as `anywhere` — name, type line and
   // rules text — not as `name`. Reading only `name` ignored the box
