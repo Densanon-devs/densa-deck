@@ -13,6 +13,7 @@ import { describe, test } from 'node:test';
 import {
   matchesSet,
   orderPrintings,
+  ownedLine,
   pickerCount,
   variantsLine,
   yoursFirst,
@@ -209,5 +210,44 @@ describe('the line above the pager', () => {
 
   test('one printing needs no line, because there is nothing to swipe', () => {
     assert.equal(variantsLine(1, 41, true), '');
+  });
+});
+
+describe('how many of this printing you have', () => {
+  /**
+   * Asked for directly: "I need to see how many of a particular
+   * version of a card I have when viewing."
+   *
+   * The count that already existed answers a different question --
+   * how many are in the DECK -- so both are shown, and this one sits
+   * on the page with the art rather than below the fold.
+   */
+  test('the ordinary case', () => {
+    assert.equal(ownedLine({ total: 2, foil: 0 }), 'You own 2');
+    assert.equal(ownedLine({ total: 1, foil: 0 }), 'You own 1');
+  });
+
+  test('none of this printing says nothing at all', () => {
+    // A line saying "You own 0" on thirty-nine of forty pages is
+    // noise. Absence is the default and needs no announcement.
+    assert.equal(ownedLine({ total: 0, foil: 0 }), '');
+    assert.equal(ownedLine(undefined), '');
+  });
+
+  test('a mix names the foils', () => {
+    // Owning one of each is common and they are not
+    // interchangeable: different card to sleeve, different number to
+    // value.
+    assert.equal(ownedLine({ total: 3, foil: 1 }), 'You own 3 · 1 foil');
+  });
+
+  test('all foil says so rather than listing it twice', () => {
+    // "You own 1 · 1 foil" reads as two cards.
+    assert.equal(ownedLine({ total: 1, foil: 1 }), 'You own 1 foil');
+    assert.equal(ownedLine({ total: 2, foil: 2 }), 'You own 2, all foil');
+  });
+
+  test('more foils than copies cannot happen and does not break it', () => {
+    assert.equal(ownedLine({ total: 1, foil: 5 }), 'You own 1 foil');
   });
 });

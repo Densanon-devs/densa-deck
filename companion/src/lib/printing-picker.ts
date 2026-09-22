@@ -131,3 +131,19 @@ export function variantsLine(
   }
   return `${shown} printings — swipe to see them`;
 }
+
+/** How many of one printing are on a shelf, in words. */
+export function ownedLine(
+  held: { total: number; foil: number } | undefined,
+): string {
+  const total = held?.total ?? 0;
+  if (total <= 0) return '';
+  const foil = Math.min(held?.foil ?? 0, total);
+  // "You own 1 foil" rather than "You own 1 · 1 foil", which reads
+  // as two cards.
+  if (foil === total) {
+    return total === 1 ? 'You own 1 foil' : `You own ${total}, all foil`;
+  }
+  if (foil > 0) return `You own ${total} · ${foil} foil`;
+  return `You own ${total}`;
+}

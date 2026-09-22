@@ -38,7 +38,7 @@ import {
 import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
 import { withinIdentity } from '../lib/decks.ts';
-import { variantsLine, yoursFirst }
+import { ownedLine, variantsLine, yoursFirst }
   from '../lib/printing-picker.ts';
 import type {
   CardQuery,
@@ -170,7 +170,8 @@ export function CardBrowser({
    * somewhere" and a printing list that ignored the scope would offer
    * cards out of a box the user had just excluded.
    */
-  const [ownedIds, setOwnedIds] = useState<Set<string>>(new Set());
+  const [ownedCounts, setOwnedCounts] =
+    useState<Map<string, { total: number; foil: number }>>(new Map());
   // Which one is under the thumb. The pager alone could not say, so "Add this
   // printing" had nothing to name — and a picker you can look through but not
   // pick from is the half that does not help.
@@ -251,15 +252,19 @@ export function CardBrowser({
   */
   useEffect(() => {
     if (!preview) {
-      setOwnedIds(new Set());
+      setOwnedCounts(new Map());
       return;
     }
     let live = true;
-    void state.ownedPrintingsOf(preview.name, ownedOnly ? ownedIn : '')
-      .then((ids) => { if (live) setOwnedIds(ids); })
-      .catch(() => { if (live) setOwnedIds(new Set()); });
+    void state.ownedCountsOf(preview.name, ownedOnly ? ownedIn : '')
+      .then((counts) => { if (live) setOwnedCounts(counts); })
+      .catch(() => { if (live) setOwnedCounts(new Map()); });
     return () => { live = false; };
   }, [preview, ownedOnly, ownedIn, state]);
+
+  /** The ids alone, for the ordering, which does not care how many. */
+  const ownedIds = useMemo(
+    () => new Set(ownedCounts.keys()), [ownedCounts]);
 
   /**
    * The pager's list: yours first, and only yours when you asked.
@@ -865,6 +870,22 @@ export function CardBrowser({
                         ? `  ·  $${printing.price_usd.toFixed(2)}`
                         : ''}
                     </Text>
+                    {/*
+                      How many of THIS printing are on your shelf.
+
+                      Under the art, on the page itself, so it changes
+                      as you swipe and so it is beside the picture it
+                      is about. The count that already existed here
+                      answers a different question -- how many are in
+                      the deck -- and lived below the fold in the
+                      scrolling text, which is not where you look
+                      while flicking through versions.
+                    */}
+                    {ownedLine(ownedCounts.get(printing.printing_id)) ? (
+                      <Text style={styles.ownedHere}>
+                        {ownedLine(ownedCounts.get(printing.printing_id))}
+                      </Text>
+                    ) : null}
                   </View>
                 ))}
               </ScrollView>
@@ -1087,6 +1108,9 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13 },
+  // Green, because it is the answer to "do I have this one" and
+  // that answer should be findable without reading.
+  ownedHere: { color: '#68d391', fontSize: 13, fontWeight: '600' },
   fieldLabel: {
     color: '#8a8f9c',
     fontSize: 11,

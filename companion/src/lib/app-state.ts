@@ -770,6 +770,41 @@ ${more}`;
   }
 
   /**
+   * How many of each printing of this card are in a box of yours.
+   *
+   * Not how many are in the deck -- that is a different question and
+   * the browser already answers it. This is "I am looking at the
+   * Bloomburrow Island; do I have one?", which is the question you
+   * ask standing in front of a shelf and the one nothing answered.
+   *
+   * Foils counted separately as well as together, because owning one
+   * of each is common and they are not interchangeable: the foil is
+   * a different card to sleeve and a different number to value.
+   */
+  async ownedCountsOf(
+    cardName: string,
+    collectionUid = '',
+  ): Promise<Map<string, { total: number; foil: number }>> {
+    const key = (cardName || '').trim().toLowerCase();
+    const out = new Map<string, { total: number; foil: number }>();
+    for (const stack of await this.store.listStacks(
+      collectionUid || undefined)) {
+      if (stack.quantity <= 0) continue;
+      if (stack.card_name.trim().toLowerCase() !== key) continue;
+      if (!stack.printing_id) continue;
+      const held = out.get(stack.printing_id) ?? { total: 0, foil: 0 };
+      held.total += stack.quantity;
+      // Scryfall spells the shiny ones `foil` and `etched`; anything
+      // that is not plainly nonfoil is shiny for this purpose.
+      if (stack.finish && stack.finish !== 'nonfoil') {
+        held.foil += stack.quantity;
+      }
+      out.set(stack.printing_id, held);
+    }
+    return out;
+  }
+
+  /**
    * Printing ids of a card that this phone actually owns.
    *
    * For choosing which version to show when a slot names none: the

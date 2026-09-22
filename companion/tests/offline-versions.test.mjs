@@ -129,3 +129,80 @@ describe('every printing of a card, with no PC', () => {
     assert.equal(printings.length, 3);
   });
 });
+
+describe('how many of each printing are on a shelf', () => {
+  /**
+   * Asked for while looking at the versions of a card: "how many of a
+   * particular version do I have". Distinct from the deck count the
+   * browser already showed, which answers how many are in the LIST.
+   */
+  async function withStacks(rows) {
+    const store = new LocalStore(new MemoryDatabase());
+    await store.init();
+    await store.putCatalogue(PRINTINGS);
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'p1', testUuid,
+      async () => { throw new Error('Network request failed'); },
+    );
+    for (const row of rows) {
+      await state.addCard({
+        printing_id: row.id,
+        card_name: row.name ?? 'Island',
+        finish: row.finish ?? 'nonfoil',
+        collection_uid: row.where ?? 'main',
+        quantity: row.qty ?? 1,
+      });
+    }
+    return { store, state };
+  }
+
+  test('counted per printing, not per card', async () => {
+    const { state } = await withStacks([
+      { id: 'p-old', qty: 3 }, { id: 'p-new', qty: 1 },
+    ]);
+    const counts = await state.ownedCountsOf('Island');
+    assert.equal(counts.get('p-old')?.total, 3);
+    assert.equal(counts.get('p-new')?.total, 1);
+    assert.equal(counts.get('p-mid'), undefined);
+  });
+
+  test('foils counted separately as well as together', async () => {
+    const { state } = await withStacks([
+      { id: 'p-old', qty: 2 }, { id: 'p-old', qty: 1, finish: 'foil' },
+    ]);
+    const held = (await state.ownedCountsOf('Island')).get('p-old');
+    assert.equal(held.total, 3);
+    assert.equal(held.foil, 1);
+  });
+
+  test('etched counts as shiny too', async () => {
+    const { state } = await withStacks([
+      { id: 'p-old', qty: 1, finish: 'etched' },
+    ]);
+    assert.equal((await state.ownedCountsOf('Island')).get('p-old').foil, 1);
+  });
+
+  test('another card is not counted', async () => {
+    const { state } = await withStacks([
+      { id: 'p-sol', name: 'Sol Ring', qty: 4 },
+    ]);
+    assert.equal((await state.ownedCountsOf('Island')).size, 0);
+  });
+
+  test('scoped to one collection when asked', async () => {
+    // Only Mine can be pointed at one shelf, and the count has to
+    // agree with the filter above it.
+    const { state } = await withStacks([
+      { id: 'p-old', qty: 2, where: 'binder' },
+      { id: 'p-old', qty: 5, where: 'bulk' },
+    ]);
+    assert.equal((await state.ownedCountsOf('Island')).get('p-old').total, 7);
+    assert.equal(
+      (await state.ownedCountsOf('Island', 'binder')).get('p-old').total, 2);
+  });
+
+  test('owning none of anything is an empty answer, not a crash', async () => {
+    const { state } = await withStacks([]);
+    assert.equal((await state.ownedCountsOf('Island')).size, 0);
+  });
+});
