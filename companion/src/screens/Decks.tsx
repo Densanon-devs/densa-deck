@@ -41,6 +41,7 @@ import {
   copiesOf,
   costToFinish,
   deckColorIdentity,
+  deckColours,
   deckSize,
   deckValue,
   deckWarnings,
@@ -501,6 +502,13 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * the lock keeps working after the desktop goes away, which is exactly
    * when someone is standing at a table adding cards.
    */
+  /** The deck's colours, and how much of each. */
+  const colours = useMemo(
+    () => deckColours(
+      [...(deck?.decklist ?? []), ...(deck?.commander ?? [])], slots),
+    [deck, slots],
+  );
+
   const identity = useMemo(
     () => deckColorIdentity(deck?.commander ?? [], slots, deck?.format ?? ''),
     [deck, slots],
@@ -881,6 +889,32 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       <Text style={styles.muted}>
         {deck ? `${totalCards(deck)} cards` : ''}
       </Text>
+
+      {/*
+        What colours this deck is, and how much of each.
+
+        The pips alone would say "Golgari". The counts say whether it
+        is a green deck splashing black or an even pair, which is a
+        mana-base decision rather than a label -- and it is the
+        question anyone actually has in front of a list.
+
+        Counted by copies, so nine Forests are nine green cards.
+      */}
+      {colours.length ? (
+        <View style={styles.pipRow}>
+          {colours.map(({ colour, cards }) => (
+            <View
+              key={colour}
+              style={[styles.pip, { backgroundColor: PIP_COLOUR[colour] }]}
+            >
+              <Text style={[styles.pipLetter,
+                            { color: PIP_INK[colour] }]}>{colour}</Text>
+              <Text style={[styles.pipCount,
+                            { color: PIP_INK[colour] }]}>{cards}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
       {money && (money.worth.usd > 0 || money.worth.unpriced > 0) ? (
         <Text style={styles.muted}>
           Worth about ${money.worth.usd.toFixed(2)}
@@ -961,6 +995,13 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
 
                 Two of them side by side for a partner pair, which is
                 why this is a row rather than one image.
+
+                The ARTWORK rather than the whole card. A card at
+                thumbnail size is mostly frame, text box and mana
+                symbols you cannot read; the painting is the part you
+                recognise across a table, and `art_crop` is Scryfall's
+                own cut of exactly that. It sits on the left of the
+                deck, which is where the eye starts.
               */}
               <View style={styles.commanderCards}>
                 {(deck.commander ?? []).map((c, i) => (
@@ -972,10 +1013,12 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                       <Image
                         style={styles.commanderArt}
                         source={artSource(
-                          c.printing_id || commanderArt[c.name] || '', 'small')}
-                        // Contain, not cover: a commander with its
-                        // corners cropped off looks like a mistake.
-                        resizeMode="contain"
+                          c.printing_id || commanderArt[c.name] || '',
+                          'art_crop')}
+                        // Cover, not contain: this is a crop already,
+                        // and letterboxing a crop wastes the only
+                        // thing on screen worth looking at.
+                        resizeMode="cover"
                         accessibilityLabel={c.name}
                       />
                     ) : null}
@@ -1393,6 +1436,22 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   );
 }
 
+/**
+ * The five colours as Magic prints them, plus colourless.
+ *
+ * Recognised without reading, which is the point of a pip: the
+ * letter is there for anyone who cannot rely on the colour, and the
+ * ink is chosen per background so both stay legible.
+ */
+const PIP_COLOUR: Record<string, string> = {
+  W: '#f8f3e3', U: '#2f6f9f', B: '#3b3a45', R: '#c5452f', G: '#2f7d4f',
+  C: '#8a8f9c',
+};
+const PIP_INK: Record<string, string> = {
+  W: '#1a1a1a', U: '#ffffff', B: '#e4e6eb', R: '#ffffff', G: '#ffffff',
+  C: '#11151d',
+};
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0f1117' },
   content: { padding: 16, gap: 10, paddingBottom: 60 },
@@ -1505,16 +1564,34 @@ const styles = StyleSheet.create({
     color: '#e4e6eb',
     fontSize: 12,
     marginTop: 4,
-    textAlign: 'center',
+    // Left, to line up under the left edge of the art rather than
+    // drifting about under a crop that is wider than it is tall.
+    textAlign: 'left',
   },
-  commanderCards: { flexDirection: 'row', gap: 12 },
-  commanderCardBox: { alignItems: 'center', width: 96 },
+  // Left-aligned rather than centred: the art is the anchor of the
+  // page and the eye starts at the left edge of it.
+  commanderCards: { alignItems: 'flex-start', flexDirection: 'row', gap: 12,
+                    justifyContent: 'flex-start' },
+  commanderCardBox: { alignItems: 'flex-start', width: 132 },
+  pipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  pip: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  pipLetter: { fontSize: 12, fontWeight: '800' },
+  pipCount: { fontSize: 12, fontWeight: '600' },
   commanderArt: {
-    // A Magic card is 63x88. Anything else crops or letterboxes it.
-    aspectRatio: 63 / 88,
+    // Scryfall's art crop is 626x457, near enough 1.37:1. The card
+    // ratio that was here letterboxed it into a tall grey box with a
+    // stripe of painting across the middle.
+    aspectRatio: 626 / 457,
     backgroundColor: '#11151d',
     borderRadius: 6,
-    width: 96,
+    width: 132,
   },
   commanderPrinting: { color: '#6b7079', fontSize: 11, marginTop: 1 },
   commanderActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
