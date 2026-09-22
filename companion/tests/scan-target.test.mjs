@@ -15,8 +15,10 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  askBeforeDeck,
   flashVerb,
   needsCollection,
+  notOwnedLine,
   planFor,
 } from '../src/lib/scan-target.ts';
 
@@ -104,5 +106,66 @@ describe('whether to show the collection picker', () => {
   test('and no in the one mode that writes nothing', () => {
     // A control that does nothing reads as one that is broken.
     assert.equal(needsCollection(planFor('tag', true)), false);
+  });
+});
+
+describe('a card the collection has never heard of', () => {
+  /**
+   * Asked for: warn that the card is not in the collection, offer to
+   * add it to one, and keep the right to refuse and put it in the
+   * deck anyway.
+   *
+   * "From my collection" is a claim about the card. When the claim
+   * is wrong the deck fills with cards the collection does not
+   * have, and the shortfall, the value and the cost-to-finish are
+   * all computed against a collection missing them.
+   */
+  const none = { thisPrinting: 0, otherPrintings: 0 };
+  const other = { thisPrinting: 0, otherPrintings: 4 };
+  const have = { thisPrinting: 2, otherPrintings: 0 };
+
+  test('it asks', () => {
+    assert.equal(askBeforeDeck(planFor('tag', true), none), true);
+  });
+
+  test('and does not when you have that printing', () => {
+    // The ordinary case, which must stay silent or the warning gets
+    // dismissed without being read.
+    assert.equal(askBeforeDeck(planFor('tag', true), have), false);
+  });
+
+  test('owning a DIFFERENT printing still asks', () => {
+    // You are holding a specific card. Owning another printing of
+    // it does not mean this one is recorded, and a deck slot naming
+    // this printing against a collection holding another is exactly
+    // the mismatch worth catching.
+    assert.equal(askBeforeDeck(planFor('tag', true), other), true);
+  });
+
+  test('never in the mode that files anyway', () => {
+    // "New card" is already filing it. Asking would be asking a
+    // question that has just been answered.
+    assert.equal(askBeforeDeck(planFor('add', true), none), false);
+  });
+
+  test('never on the Scan tab, where there is no deck', () => {
+    assert.equal(askBeforeDeck(planFor('tag', false), none), false);
+    assert.equal(askBeforeDeck(planFor('add', false), none), false);
+  });
+});
+
+describe('what the warning says', () => {
+  test('when you own none of it', () => {
+    assert.equal(
+      notOwnedLine('Ash Barrens', { thisPrinting: 0, otherPrintings: 0 }),
+      'Ash Barrens is not in your collection yet.');
+  });
+
+  test('when you own another printing, which is a different sentence', () => {
+    // Telling someone their card is missing while four of it are on
+    // the shelf is how a warning stops being read.
+    assert.equal(
+      notOwnedLine('Island', { thisPrinting: 0, otherPrintings: 4 }),
+      'You own 4 Island, but not this printing.');
   });
 });

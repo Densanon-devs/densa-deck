@@ -70,3 +70,47 @@ export function flashVerb(
 export function needsCollection(plan: ScanPlan): boolean {
   return plan.file || plan.tag;
 }
+
+/** What this phone holds of the card that was just scanned. */
+export interface Held {
+  /** Copies of the exact printing in your hand. */
+  thisPrinting: number;
+  /** Copies of the same card in some other printing. */
+  otherPrintings: number;
+}
+
+/**
+ * Whether to stop and ask before putting this in the deck.
+ *
+ * Only in the mode that files nothing. "From my collection" is a
+ * claim about the card, and when the claim is wrong the deck quietly
+ * fills with cards the collection has never heard of -- so the
+ * shortfall, the value and the cost-to-finish are all computed
+ * against a collection that is missing them.
+ *
+ * By PRINTING rather than by name. You are holding a specific card;
+ * owning a different printing of it does not mean this one is
+ * recorded, and a deck slot naming this printing against a
+ * collection that has another is exactly the mismatch worth
+ * catching.
+ */
+export function askBeforeDeck(plan: ScanPlan, held: Held): boolean {
+  if (!plan.deck || plan.file) return false;
+  return (held?.thisPrinting ?? 0) <= 0;
+}
+
+/**
+ * What to say about it.
+ *
+ * Owning the card in another printing is a different sentence from
+ * owning none of it, and telling someone their card is missing when
+ * four of it are on the shelf is how a warning gets dismissed
+ * without being read.
+ */
+export function notOwnedLine(name: string, held: Held): string {
+  const other = held?.otherPrintings ?? 0;
+  if (other > 0) {
+    return `You own ${other} ${name}, but not this printing.`;
+  }
+  return `${name} is not in your collection yet.`;
+}

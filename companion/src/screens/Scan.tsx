@@ -48,8 +48,14 @@ import type { AppState, Connection, IndexFetch } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
 import { finishToFile } from '../lib/finishes.ts';
 import type { DeckEntry } from '../lib/decks.ts';
-import { flashVerb, needsCollection, planFor }
-  from '../lib/scan-target.ts';
+import {
+  askBeforeDeck,
+  flashVerb,
+  needsCollection,
+  notOwnedLine,
+  planFor,
+} from '../lib/scan-target.ts';
+import type { Held } from '../lib/scan-target.ts';
 import { artSource } from '../lib/images.ts';
 import { orderPrintings, pickerCount } from '../lib/printing-picker.ts';
 import {
@@ -290,6 +296,26 @@ export function ScanScreen({ state, deck, onClose }: Props) {
     unreachable, so this filters on set name or code before the sort.
   */
   const [setFilter, setSetFilter] = useState('');
+  /**
+   * A card on its way into the deck that the collection has never
+   * heard of.
+   *
+   * "From my collection" is a claim about the card, and when the
+   * claim is wrong the deck quietly fills with cards the collection
+   * does not have -- so the shortfall, the value and the
+   * cost-to-finish are all computed against a collection missing
+   * them. Rather than fix that silently or refuse the card, it asks.
+   *
+   * Refusing is a real answer: a deck is allowed to contain cards
+   * you have not bought, and a proxy or a borrowed card is not
+   * something to file. "Just the deck" is a button, not a cancel.
+   */
+  const [pending, setPending] = useState<{
+    candidate: ScanCandidate;
+    finish: string;
+    qty: number;
+    held: Held;
+  } | null>(null);
   const [suggestions, setSuggestions] = useState<Array<{
     name: string; printings: number;
   }>>([]);
@@ -487,9 +513,51 @@ export function ScanScreen({ state, deck, onClose }: Props) {
   /** What this scan does, decided in one place and tested there. */
   const plan = planFor(mode, Boolean(deck));
 
+  /** Put it in the deck, and file it first when asked to. */
+  const commitToDeck = useCallback(
+    async (candidate: ScanCandidate, finish: string, added: number,
+           fileInto: string) => {
+      if (!deck) return;
+      if (fileInto) {
+        await state.addCard({
+          printing_id: candidate.printing_id,
+          card_name: candidate.name,
+          finish,
+          collection_uid: fileInto,
+          quantity: added,
+        });
+      }
+      const slot: DeckEntry = {
+        name: candidate.name,
+        qty: added,
+        printing_id: candidate.printing_id,
+        set_code: candidate.set_code,
+        collector_number: candidate.collector_number,
+      };
+      if (finish && finish !== 'nonfoil') slot.finish = finish;
+      await deck.onCard(slot, added);
+    },
+    [deck, state],
+  );
+
   const intoDeck = useCallback(
     async (candidate: ScanCandidate, finish: string, added: number) => {
       if (!deck) return;
+      if (!plan.file) {
+        // Ask before adding a card the collection does not have.
+        const counts = await state.ownedCountsOf(candidate.name);
+        const held: Held = {
+          thisPrinting: counts.get(candidate.printing_id)?.total ?? 0,
+          otherPrintings: [...counts.entries()]
+            .filter(([id]) => id !== candidate.printing_id)
+            .reduce((sum, [, v]) => sum + v.total, 0),
+        };
+        if (askBeforeDeck(plan, held)) {
+          setPending({ candidate, finish, qty: added, held });
+          setResult(null);
+          return;
+        }
+      }
       if (plan.file) {
         await state.addCard({
           printing_id: candidate.printing_id,
@@ -1026,8 +1094,12 @@ export function ScanScreen({ state, deck, onClose }: Props) {
 
   // Both pickers, mirrored into a ref the interval can read.
   useEffect(() => {
-    pickingRef.current = !!result?.candidates?.length || !!choosing?.length;
-  }, [result, choosing]);
+    // A question on screen counts as busy in every form: the
+    // printing picker, the which-copy picker, and the one asking
+    // whether to file a card the collection does not have.
+    pickingRef.current = !!result?.candidates?.length
+      || !!choosing?.length || !!pending;
+  }, [result, choosing, pending]);
 
   // The auto loop. Every decision it makes lives in AutoScanner, which is
   // tested in Node; this only carries them out.
@@ -1714,6 +1786,99 @@ export function ScanScreen({ state, deck, onClose }: Props) {
         ) : null}
       </View>
 
+      {/*
+        The card the collection has never heard of.
+
+        Offered rather than imposed in either direction: filing it
+        silently would put cards in the collection nobody said to
+        add, and refusing the card would make the mode useless for
+        the deck you are actually building. A proxy, a borrowed
+        card, and a card you are about to buy are all real and none
+        of them belong on a shelf.
+      */}
+      {pending ? (
+        <View style={styles.askBox}>
+          <Text style={styles.askTitle}>
+            {notOwnedLine(pending.candidate.name, pending.held)}
+          </Text>
+          <Text style={styles.askMeta}>
+            {pending.candidate.set_code.toUpperCase()}
+            {pending.candidate.collector_number
+              ? ` #${pending.candidate.collector_number}` : ''}
+            {pending.qty > 1 ? `  ·  ${pending.qty} copies` : ''}
+            {pending.finish !== 'nonfoil' ? '  ·  foil' : ''}
+          </Text>
+          <Text style={styles.askHint}>
+            File it into a collection, or put it in the deck on its own.
+          </Text>
+          <View style={styles.askChips}>
+            {shelves.map((shelf) => (
+              <Pressable
+                key={shelf.collection_uid}
+                style={styles.askChip}
+                onPress={() => {
+                  const it = pending;
+                  setPending(null);
+                  void commitToDeck(it.candidate, it.finish, it.qty,
+                                    shelf.collection_uid)
+                    .then(() => {
+                      setFlash({
+                        name: it.candidate.name,
+                        copy: 1,
+                        added: it.qty,
+                        foil: it.finish !== 'nonfoil',
+                        printingId: it.candidate.printing_id,
+                        verb: 'ADDED → DECK',
+                        setCode: it.candidate.set_code,
+                        number: it.candidate.collector_number,
+                        rarity: it.candidate.rarity,
+                      });
+                      setTimeout(() => setFlash(null), 950);
+                    })
+                    .catch((err) => setStatus(
+                      recordCrash(err, 'filing', false).message));
+                }}
+              >
+                <Text style={styles.askChipText}>{shelf.name}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={styles.askActions}>
+            <Pressable
+              style={styles.askRefuse}
+              onPress={() => {
+                const it = pending;
+                setPending(null);
+                void commitToDeck(it.candidate, it.finish, it.qty, '')
+                  .then(() => {
+                    setFlash({
+                      name: it.candidate.name,
+                      copy: 1,
+                      added: it.qty,
+                      foil: it.finish !== 'nonfoil',
+                      printingId: it.candidate.printing_id,
+                      verb: 'INTO DECK',
+                      setCode: it.candidate.set_code,
+                      number: it.candidate.collector_number,
+                      rarity: it.candidate.rarity,
+                    });
+                    setTimeout(() => setFlash(null), 950);
+                  })
+                  .catch((err) => setStatus(
+                    recordCrash(err, 'adding to the deck', false).message));
+              }}
+            >
+              <Text style={styles.askRefuseText}>
+                Just the deck, don’t file it
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => setPending(null)}>
+              <Text style={styles.askCancel}>Skip this card</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
       {result?.candidates?.length ? (
         <View
           style={styles.picker}
@@ -2100,6 +2265,37 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   undoText: { color: '#8a8f9c', fontSize: 12, flex: 1 },
+  askBox: {
+    backgroundColor: '#1d2433',
+    borderColor: '#ecc94b',
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 8,
+    padding: 12,
+  },
+  askTitle: { color: '#ecc94b', fontSize: 15, fontWeight: '700' },
+  askMeta: { color: '#8a8f9c', fontSize: 13 },
+  askHint: { color: '#c7ccd6', fontSize: 13 },
+  askChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  askChip: {
+    borderColor: '#38a169',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  askChipText: { color: '#68d391', fontSize: 13, fontWeight: '600' },
+  askActions: { alignItems: 'center', flexDirection: 'row', gap: 14,
+                marginTop: 2 },
+  askRefuse: {
+    borderColor: '#2f6f9f',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  askRefuseText: { color: '#8ec5ff', fontSize: 13, fontWeight: '600' },
+  askCancel: { color: '#8a8f9c', fontSize: 13 },
   deckBar: {
     alignItems: 'center',
     borderBottomColor: '#242b3a',
