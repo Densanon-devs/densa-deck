@@ -776,10 +776,21 @@ ${more}`;
    * copy on the shelf beats the newest reprint of it, because that is
    * the one going on the table.
    */
-  async ownedPrintingsOf(cardName: string): Promise<Set<string>> {
+  async ownedPrintingsOf(
+    cardName: string,
+    /*
+      Which shelf counts as "owned", or every shelf.
+
+      The deck builder's Only Mine can be scoped to one collection --
+      "build from my Modern binder" -- and a printing list that
+      ignored the scope would offer cards from a box the user had
+      just excluded.
+    */
+    collectionUid = '',
+  ): Promise<Set<string>> {
     const key = (cardName || '').trim().toLowerCase();
     const out = new Set<string>();
-    for (const stack of await this.store.listStacks()) {
+    for (const stack of await this.store.listStacks(collectionUid || undefined)) {
       if (stack.quantity <= 0) continue;
       if (stack.card_name.trim().toLowerCase() !== key) continue;
       if (stack.printing_id) out.add(stack.printing_id);

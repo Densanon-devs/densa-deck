@@ -84,3 +84,50 @@ export function pickerCount(
   }
   return `${shown} of ${total} match`;
 }
+
+/**
+ * Yours first, and — when you asked for only yours — only yours.
+ *
+ * The swipe pager in the deck builder lists every printing of a card,
+ * newest first, which is the right order for a card you are choosing
+ * to acquire and the wrong one for a card you already have. The copy
+ * in your box is the one going on the table; it should not be four
+ * swipes in behind three reprints you have never held.
+ *
+ * And with Only Mine on, the other printings are not an ordering
+ * problem, they are noise: the whole filter means "build from what I
+ * have", so offering a version you do not own contradicts the thing
+ * that was asked for.
+ *
+ * `onlyYours` is honoured only when it leaves something. A stack
+ * filed before printing ids were recorded, or one whose printing is
+ * not in this phone's index, means the card IS owned and no variant
+ * can be matched to it — and a pager with nothing in it would be a
+ * worse answer than a pager with too much. The same rule as
+ * everywhere else here: lose detail, never the screen.
+ */
+export function yoursFirst<T extends { printing_id: string }>(
+  rows: T[],
+  owned: Set<string> = new Set(),
+  onlyYours = false,
+): T[] {
+  const list = rows ?? [];
+  const mine = list.filter((r) => owned.has(r.printing_id));
+  if (!mine.length) return [...list];
+  if (onlyYours) return mine;
+  const rest = list.filter((r) => !owned.has(r.printing_id));
+  return [...mine, ...rest];
+}
+
+/** The line above the pager, which has to say which list this is. */
+export function variantsLine(
+  shown: number,
+  total: number,
+  onlyYours: boolean,
+): string {
+  if (shown <= 1) return '';
+  if (onlyYours && shown < total) {
+    return `${shown} of ${total} printings — the ones you own`;
+  }
+  return `${shown} printings — swipe to see them`;
+}

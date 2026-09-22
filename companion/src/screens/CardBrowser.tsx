@@ -16,7 +16,12 @@
  * once seen. See `lib/images.ts` — their CDN answers 400 to the default one.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -33,6 +38,8 @@ import {
 import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
 import { withinIdentity } from '../lib/decks.ts';
+import { variantsLine, yoursFirst }
+  from '../lib/printing-picker.ts';
 import type {
   CardQuery,
   CatalogueCard,
@@ -154,7 +161,16 @@ export function CardBrowser({
   // art. The same card in six sets is six different pictures, and which one
   // you own or want is a real question — this is the only place in the app
   // that could answer it and did not.
-  const [variants, setVariants] = useState<CataloguePrinting[]>([]);
+  const [allVariants, setAllVariants] = useState<CataloguePrinting[]>([]);
+  /**
+   * Which of them are in a box of yours.
+   *
+   * Scoped to the collection Only Mine is pointed at, because "build
+   * from my Modern binder" is a different question from "cards I own
+   * somewhere" and a printing list that ignored the scope would offer
+   * cards out of a box the user had just excluded.
+   */
+  const [ownedIds, setOwnedIds] = useState<Set<string>>(new Set());
   // Which one is under the thumb. The pager alone could not say, so "Add this
   // printing" had nothing to name — and a picker you can look through but not
   // pick from is the half that does not help.
@@ -187,17 +203,17 @@ export function CardBrowser({
 
   useEffect(() => {
     if (!preview) {
-      setVariants([]);
+      setAllVariants([]);
       setShowing(0);
       return;
     }
     setShowing(0);
     void state
       .printingsFor(preview.name)
-      .then((r) => setVariants(r.printings ?? []))
+      .then((r) => setAllVariants(r.printings ?? []))
       // A card whose printings cannot be fetched still shows its own art;
       // losing the swipe is not losing the screen.
-      .catch(() => setVariants([]));
+      .catch(() => setAllVariants([]));
   }, [preview, state]);
   const [name, setName] = useState('');
   const [colours, setColours] = useState<string[]>([]);
@@ -226,6 +242,49 @@ export function CardBrowser({
       .then((rows) => setShelves(rows))
       .catch(() => setShelves([]));
   }, [state]);
+  /*
+    Which printings of the previewed card this phone holds.
+
+    Declared here rather than beside the fetch above because it needs
+    `ownedIn`, and reading a binding from further down the render body
+    is the kind of thing that works until somebody reorders two lines.
+  */
+  useEffect(() => {
+    if (!preview) {
+      setOwnedIds(new Set());
+      return;
+    }
+    let live = true;
+    void state.ownedPrintingsOf(preview.name, ownedOnly ? ownedIn : '')
+      .then((ids) => { if (live) setOwnedIds(ids); })
+      .catch(() => { if (live) setOwnedIds(new Set()); });
+    return () => { live = false; };
+  }, [preview, ownedOnly, ownedIn, state]);
+
+  /**
+   * The pager's list: yours first, and only yours when you asked.
+   *
+   * Newest-first is the right order for a card you are choosing to
+   * acquire and the wrong one for a card you already have -- the copy
+   * in your box is the one going on the table, and it should not be
+   * four swipes in behind reprints you have never held.
+   */
+  const variants = useMemo(
+    () => yoursFirst(allVariants, ownedIds, ownedOnly),
+    [allVariants, ownedIds, ownedOnly]);
+
+  /*
+    The page under the thumb has to exist.
+
+    Turning Only Mine on can shrink forty printings to one, and an
+    index left pointing at the ninth of them makes "Add this printing"
+    name a card that is no longer on screen -- which is the exact
+    failure the measured pager width was written to stop.
+  */
+  useEffect(() => {
+    setShowing((at) => Math.min(at, Math.max(0, variants.length - 1)));
+  }, [variants.length]);
+
   const [rarities, setRarities] = useState<string[]>([]);
   const [sets, setSets] = useState<string[]>([]);
   const [sort, setSort] = useState<NonNullable<CardQuery['sort']>>('name');
@@ -818,7 +877,7 @@ export function CardBrowser({
             )}
             {variants.length > 1 ? (
               <Text style={styles.muted}>
-                {variants.length} printings — swipe to see them
+                {variantsLine(variants.length, allVariants.length, ownedOnly)}
               </Text>
             ) : null}
           </View>

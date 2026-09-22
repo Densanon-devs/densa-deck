@@ -14,6 +14,8 @@ import {
   matchesSet,
   orderPrintings,
   pickerCount,
+  variantsLine,
+  yoursFirst,
 } from '../src/lib/printing-picker.ts';
 
 const SETS = {
@@ -114,5 +116,98 @@ describe('saying how many there are', () => {
 
   test('a filter that matched nothing says so plainly', () => {
     assert.equal(pickerCount(671, 0, 40), '0 of 671 match');
+  });
+});
+
+describe('the versions you own come first', () => {
+  /**
+   * The pager lists every printing newest-first, which is right for a
+   * card you are choosing to acquire and wrong for one you already
+   * have: the copy in your box is the one going on the table, and it
+   * should not be four swipes in behind reprints you never held.
+   */
+  const ROWS = [
+    { printing_id: 'new', set_code: 'blb' },
+    { printing_id: 'mid', set_code: 'ice' },
+    { printing_id: 'old', set_code: 'lea' },
+  ];
+
+  test('an owned printing moves to the front', () => {
+    assert.deepEqual(
+      yoursFirst(ROWS, new Set(['mid'])).map((r) => r.printing_id),
+      ['mid', 'new', 'old']);
+  });
+
+  test('several owned keep their order among themselves', () => {
+    // Newest-first still decides between two you own.
+    assert.deepEqual(
+      yoursFirst(ROWS, new Set(['old', 'new'])).map((r) => r.printing_id),
+      ['new', 'old', 'mid']);
+  });
+
+  test('owning none changes nothing', () => {
+    assert.deepEqual(yoursFirst(ROWS, new Set()).map((r) => r.printing_id),
+      ['new', 'mid', 'old']);
+  });
+
+  test('the input is not reordered underneath the caller', () => {
+    const before = ROWS.map((r) => r.printing_id);
+    yoursFirst(ROWS, new Set(['old']));
+    assert.deepEqual(ROWS.map((r) => r.printing_id), before);
+  });
+});
+
+describe('with Only Mine on, only yours', () => {
+  const ROWS = [
+    { printing_id: 'new', set_code: 'blb' },
+    { printing_id: 'mid', set_code: 'ice' },
+    { printing_id: 'old', set_code: 'lea' },
+  ];
+
+  test('the rest are not shown at all', () => {
+    // Not an ordering problem: the filter means "build from what I
+    // have", so offering a version you do not own contradicts it.
+    assert.deepEqual(
+      yoursFirst(ROWS, new Set(['mid']), true).map((r) => r.printing_id),
+      ['mid']);
+  });
+
+  test('two owned printings both show', () => {
+    assert.equal(yoursFirst(ROWS, new Set(['mid', 'old']), true).length, 2);
+  });
+
+  test('owning it by name with no printing recorded shows all', () => {
+    // A stack filed before printing ids were kept, or one whose
+    // printing is not in this phone's index. The card IS owned and no
+    // variant can be matched to it, and an empty pager is a worse
+    // answer than a full one. Lose detail, never the screen.
+    assert.equal(yoursFirst(ROWS, new Set(), true).length, 3);
+  });
+
+  test('an owned printing this index does not hold shows all', () => {
+    assert.equal(yoursFirst(ROWS, new Set(['not-here']), true).length, 3);
+  });
+});
+
+describe('the line above the pager', () => {
+  test('says which list this is when it has been cut', () => {
+    assert.equal(variantsLine(3, 41, true),
+      '3 of 41 printings — the ones you own');
+  });
+
+  test('and the plain one otherwise', () => {
+    assert.equal(variantsLine(41, 41, false),
+      '41 printings — swipe to see them');
+  });
+
+  test('Only Mine that cut nothing does not claim it did', () => {
+    // You own every printing there is. Saying "3 of 3 you own" is
+    // technically true and reads as a filter having done something.
+    assert.equal(variantsLine(3, 3, true),
+      '3 printings — swipe to see them');
+  });
+
+  test('one printing needs no line, because there is nothing to swipe', () => {
+    assert.equal(variantsLine(1, 41, true), '');
   });
 });
