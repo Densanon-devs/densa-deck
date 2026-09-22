@@ -1126,6 +1126,23 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                   <View style={styles.badge}>
                     <Text style={styles.badgeText}>{entry.qty}</Text>
                   </View>
+                  {/*
+                    The shiny ones, marked on the tile.
+
+                    A deck slot carries its finish now, and a foil is
+                    a different card to sleeve and a different number
+                    in the total -- so it has to be visible on the
+                    card rather than only true in the data. Gold and
+                    in the opposite corner to the count, which is the
+                    one corner nothing else uses.
+                  */}
+                  {entry.finish && entry.finish !== 'nonfoil' ? (
+                    <View style={styles.foilBadge}>
+                      <Text style={styles.foilBadgeText}>
+                        {entry.finish === 'etched' ? 'E' : '✨'}
+                      </Text>
+                    </View>
+                  ) : null}
                   <Text style={styles.tileName} numberOfLines={2}>
                     {entry.name}
                   </Text>
@@ -1534,6 +1551,20 @@ const styles = StyleSheet.create({
   tileName: { color: '#c9ced9', fontSize: 11, marginTop: 3 },
   exactPrinting: { color: '#68d391', fontSize: 10 },
   anyPrinting: { color: '#6b7280', fontSize: 10 },
+  foilBadge: {
+    alignItems: 'center',
+    backgroundColor: '#b7791f',
+    borderColor: '#ecc94b',
+    borderRadius: 10,
+    borderWidth: 1,
+    left: 4,
+    minWidth: 20,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    position: 'absolute',
+    top: 4,
+  },
+  foilBadgeText: { color: '#fffaf0', fontSize: 11, fontWeight: '800' },
   badge: {
     position: 'absolute',
     top: 4,

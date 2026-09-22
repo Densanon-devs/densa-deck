@@ -125,16 +125,45 @@ describe('owning only the foil', () => {
   });
 });
 
-describe('what a deck slot still cannot say', () => {
-  test('it has no finish of its own', () => {
+describe('a slot that says which finish', () => {
+  /*
+    The limit this used to document is gone: a deck can record "my
+    FOIL Sol Ring" now, and the slot's own answer beats inferring one
+    from what happens to be on the shelf -- which worked while you
+    owned one of them and could not once you owned both.
+  */
+  test('a foil slot is a different slot', () => {
+    assert.notEqual(entryKey({ ...SLOT, finish: 'foil' }), entryKey(SLOT));
+  });
+
+  test('and nonfoil is still the plain key', () => {
     /*
-      A real limit, written down rather than papered over. `entryKey`
-      is name plus printing, so a deck cannot record "my FOIL Sol
-      Ring" -- only "Sol Ring, this printing". Everything above
-      infers the finish from what is on the shelf, which works while
-      you own one of them and cannot while you own both.
+      Not cosmetic. Appending `nonfoil` to every key would change the
+      key of every slot in every deck ever saved -- cached slot facts,
+      quantities, the lot -- on the first load after this update.
+      Absent and 'nonfoil' have to produce the same string.
     */
+    assert.equal(entryKey({ ...SLOT, finish: 'nonfoil' }), entryKey(SLOT));
+    assert.equal(entryKey({ ...SLOT, finish: '' }), entryKey(SLOT));
     assert.equal(entryKey(SLOT), 'sol ring\u0000p-sol');
-    assert.equal(entryKey({ ...SLOT, finish: 'foil' }), entryKey(SLOT));
+  });
+
+  test('the slot beats the shelf', () => {
+    // You own both, so the shelf cannot say. The slot can.
+    const out = resolveSlots([{ ...SLOT, finish: 'foil' }], BOTH, [{
+      printing_id: 'p-sol', set_code: 'cmm', collector_number: '410',
+      price_usd: 2, price_usd_foil: 40, found: true,
+    }]);
+    assert.equal(out[entryKey({ ...SLOT, finish: 'foil' })].price_usd, 40);
+  });
+
+  test('a slot that says plain is priced plain, whatever you own', () => {
+    const out = resolveSlots([{ ...SLOT, finish: 'nonfoil' }], [
+      { card_name: 'Sol Ring', printing_id: 'p-sol', finish: 'foil' },
+    ], [{
+      printing_id: 'p-sol', set_code: 'cmm', collector_number: '410',
+      price_usd: 2, price_usd_foil: 40, found: true,
+    }]);
+    assert.equal(out[entryKey({ ...SLOT, finish: 'nonfoil' })].price_usd, 2);
   });
 });
