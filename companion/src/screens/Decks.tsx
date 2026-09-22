@@ -32,6 +32,7 @@ import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
 import { uuid } from '../lib/uuid.ts';
 import { CardBrowser } from './CardBrowser.tsx';
+import { ScanScreen } from './Scan.tsx';
 import { reporting } from './report.ts';
 import {
   DeckStore,
@@ -340,6 +341,15 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [savedToPc, setSavedToPc] = useState('');
   const [problem, setProblem] = useState('');
   const [browsing, setBrowsing] = useState(false);
+  /**
+   * The scanner, open inside this deck.
+   *
+   * Its own flag rather than a mode of the browser: they answer
+   * different questions -- "which card do I want" versus "here is the
+   * card in my hand" -- and a screen that was sometimes one and
+   * sometimes the other would need reading before it could be used.
+   */
+  const [scanning, setScanning] = useState(false);
   // Which half the grid and the +/- act on. The text box always shows
   // both, because that is what a decklist IS.
   const [zone, setZone] = useState<'main' | 'side'>('main');
@@ -817,6 +827,35 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     };
   }, [deck, allSlots, slots, missing]);
 
+  /*
+    The scanner takes the WHOLE screen rather than sitting in the
+    page.
+
+    Twice wrong inline: this screen is a ScrollView, and the scanner
+    is a `flex: 1` view containing a ScrollView of its own. A flex
+    child inside a scroller collapses to nothing, and a vertical
+    scroller inside a vertical scroller is a coin toss for which one
+    gets the drag. It also wants the room -- a camera preview in a
+    third of a page is not a camera preview.
+  */
+  if (scanning) {
+    return (
+      <ScanScreen
+        state={state}
+        deck={{
+          name: deck?.name ?? 'this deck',
+          onCard: async (slot) => {
+            // Through the same edit the browser and the text box use,
+            // so a scanned card is a deck slot like any other and the
+            // deck/board toggle still decides where it lands.
+            await add(slot);
+          },
+        }}
+        onClose={() => setScanning(false)}
+      />
+    );
+  }
+
   return (
     <ScrollView
       style={styles.screen}
@@ -1209,7 +1248,24 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             {browsing ? 'Close browser' : 'Browse cards'}
           </Text>
         </Pressable>
+        {/*
+          The camera, pointed at this deck.
+
+          The same scanner as the Scan tab rather than another one:
+          same picker, same art, same foil switch, same typed-add,
+          same auto loop. Two scanners would drift, and the one
+          nobody was looking at would be the worse of the pair.
+        */}
+        <Pressable
+          style={styles.secondary}
+          onPress={() => setScanning((open) => !open)}
+        >
+          <Text style={styles.secondaryText}>
+            {scanning ? 'Close scanner' : 'Scan into deck'}
+          </Text>
+        </Pressable>
       </View>
+
 
       {/*
         A grid with filters, not a text box. Deckbuilding is a browsing job:

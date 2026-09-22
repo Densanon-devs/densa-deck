@@ -47,6 +47,9 @@ import {
 import type { AppState, Connection, IndexFetch } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
 import { finishToFile } from '../lib/finishes.ts';
+import type { DeckEntry } from '../lib/decks.ts';
+import { flashVerb, needsCollection, planFor }
+  from '../lib/scan-target.ts';
 import { artSource } from '../lib/images.ts';
 import { orderPrintings, pickerCount } from '../lib/printing-picker.ts';
 import {
@@ -83,12 +86,32 @@ import { reporting } from './report.ts';
 
 interface Props {
   state: AppState;
+  /**
+   * A deck to put whatever is scanned into.
+   *
+   * Absent on the Scan tab, which files into a collection and
+   * nothing else. Present when the screen is opened from inside a
+   * deck, where the same camera, the same picker, the same foil
+   * switch and the same typed-add all still apply -- the only thing
+   * that changes is where the card ends up.
+   *
+   * Rebuilding any of that for decks would have meant two scanners
+   * drifting apart, and the one in the deck would have been the
+   * worse of the two.
+   */
+  deck?: {
+    name: string;
+    /** Put this card in the deck. Called once per filing. */
+    onCard: (entry: DeckEntry, qty: number) => Promise<void> | void;
+  };
+  /** Shown only when the screen is a panel rather than a tab. */
+  onClose?: () => void;
 }
 
 /** How often the loop wakes to ask whether it is time for another picture. */
 const TICK_MS = 250;
 
-export function ScanScreen({ state }: Props) {
+export function ScanScreen({ state, deck, onClose }: Props) {
   const [status, setStatus] = useState('Point at a card');
   const [result, setResult] = useState<ScanResult | null>(null);
   // The verb matters: filing a card and tagging one you already own look
@@ -447,9 +470,71 @@ export function ScanScreen({ state }: Props) {
     [state],
   );
 
+  /**
+   * What a scanned card becomes, when the destination is a deck.
+   *
+   * The two modes read as one question -- is this card already
+   * yours? -- and they differ by exactly one step. "From my
+   * collection" puts it in the deck and leaves the collection
+   * alone, which is what you want walking a deck out of a box you
+   * have already catalogued. "New card" files it as well, which is
+   * what you want with a stack fresh out of a booster.
+   *
+   * The slot carries the printing AND the finish, because a deck
+   * can hold both now and a scan is the one moment the app knows
+   * which one is physically in your hand.
+   */
+  /** What this scan does, decided in one place and tested there. */
+  const plan = planFor(mode, Boolean(deck));
+
+  const intoDeck = useCallback(
+    async (candidate: ScanCandidate, finish: string, added: number) => {
+      if (!deck) return;
+      if (plan.file) {
+        await state.addCard({
+          printing_id: candidate.printing_id,
+          card_name: candidate.name,
+          finish,
+          collection_uid: target,
+          also_collection_uids: alsoTag,
+          quantity: added,
+        });
+      }
+      const slot: DeckEntry = {
+        name: candidate.name,
+        qty: added,
+        printing_id: candidate.printing_id,
+        set_code: candidate.set_code,
+        collector_number: candidate.collector_number,
+      };
+      // Absent rather than 'nonfoil', which is what every slot ever
+      // saved looks like and what keeps the key stable.
+      if (finish && finish !== 'nonfoil') slot.finish = finish;
+      await deck.onCard(slot, added);
+    },
+    [deck, plan.file, state, target, alsoTag],
+  );
+
   const file = useCallback(
     async (candidate: ScanCandidate, finish: string, copy = 1,
            added = 1) => {
+      if (deck) {
+        await intoDeck(candidate, finish, added);
+        setFlash({
+          name: candidate.name,
+          copy,
+          added,
+          foil: finish !== 'nonfoil',
+          printingId: candidate.printing_id,
+          verb: flashVerb(plan),
+          setCode: candidate.set_code,
+          number: candidate.collector_number,
+          rarity: candidate.rarity,
+        });
+        setResult(null);
+        setTimeout(() => setFlash(null), 950);
+        return;
+      }
       if (mode === 'tag') {
         const out = await state.tagIntoGroup(
           candidate.printing_id, target, finish,
@@ -510,7 +595,7 @@ export function ScanScreen({ state }: Props) {
       setResult(null);
       setTimeout(() => setFlash(null), 950);
     },
-    [state, target, mode, alsoTag],
+    [state, target, mode, alsoTag, deck, intoDeck],
   );
 
   /** Answer "you own this two ways" by naming the stack. */
@@ -676,25 +761,35 @@ export function ScanScreen({ state }: Props) {
               setStatus('Same card still in frame');
               return;
             }
-            await state.addCard({
-              printing_id: local.printing.printing_id,
-              card_name: local.printing.name,
-              // The switch wins over the star. The switch is a person
-              // looking at the card; the star is a glyph the
-              // recogniser usually cannot see, and its absence was
-              // being read as proof of a nonfoil.
-              finish: finishToFile(
-                (local.printing as { finishes?: string }).finishes,
-                foil || local.foilHint),
-              collection_uid: target,
-              also_collection_uids: alsoTag,
-            });
+            // The switch wins over the star. The switch is a person
+            // looking at the card; the star is a glyph the recogniser
+            // usually cannot see, and its absence was being read as
+            // proof of a nonfoil.
+            const chosen = finishToFile(
+              (local.printing as { finishes?: string }).finishes,
+              foil || local.foilHint);
+            if (deck) {
+              // Auto scan has to land in the same place the button
+              // does. Two paths to one destination is how one of them
+              // quietly stops matching the other.
+              await intoDeck(
+                { ...(local.printing as unknown as ScanCandidate) },
+                chosen, 1);
+            } else {
+              await state.addCard({
+                printing_id: local.printing.printing_id,
+                card_name: local.printing.name,
+                finish: chosen,
+                collection_uid: target,
+                also_collection_uids: alsoTag,
+              });
+            }
             setFlash({
               name: local.printing.name,
               copy: decision.copy,
               printingId: local.printing.printing_id,
-              foil: foil || local.foilHint,
-              verb: 'ADDED',
+              foil: chosen !== 'nonfoil',
+              verb: flashVerb(plan),
               setCode: local.printing.set_code,
               number: local.printing.collector_number,
               rarity: (local.printing as { rarity?: string }).rarity,
@@ -1102,33 +1197,57 @@ export function ScanScreen({ state }: Props) {
         to tag inflates what you own, and tagging when you meant to file loses
         cards you have just bought.
       */}
-      <View style={styles.modeRow}>
-        <Pressable
-          style={[styles.mode, mode === 'add' && styles.modeOn]}
-          onPress={() => setMode('add')}
-        >
-          <Text style={[styles.modeText, mode === 'add' && styles.modeTextOn]}>
-            Add cards
+      {deck ? (
+        <View style={styles.deckBar}>
+          <Text style={styles.deckName} numberOfLines={1}>
+            Scanning into {deck.name}
           </Text>
-        </Pressable>
+          {onClose ? (
+            <Pressable onPress={onClose}>
+              <Text style={styles.deckDone}>Done</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+
+      <View style={styles.modeRow}>
         <Pressable
           style={[styles.mode, mode === 'tag' && styles.modeOn]}
           onPress={() => {
             setMode('tag');
-            setStatus('Tagging what you already own — nothing is added.');
+            setStatus(deck
+              ? 'Into the deck only — your collection is unchanged.'
+              : 'Tagging what you already own — nothing is added.');
           }}
         >
           <Text style={[styles.modeText, mode === 'tag' && styles.modeTextOn]}>
-            Tag what I own
+            {deck ? 'From my collection' : 'Tag what I own'}
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.mode, mode === 'add' && styles.modeOn]}
+          onPress={() => {
+            setMode('add');
+            if (deck) setStatus('Filing each card AND putting it in the deck.');
+          }}
+        >
+          <Text style={[styles.modeText, mode === 'add' && styles.modeTextOn]}>
+            {deck ? 'New card' : 'Add cards'}
           </Text>
         </Pressable>
       </View>
       <Text style={styles.modeHint}>
-        {mode === 'tag'
-          ? 'Scan cards you already own to put them in a group — a bundle to ' +
-            'sell, or a pile to give away. Nothing is added to your ' +
-            'collection and nothing is removed.'
-          : 'Scan cards to file them into your collection.'}
+        {deck
+          ? (mode === 'tag'
+            ? 'For cards already in your collection. They go into the '
+              + 'deck and nothing is added or removed.'
+            : 'For cards you have just acquired. Each one is filed into '
+              + 'the collection below AND put in the deck.')
+          : mode === 'tag'
+            ? 'Scan cards you already own to put them in a group — a '
+              + 'bundle to sell, or a pile to give away. Nothing is added '
+              + 'to your collection and nothing is removed.'
+            : 'Scan cards to file them into your collection.'}
       </Text>
 
       <View style={styles.header}>
@@ -1214,6 +1333,12 @@ export function ScanScreen({ state }: Props) {
         </Text>
       </View>
 
+      {/*
+        Where a NEW card gets filed. Hidden in the other deck mode,
+        where nothing is filed and a collection picker would be a
+        control that does nothing.
+      */}
+      {needsCollection(plan) ? (
       <CollectionBar
         collections={shelves}
         selected={target}
@@ -1225,6 +1350,7 @@ export function ScanScreen({ state }: Props) {
         }}
         showCounts={false}
       />
+      ) : null}
 
       {/*
         Tagging never moves a card or counts it twice — the lists just
@@ -1974,6 +2100,17 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   undoText: { color: '#8a8f9c', fontSize: 12, flex: 1 },
+  deckBar: {
+    alignItems: 'center',
+    borderBottomColor: '#242b3a',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+  },
+  deckName: { color: '#e4e6eb', flexShrink: 1, fontSize: 15,
+              fontWeight: '700' },
+  deckDone: { color: '#8ec5ff', fontSize: 15 },
   modeRow: { flexDirection: 'row', gap: 8 },
   mode: {
     flex: 1,
