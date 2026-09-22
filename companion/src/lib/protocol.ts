@@ -370,6 +370,8 @@ export interface ResolvedSlot extends DeckSlotRef {
    * "a card with this name", and a reader has to be able to tell.
    */
   via?: 'printing' | 'key' | 'name';
+  /** What a foil of this printing costs, when a foil is what you hold. */
+  price_usd_foil?: number | null;
 }
 
 /**

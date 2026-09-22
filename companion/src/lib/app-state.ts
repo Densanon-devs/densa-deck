@@ -1865,6 +1865,8 @@ ${more}`;
           set_code: hit.set_code,
           collector_number: hit.collector_number,
           price_usd: hit.price_usd,
+          price_usd_foil:
+            (hit as { price_usd_foil?: number | null }).price_usd_foil ?? null,
           color_identity: hit.color_identity,
           type_line: hit.type_line,
           // Carried so the merge below can tell a resolved printing

@@ -1026,16 +1026,18 @@ export class LocalStore {
     collector_number: string;
   }>): Promise<Array<{
     printing_id: string; set_code: string; collector_number: string;
-    price_usd: number | null; color_identity: string[]; type_line: string;
+    price_usd: number | null; price_usd_foil: number | null;
+    color_identity: string[]; type_line: string;
     via: 'printing' | 'key' | 'name';
   } | undefined>> {
     type Row = {
       printing_id: string; set_code: string; collector_number: string;
-      price_usd: number | null;
+      price_usd: number | null; price_usd_foil: number | null;
     };
     const out: Array<{
       printing_id: string; set_code: string; collector_number: string;
-      price_usd: number | null; color_identity: string[]; type_line: string;
+      price_usd: number | null; price_usd_foil: number | null;
+      color_identity: string[]; type_line: string;
       via: 'printing' | 'key' | 'name';
     } | undefined> = [];
     for (const entry of entries) {
@@ -1093,6 +1095,10 @@ export class LocalStore {
         set_code: String(row.set_code ?? ''),
         collector_number: String(row.collector_number ?? ''),
         price_usd: row.price_usd ?? null,
+        // Both numbers, because a slot filled by a foil you own is
+        // worth the foil price and the deck total had no way to know
+        // that: it took the nonfoil figure for every copy.
+        price_usd_foil: row.price_usd_foil ?? null,
         // The two index sources spell colours differently, so keep
         // only the five letters and ignore brackets and commas.
         color_identity: [...String(card?.color_identity ?? '').toUpperCase()]
