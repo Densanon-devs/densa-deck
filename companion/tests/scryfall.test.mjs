@@ -31,6 +31,7 @@ const CARD = {
   mana_cost: '{1}', cmc: 1, color_identity: [], set: 'cmm',
   collector_number: '410', lang: 'en', games: ['paper'], digital: false,
   rarity: 'common', artist: 'Mike Bierek', released_at: '2023-11-03',
+  finishes: ['nonfoil', 'foil'],
 };
 
 describe('what belongs in the index', () => {
@@ -64,7 +65,22 @@ describe('what a card becomes', () => {
     // apart when the collector number will not read.
     assert.deepEqual(toPrintingRow({ ...CARD, prices: { usd: '3.09', usd_foil: '4.69' } }),
       ['p-sol', 'Sol Ring', 'cmm', '410', 1, 'common', 3.09, 4.69,
-       'Mike Bierek', 2023]);
+       'Mike Bierek', 2023, 'nonfoil,foil']);
+  });
+
+  test('which finishes it comes in ride along too', () => {
+    // The phone had no idea, so it guessed from a star in the
+    // collector line -- the one glyph OCR reliably loses -- and
+    // filed every foil as an ordinary copy.
+    assert.equal(toPrintingRow(CARD)[10], 'nonfoil,foil');
+    assert.equal(
+      toPrintingRow({ ...CARD, finishes: ['nonfoil'] })[10], 'nonfoil');
+  });
+
+  test('a card with no finishes listed stores nothing, not a guess', () => {
+    // Empty means "not known". It must not read as "nonfoil only",
+    // which is the assumption this whole column exists to remove.
+    assert.equal(toPrintingRow({ ...CARD, finishes: undefined })[10], '');
   });
 
   test('the credit line rides in with the rest', () => {

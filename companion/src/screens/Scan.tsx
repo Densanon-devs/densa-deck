@@ -46,6 +46,7 @@ import {
 
 import type { AppState, Connection, IndexFetch } from '../lib/app-state.ts';
 import { AutoScanner, explain } from '../lib/autoscan.ts';
+import { finishToFile } from '../lib/finishes.ts';
 import { artSource } from '../lib/images.ts';
 import { orderPrintings, pickerCount } from '../lib/printing-picker.ts';
 import {
@@ -110,6 +111,15 @@ export function ScanScreen({ state }: Props) {
       /** So the flash can show the card rather than describe it. */
       printingId?: string;
       /**
+       * Filed as a foil.
+       *
+       * Said out loud because the switch is sticky: a run of foils
+       * is normal and so is forgetting to turn it off afterwards,
+       * and the flash is the moment a mistake is still one card old
+       * rather than thirty.
+       */
+      foil?: boolean;
+      /**
        * How many went in at once, which is a different question.
        *
        * `copy` says "this is the third time you have scanned this
@@ -142,6 +152,26 @@ export function ScanScreen({ state }: Props) {
    * way is much higher than one tap at the start of a stack.
    */
   const [promo, setPromo] = useState(false);
+  /**
+   * Whether the cards going through are foils.
+   *
+   * There was no way to say. The scanner decided it from the star in
+   * the collector line, and that star is the one glyph the recogniser
+   * reliably loses -- the matcher's own comment says "measured
+   * against Windows OCR the star NEVER comes back". So `foilHint` was
+   * false almost always and every foil was filed as an ordinary copy.
+   *
+   * Not cosmetic: on a card whose foil is worth ten times its
+   * nonfoil, that is most of what the collection is worth.
+   *
+   * Sticky within a session and NOT persisted, exactly like the promo
+   * flag and for the same reason -- foils come in runs, so a toggle
+   * that had to be pressed per card would not be used, and one that
+   * survived a restart would silently file an ordinary box as foil.
+   * It stays on screen while scanning so it cannot be forgotten, and
+   * the confirmation flash says FOIL.
+   */
+  const [foil, setFoil] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<CameraSettings>(
     DEFAULT_CAMERA_SETTINGS,
@@ -468,6 +498,7 @@ export function ScanScreen({ state }: Props) {
         name: candidate.name,
         copy,
         added,
+        foil: finish !== 'nonfoil',
         verb: alsoTag.length ? `ADDED +${alsoTag.length}` : 'ADDED',
         printingId: candidate.printing_id,
         setCode: candidate.set_code,
@@ -648,7 +679,13 @@ export function ScanScreen({ state }: Props) {
             await state.addCard({
               printing_id: local.printing.printing_id,
               card_name: local.printing.name,
-              finish: local.foilHint ? 'foil' : 'nonfoil',
+              // The switch wins over the star. The switch is a person
+              // looking at the card; the star is a glyph the
+              // recogniser usually cannot see, and its absence was
+              // being read as proof of a nonfoil.
+              finish: finishToFile(
+                (local.printing as { finishes?: string }).finishes,
+                foil || local.foilHint),
               collection_uid: target,
               also_collection_uids: alsoTag,
             });
@@ -656,6 +693,7 @@ export function ScanScreen({ state }: Props) {
               name: local.printing.name,
               copy: decision.copy,
               printingId: local.printing.printing_id,
+              foil: foil || local.foilHint,
               verb: 'ADDED',
               setCode: local.printing.set_code,
               number: local.printing.collector_number,
@@ -795,7 +833,7 @@ export function ScanScreen({ state }: Props) {
     // it has resolved — so every failure reported "no card index on this
     // phone" on a phone holding all 105,000 cards. A stale closure that
     // says the opposite of the truth.
-    [state, file, target, alsoTag, index, promo],
+    [state, file, target, alsoTag, index, promo, foil],
   );
 
   /**
@@ -1040,6 +1078,9 @@ export function ScanScreen({ state }: Props) {
               </Text>
             </View>
           ) : null}
+          {flash.foil ? (
+            <Text style={styles.flashFoil}>{'✨'} FOIL</Text>
+          ) : null}
           {(flash.added ?? 1) > 1 ? (
             <Text style={styles.flashCount}>{'×'}{flash.added}</Text>
           ) : null}
@@ -1140,6 +1181,36 @@ export function ScanScreen({ state }: Props) {
           {promo
             ? 'Filing as the stamped printing.'
             : 'Turn on for date-stamped cards.'}
+        </Text>
+      </View>
+
+      {/*
+        The other thing only the person holding the card can see.
+
+        Beside the promo switch because it is the same kind of fact:
+        something true of the object in your hand that no amount of
+        reading the card can establish.
+      */}
+      <View style={styles.header}>
+        <Pressable
+          style={[styles.chip, foil && styles.chipFoil]}
+          onPress={() => {
+            setFoil((on) => {
+              setStatus(on
+                ? 'Back to ordinary copies.'
+                : 'Filing these as foils.');
+              return !on;
+            });
+          }}
+        >
+          <Text style={[styles.chipText, foil && styles.chipFoilText]}>
+            {foil ? '✨ Foil' : 'Not foil'}
+          </Text>
+        </Pressable>
+        <Text style={styles.promoHint}>
+          {foil
+            ? 'Every card filed as a foil until you turn this off.'
+            : 'Turn on for the shiny ones.'}
         </Text>
       </View>
 
@@ -1591,7 +1662,12 @@ export function ScanScreen({ state }: Props) {
               key={`${candidate.printing_id}-${index}`}
               style={styles.candidate}
               onPress={() => {
-                void file(candidate, defaultFinish(candidate, result),
+                void file(candidate,
+                          foil
+                            ? finishToFile(
+                              (candidate as { finishes?: string[] })
+                                .finishes?.join(','), true)
+                            : defaultFinish(candidate, result),
                           howMany).catch(
                   (err) => setStatus(recordCrash(err, 'filing', false).message),
                 );
@@ -1753,6 +1829,8 @@ const styles = StyleSheet.create({
   },
   pickerCount: { color: '#8a8f9c', fontSize: 12, paddingBottom: 2 },
   flashCount: { color: '#68d391', fontSize: 26, fontWeight: '800' },
+  flashFoil: { color: '#ecc94b', fontSize: 15, fontWeight: '800',
+               letterSpacing: 1 },
   typedBox: { gap: 6, marginTop: 10 },
   typedInput: {
     backgroundColor: '#141924',
@@ -1785,6 +1863,10 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  // Gold rather than the green the other switches use, so a glance
+  // at the top of the screen says which of the two is on.
+  chipFoil: { backgroundColor: '#b7791f', borderColor: '#ecc94b' },
+  chipFoilText: { color: '#fffaf0', fontWeight: '700' },
   chipText: { color: '#8a8f9c', fontSize: 13, fontWeight: '600' },
   promoHint: { color: '#6b7079', flexShrink: 1, fontSize: 12,
     textAlign: 'right' },

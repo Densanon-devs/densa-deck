@@ -878,6 +878,50 @@ ${more}`;
     });
   }
 
+  /**
+   * Move a stack between foil and not.
+   *
+   * The repair for everything filed before there was a way to say.
+   * The scanner decided foil from a star in the collector line, that
+   * star is the one glyph OCR reliably loses, and no screen offered
+   * a way to disagree -- so a collection scanned before this has its
+   * foils recorded as ordinary copies and mispriced accordingly.
+   *
+   * Same shape as `changePrinting` and for the same reasons: a stack
+   * is keyed by its finish, so this is a move rather than an edit,
+   * and the ADD happens before the REMOVE. If the second half fails
+   * you have two stacks and can see it; in the other order you would
+   * have none and no way to know what was lost.
+   *
+   * Takes a count so half a stack can move. Four copies where one is
+   * the shiny one is the normal case, not an edge.
+   */
+  async changeFinish(
+    stack: {
+      printing_id: string; card_name: string; finish?: string;
+      condition?: string; collection_uid?: string; quantity: number;
+    },
+    toFinish: string,
+    howMany?: number,
+  ): Promise<void> {
+    const have = Math.abs(stack.quantity || 0);
+    const count = Math.min(Math.abs(howMany ?? have), have);
+    const from = stack.finish || 'nonfoil';
+    if (!count || !toFinish || toFinish === from) return;
+    const common = {
+      card_name: stack.card_name,
+      printing_id: stack.printing_id,
+      condition: stack.condition,
+      collection_uid: stack.collection_uid,
+    };
+    await this.addCard({
+      ...common, finish: toFinish, quantity: count,
+    });
+    await this.addCard({
+      ...common, finish: from, quantity: -count,
+    });
+  }
+
   /** How much of the index this phone is holding. */
   async catalogueReady(): Promise<{
     rows: number; ready: boolean; scanReady: boolean;

@@ -32,6 +32,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
+import { finishToFile, noFoilBecause } from '../lib/finishes.ts';
 import {
   artSource,
   cardImageUrl,
@@ -201,6 +202,31 @@ export function CardScreen({ state, stack, onClose }: Props) {
   }>>({});
   const [swapping, setSwapping] = useState(false);
   const [moving, setMoving] = useState(false);
+  /**
+   * Which finishes this exact printing comes in.
+   *
+   * Loaded on open rather than on demand, unlike the printing list:
+   * it is one row out of the local index, and the answer decides
+   * whether a control appears at all -- a button that pops in after
+   * a round trip is worse than one that was always there.
+   *
+   * '' means the index does not know, which is NOT the same as
+   * "no foil". A phone whose index predates the column would
+   * otherwise have the switch hidden on every card.
+   */
+  const [printingFinishes, setPrintingFinishes] = useState('');
+
+  useEffect(() => {
+    let live = true;
+    void state.printingsOf(stack.card_name)
+      .then((rows) => {
+        if (!live) return;
+        const mine = rows.find((r) => r.printing_id === stack.printing_id);
+        setPrintingFinishes(mine?.finishes ?? '');
+      })
+      .catch(() => { if (live) setPrintingFinishes(''); });
+    return () => { live = false; };
+  }, [state, stack.card_name, stack.printing_id]);
 
   // Loaded on open, not on mount: most visits to this screen are not
   // about fixing a printing, and this is two queries and a network
@@ -388,12 +414,55 @@ export function CardScreen({ state, stack, onClose }: Props) {
       <View style={styles.ownedRow}>
         <Text style={styles.owned}>
           You own {stack.quantity}
-          {stack.finish === 'foil' ? ' foil' : ''}
+          {stack.finish && stack.finish !== 'nonfoil'
+            ? ` ${stack.finish}` : ''}
         </Text>
         {stack.price_usd != null ? (
           <Text style={styles.price}>${stack.price_usd.toFixed(2)} each</Text>
         ) : null}
       </View>
+
+      {/*
+        Saying it is the shiny one, after the fact.
+
+        Everything scanned before this build had its finish decided by
+        a star in the collector line that the recogniser almost never
+        sees, so a collection filed before now records its foils as
+        ordinary copies -- and on a card whose foil is worth ten times
+        its nonfoil, that is most of what it is worth.
+
+        Offered only when the printing actually comes that way. An
+        index that has not been refreshed knows nothing and the switch
+        stays available, because not knowing is not the same as no.
+      */}
+      {noFoilBecause(printingFinishes) ? (
+        <Text style={styles.muted}>{noFoilBecause(printingFinishes)}</Text>
+      ) : (
+        <Pressable
+          style={styles.finishButton}
+          disabled={moving}
+          onPress={() => {
+            const to = (stack.finish && stack.finish !== 'nonfoil')
+              ? 'nonfoil'
+              : finishToFile(printingFinishes, true);
+            setMoving(true);
+            void state.changeFinish(stack, to)
+              // Closed rather than refreshed: this stack is on
+              // another finish now, so the screen is about a card
+              // that is no longer the one it was opened for -- the
+              // same reason changing a printing closes it.
+              .then(onClose)
+              .catch(reporting('changing the finish', setProblem))
+              .finally(() => setMoving(false));
+          }}
+        >
+          <Text style={styles.finishButtonText}>
+            {stack.finish && stack.finish !== 'nonfoil'
+              ? 'These are not foil after all'
+              : '✨  Mark these as foil'}
+          </Text>
+        </Pressable>
+      )}
 
       {/*
         What it has been worth. Two points or more, because one point is a
@@ -544,6 +613,16 @@ const styles = StyleSheet.create({
   ownedRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   owned: { color: '#38a169', fontSize: 16, fontWeight: '700', flex: 1 },
   price: { color: '#8a8f9c', fontSize: 14 },
+  finishButton: {
+    alignSelf: 'flex-start',
+    borderColor: '#ecc94b',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  finishButtonText: { color: '#ecc94b', fontSize: 13,
+                      fontWeight: '600' },
   sparkWrap: { gap: 4, marginTop: 10 },
   spark: {
     alignItems: 'flex-end',

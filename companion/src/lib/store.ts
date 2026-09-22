@@ -226,7 +226,14 @@ export const SCHEMA: string[] = [
      -- printings on a shortlist of three, and both are text in the
      -- same footer strip the collector number is read from.
      artist TEXT NOT NULL DEFAULT '',
-     released_year INTEGER
+     released_year INTEGER,
+     -- Which finishes exist for this printing, comma-joined.
+     --
+     -- The phone had no idea, so the scanner decided foil from a star
+     -- in the collector line -- the one glyph OCR reliably loses --
+     -- and nothing anywhere let a person say otherwise. Foils were
+     -- filed as ordinary copies and silently mispriced.
+     finishes TEXT NOT NULL DEFAULT ''
    )`,
   // The exact-key lookup: set code plus collector number is how a scan
   // identifies a card when the footer reads cleanly, and it is one indexed
@@ -330,7 +337,7 @@ export interface OracleCard {
 
 export type CatalogueRow =
   [string, string, string, string, (number | null)?, string?,
-   (number | null)?, (number | null)?, string?, (number | null)?];
+   (number | null)?, (number | null)?, string?, (number | null)?, string?];
 
 /**
  * The extra lists a queued scan was headed for.
@@ -782,11 +789,11 @@ export class LocalStore {
       const chunk = rows.slice(i, i + BATCH);
       if (!chunk.length) continue;
       const holes = chunk.map(
-        () => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+        () => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
       await this.db.run(
         `INSERT INTO catalogue
            (printing_id, name, set_code, collector_number, cmc, rarity,
-            price_usd, price_usd_foil, artist, released_year)
+            price_usd, price_usd_foil, artist, released_year, finishes)
          VALUES ${holes}
          ON CONFLICT(printing_id) DO UPDATE SET
            name = excluded.name,
@@ -796,6 +803,7 @@ export class LocalStore {
            price_usd_foil = excluded.price_usd_foil,
            artist = excluded.artist,
            released_year = excluded.released_year,
+           finishes = excluded.finishes,
            cmc = excluded.cmc,
            rarity = excluded.rarity`,
         // Padded, so a page from an older desktop that sends fewer fields
@@ -812,6 +820,7 @@ export class LocalStore {
         chunk.flatMap((r) => [
           r[0], r[1], r[2], r[3], r[4] ?? null, r[5] ?? '',
           r[6] ?? null, r[7] ?? null, r[8] ?? '', r[9] ?? null,
+          r[10] ?? '',
         ]),
       );
     }

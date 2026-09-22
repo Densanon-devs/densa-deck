@@ -8,6 +8,7 @@
  * thing that needs pinning.
  */
 
+import { finishesOf } from './finishes.ts';
 import { footerKeys } from './identify.ts';
 import type { LocalIdentifyResult } from './identify.ts';
 import type { ScanResult } from './scanner.ts';
@@ -68,12 +69,15 @@ export function describeLocalMiss(text: string, reason = ''): string {
  * `identifyOffline` returns null whenever it cannot auto-file and the
  * candidates went in the bin on the way out.
  *
- * Two fields are invented because the phone index does not carry them.
- * `finishes` matters: `defaultFinish` falls back to nonfoil on an empty
- * list, which would file a foil as an ordinary copy and quietly
- * misprice it, so the foil hint from the footer star is turned into a
- * real option here. `set_name` is cosmetic and the picker shows the set
- * CODE, which the index does have.
+ * `set_name` is invented and cosmetic; the picker shows the set CODE,
+ * which the index does have.
+ *
+ * `finishes` used to be invented too, from the footer star, and that
+ * was the bug. The star is the one glyph OCR reliably loses, so the
+ * invention was almost always `['nonfoil']` -- a positive claim that
+ * no foil exists, made from having seen nothing. The index carries
+ * the real list now; the hint only adds to it, and can no longer
+ * subtract.
  */
 export function asScanResult(local: LocalIdentifyResult): ScanResult {
   const foil = local.identity.foilHint;
@@ -88,7 +92,13 @@ export function asScanResult(local: LocalIdentifyResult): ScanResult {
       set_code: row.set_code,
       set_name: '',
       collector_number: row.collector_number,
-      finishes: foil ? ['nonfoil', 'foil'] : ['nonfoil'],
+      // What the printing is known to come in, plus what the card
+      // appeared to be. An index that knows nothing yields [], which
+      // downstream reads as "unknown" rather than as "nonfoil only".
+      finishes: [...new Set([
+        ...finishesOf(row.finishes),
+        ...(foil ? ['foil'] : []),
+      ])],
       rarity: row.rarity ?? '',
     })),
   };

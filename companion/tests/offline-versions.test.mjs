@@ -206,3 +206,103 @@ describe('how many of each printing are on a shelf', () => {
     assert.equal((await state.ownedCountsOf('Island')).size, 0);
   });
 });
+
+describe('re-filing a foil that was recorded as an ordinary copy', () => {
+  /**
+   * The repair. Everything scanned before there was a foil switch
+   * had its finish decided by a star in the collector line that the
+   * recogniser almost never sees, so a collection filed before now
+   * records its foils as plain copies -- and on a card whose foil is
+   * worth ten times its nonfoil, that is most of what it is worth.
+   */
+  async function owning(rows) {
+    const store = new LocalStore(new MemoryDatabase());
+    await store.init();
+    await store.putCatalogue(PRINTINGS);
+    const state = buildAppState(
+      store, { baseUrl: '', token: '' }, 'p1', testUuid,
+      async () => { throw new Error('Network request failed'); },
+    );
+    for (const row of rows) {
+      await state.addCard({
+        printing_id: row.id, card_name: 'Island',
+        finish: row.finish ?? 'nonfoil',
+        collection_uid: 'main', quantity: row.qty ?? 1,
+      });
+    }
+    return { store, state };
+  }
+
+  const held = async (state) =>
+    [...(await state.ownedCountsOf('Island')).entries()];
+
+  test('the whole stack moves', async () => {
+    const { state } = await owning([{ id: 'p-old', qty: 2 }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 2 }, 'foil');
+    const counts = await state.ownedCountsOf('Island');
+    assert.equal(counts.get('p-old').total, 2);
+    assert.equal(counts.get('p-old').foil, 2);
+  });
+
+  test('or only some of it, which is the normal case', async () => {
+    // Four copies where one is the shiny one.
+    const { state } = await owning([{ id: 'p-old', qty: 4 }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 4 }, 'foil', 1);
+    const counts = await state.ownedCountsOf('Island');
+    assert.equal(counts.get('p-old').total, 4);
+    assert.equal(counts.get('p-old').foil, 1);
+  });
+
+  test('and back again', async () => {
+    const { state } = await owning([{ id: 'p-old', qty: 1, finish: 'foil' }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'foil',
+        collection_uid: 'main', quantity: 1 }, 'nonfoil');
+    assert.equal((await state.ownedCountsOf('Island')).get('p-old').foil, 0);
+  });
+
+  test('no card is lost or invented on the way', async () => {
+    // The ADD happens before the REMOVE. If the second half fails you
+    // have two stacks and can see it; the other order loses cards
+    // silently.
+    const { state } = await owning([{ id: 'p-old', qty: 3 }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 3 }, 'foil', 2);
+    assert.equal((await state.ownedCountsOf('Island')).get('p-old').total, 3);
+  });
+
+  test('moving to the finish it already has does nothing', async () => {
+    const { state } = await owning([{ id: 'p-old', qty: 2 }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 2 }, 'nonfoil');
+    const counts = await state.ownedCountsOf('Island');
+    assert.equal(counts.get('p-old').total, 2);
+    assert.equal(counts.get('p-old').foil, 0);
+  });
+
+  test('asking to move more than you have moves what you have', async () => {
+    const { state } = await owning([{ id: 'p-old', qty: 2 }]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 2 }, 'foil', 99);
+    const counts = await state.ownedCountsOf('Island');
+    assert.equal(counts.get('p-old').total, 2);
+    assert.equal(counts.get('p-old').foil, 2);
+  });
+
+  test('another printing of the same card is untouched', async () => {
+    const { state } = await owning([
+      { id: 'p-old', qty: 1 }, { id: 'p-new', qty: 1 },
+    ]);
+    await state.changeFinish(
+      { printing_id: 'p-old', card_name: 'Island', finish: 'nonfoil',
+        collection_uid: 'main', quantity: 1 }, 'foil');
+    assert.equal((await state.ownedCountsOf('Island')).get('p-new').foil, 0);
+  });
+});

@@ -53,7 +53,7 @@ export interface BulkSource {
  */
 export type PrintingRow =
   [string, string, string, string, number | null, string,
-   number | null, number | null, string, number | null];
+   number | null, number | null, string, number | null, string];
 
 /** One row of the oracle index. */
 export type OracleIndexRow =
@@ -200,7 +200,29 @@ export function toPrintingRow(
     money(prices.usd_foil),
     String(card.artist ?? ''),
     releaseYear(card.released_at),
+    finishesOf(card.finishes),
   ];
+}
+
+/**
+ * Which finishes this printing was made in.
+ *
+ * Kept because the phone had no idea. The scanner decided foil from a
+ * star in the collector line, the star is the one glyph OCR reliably
+ * loses, and there was no way to say otherwise -- so a foil was filed
+ * as an ordinary copy and silently mispriced, which on a card with a
+ * ten-to-one foil multiplier is most of what it is worth.
+ *
+ * Stored as a comma-joined string rather than JSON: it is two or
+ * three short words and a hundred thousand rows of `["nonfoil"]`
+ * would be brackets and quotes for nothing.
+ */
+function finishesOf(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((f) => String(f ?? '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(',');
 }
 
 /**

@@ -54,6 +54,14 @@ export interface CataloguePrintingRow {
    */
   artist?: string;
   released_year?: number | null;
+  /**
+   * Which finishes this printing exists in, comma-joined.
+   *
+   * Optional, and an ABSENT value means "this index does not know",
+   * never "there is no foil" -- reading the second into the first is
+   * the mistake that filed every foil as an ordinary copy.
+   */
+  finishes?: string;
 }
 
 /** Somewhere to look printings up — the phone's own index, in practice. */
