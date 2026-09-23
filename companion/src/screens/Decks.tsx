@@ -163,8 +163,10 @@ export function DeckListScreen({
             color_identity: identity,
           };
         }
+        // The deck's own picture first, then its commander's. A deck
+        // is often about a card that is not the one leading it.
         const lead = (deck.commander ?? [])[0];
-        let art = lead?.printing_id ?? '';
+        let art = deck.cover_printing_id || lead?.printing_id || '';
         if (lead && !art) {
           // A commander typed from a list has no printing recorded.
           // One query, and only for the decks that need it.
@@ -586,6 +588,38 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * is also visible: the strip says what tapping will do while it is on.
    */
   const [pickingCommander, setPickingCommander] = useState(false);
+  /**
+   * Choosing which card's art stands for the deck.
+   *
+   * Its own mode rather than a long-press, because long-press is
+   * already how a card comes out of the deck and the two are not
+   * things to get wrong by a fraction of a second.
+   */
+  const [pickingArt, setPickingArt] = useState(false);
+
+  /** Make this card the deck's picture. */
+  const chooseCover = useCallback(
+    async (entry: DeckEntry) => {
+      if (!deck) return;
+      const facts = slots[entryKey(entry)];
+      const printing = entry.printing_id || facts?.printing_id || '';
+      if (!printing) {
+        // A slot with no printing resolved yet has no art to use.
+        // Saying so beats setting a cover that draws a grey square.
+        setProblem(`No picture for ${entry.name} yet.`);
+        return;
+      }
+      const next: Deck = {
+        ...deck,
+        cover_printing_id: printing,
+        updated_at: new Date().toISOString(),
+      };
+      await state.saveDeck(next);
+      setDeck(next);
+      setPickingArt(false);
+    },
+    [deck, slots, state],
+  );
   /**
    * A printing to draw the commander from, when the entry has none.
    *
@@ -1258,6 +1292,73 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           Tap a card below to make it your commander.
         </Text>
       ) : null}
+      {pickingArt ? (
+        <Text style={styles.picking}>
+          Tap a card below to use its art for this deck.
+        </Text>
+      ) : null}
+
+      {/*
+        The deck's picture, which need not be the commander.
+
+        A deck is often about a card that is not the one leading it
+        -- the combo piece, the one it was built around, the joke --
+        and the list of decks is read by picture long before it is
+        read by name.
+      */}
+      {deck ? (
+        <View style={styles.coverRow}>
+          <Image
+            style={styles.coverArt}
+            source={artSource(
+              deck.cover_printing_id
+                || (deck.commander ?? [])[0]?.printing_id
+                || commanderArt[(deck.commander ?? [])[0]?.name ?? '']
+                || '',
+              'art_crop')}
+            resizeMode="cover"
+            accessibilityLabel="Deck art"
+          />
+          <View style={styles.grow}>
+            <Text style={styles.muted}>
+              {deck.cover_printing_id
+                ? 'Deck art'
+                : 'Deck art — your commander, until you pick one'}
+            </Text>
+            <View style={styles.commanderActions}>
+              <Pressable
+                style={styles.commanderBtn}
+                onPress={() => {
+                  setProblem('');
+                  setPickingCommander(false);
+                  setPickingArt((on) => !on);
+                }}
+              >
+                <Text style={styles.commanderBtnText}>
+                  {pickingArt ? 'Cancel' : 'Choose a card'}
+                </Text>
+              </Pressable>
+              {deck.cover_printing_id ? (
+                <Pressable
+                  style={styles.commanderBtn}
+                  onPress={() => {
+                    const next: Deck = {
+                      ...deck,
+                      cover_printing_id: undefined,
+                      updated_at: new Date().toISOString(),
+                    };
+                    void state.saveDeck(next)
+                      .then(() => setDeck(next))
+                      .catch(reporting('clearing the art', setProblem));
+                  }}
+                >
+                  <Text style={styles.commanderBtnText}>Use commander</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       {/*
         The record, and the three buttons that change it. Directly under the
@@ -1376,11 +1477,11 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                 <Pressable
                   key={entryKey(entry)}
                   style={styles.tile}
-                  onPress={() =>
-                    pickingCommander
-                      ? void chooseCommander(entry)
-                      : void add(entry)
-                  }
+                  onPress={() => {
+                    if (pickingArt) return void chooseCover(entry);
+                    if (pickingCommander) return void chooseCommander(entry);
+                    return void add(entry);
+                  }}
                   onLongPress={() => void drop(entry)}
                 >
                   <Image
@@ -1774,6 +1875,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   rowScanText: { color: '#8ec5ff', fontSize: 14, fontWeight: '600' },
+  coverRow: { alignItems: 'center', flexDirection: 'row', gap: 10,
+              marginTop: 8 },
+  coverArt: {
+    aspectRatio: 626 / 457,
+    backgroundColor: '#11151d',
+    borderRadius: 6,
+    width: 104,
+  },
   rowArt: {
     // Scryfall's art crop is 626x457. A card ratio here would
     // letterbox the painting into a stripe.
