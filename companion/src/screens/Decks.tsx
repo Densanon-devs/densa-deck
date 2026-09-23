@@ -1017,6 +1017,26 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     <ScrollView
       style={styles.screen}
       contentContainerStyle={styles.content}
+      /*
+        Keep what you are looking at where it is.
+
+        Reported as the screen jittering or jumping a little on every
+        quick-add tap. The browser sits BELOW the deck's own grid,
+        the decklist box, the warnings and the shortfall -- and
+        adding one card changes the height of all four. The grid
+        gains a tile, the box gains a line, and a warning like "3
+        cards too few" shrinks or disappears. Everything below then
+        moves, which is the browser you are tapping in.
+
+        This anchors the scroll to the first visible child and
+        adjusts the offset when content above it resizes, so the tile
+        under your thumb stays under your thumb.
+
+        The documented caveat is REORDERING, which none of these do:
+        `addToDeck` appends, and the browser's own grid only grows at
+        the end as more pages arrive.
+      */
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       scrollEventThrottle={200}
       onScroll={(event) => {
         const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
@@ -1682,6 +1702,16 @@ const styles = StyleSheet.create({
     color: '#e4e6eb',
     padding: 12,
     minHeight: 160,
+    /*
+      And a ceiling, which it never had.
+
+      A multiline TextInput grows to fit its content, so a hundred
+      card deck made a box about two thousand pixels tall -- and
+      every card added grew it by another line, moving everything
+      below it. It scrolls inside itself now, which is what a text
+      field is expected to do anyway.
+    */
+    maxHeight: 260,
     textAlignVertical: 'top',
     fontSize: 15,
   },
