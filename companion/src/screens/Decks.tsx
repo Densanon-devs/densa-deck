@@ -20,7 +20,6 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from 'react';
 import {
@@ -107,18 +106,6 @@ export function DeckListScreen({
   // what it is asking about leaves you agreeing to something you can no
   // longer see.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  /*
-    Scanning straight into a deck from the list.
-
-    The deck being filled lives in a REF, and the render only needs
-    to know which one. Holding it in state would re-render the
-    scanner on every card, and re-rendering the scanner means
-    re-rendering a live camera preview -- which flickers, and worse,
-    would hand `deck.onCard` a decklist from before the last card
-    went in. Each scan would then overwrite the one before it.
-  */
-  const filling = useRef<Deck | null>(null);
-  const [fillingId, setFillingId] = useState('');
   /**
    * What each deck looks like, for the list.
    *
@@ -235,37 +222,6 @@ export function DeckListScreen({
     [decks, load],
   );
 
-  /** Put a scanned card into the deck being filled, and keep it current. */
-  const intoFilling = useCallback(async (slot: DeckEntry) => {
-    const deck = filling.current;
-    if (!deck) return;
-    const next: Deck = {
-      ...deck,
-      decklist: addToDeck(deck.decklist, slot),
-      updated_at: new Date().toISOString(),
-    };
-    // The ref moves first, so the next card in a run builds on this
-    // one rather than on the deck as it was when the camera opened.
-    filling.current = next;
-    await state.saveDeck(next);
-  }, [state]);
-
-  if (fillingId && filling.current) {
-    return (
-      <ScanScreen
-        state={state}
-        deck={{ name: filling.current.name, onCard: intoFilling }}
-        onClose={() => {
-          filling.current = null;
-          setFillingId('');
-          // The counts on the list are now wrong by however many
-          // cards just went in.
-          void load().catch(reporting('your decks', setProblem));
-        }}
-      />
-    );
-  }
-
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Decks</Text>
@@ -298,93 +254,69 @@ export function DeckListScreen({
       ) : (
         rows.map((deck) => (
           <View key={deck.deck_id}>
-            {/*
-              The camera on the row itself.
+            <Pressable
+              style={styles.result}
+              onPress={() => onOpen(deck.deck_id)}
+              onLongPress={() => {
+                setActing(acting?.deck_id === deck.deck_id ? null : deck);
+                setRenameTo(deck.name);
+                setConfirmingDelete(false);
+                setProblem('');
+              }}
+            >
+              {/*
+                The commander's artwork, on the left.
 
-              It was reachable only from inside a deck, which is a tap
-              and a screen away from where you are standing with a
-              pile of cards and four decks to fill. Its own Pressable
-              beside the row rather than inside it: nesting one
-              pressable in another on Android lets both fire, and
-              "opened the deck AND started scanning" is the sort of
-              thing that looks like a bug even when it works.
-            */}
-            <View style={styles.deckRow}>
-              <Pressable
-                style={[styles.result, styles.grow]}
-                onPress={() => onOpen(deck.deck_id)}
-                onLongPress={() => {
-                  setActing(acting?.deck_id === deck.deck_id ? null : deck);
-                  setRenameTo(deck.name);
-                  setConfirmingDelete(false);
-                  setProblem('');
-                }}
-              >
+                Four decks named after their commanders all read
+                the same as a column of text. The painting is the
+                thing you recognise without reading, which is what
+                a list is for.
+              */}
+              {looks[deck.deck_id]?.art ? (
+                <Image
+                  style={styles.rowArt}
+                  source={artSource(
+                    looks[deck.deck_id]?.art ?? '', 'art_crop')}
+                  resizeMode="cover"
+                  accessibilityLabel={(deck.commander ?? [])[0]?.name ?? ''}
+                />
+              ) : (
+                // A placeholder of the same size, so a deck with no
+                // commander does not shuffle the row above it
+                // sideways while the art loads.
+                <View style={[styles.rowArt, styles.rowArtEmpty]} />
+              )}
+              <View style={styles.grow}>
+                <Text style={styles.name}>{deck.name}</Text>
+                <Text style={styles.muted}>
+                  {totalCards(deck)} cards · hold to rename or delete
+                </Text>
                 {/*
-                  The commander's artwork, on the left.
-
-                  Four decks named after their commanders all read
-                  the same as a column of text. The painting is the
-                  thing you recognise without reading, which is what
-                  a list is for.
+                  And what colours it is. Same pips as the deck
+                  screen, without the counts -- a row has space for
+                  "is this my Golgari deck" and not for the mana
+                  base behind it.
                 */}
-                {looks[deck.deck_id]?.art ? (
-                  <Image
-                    style={styles.rowArt}
-                    source={artSource(
-                      looks[deck.deck_id]?.art ?? '', 'art_crop')}
-                    resizeMode="cover"
-                    accessibilityLabel={(deck.commander ?? [])[0]?.name ?? ''}
-                  />
-                ) : (
-                  // A placeholder of the same size, so a deck with no
-                  // commander does not shuffle the row above it
-                  // sideways while the art loads.
-                  <View style={[styles.rowArt, styles.rowArtEmpty]} />
-                )}
-                <View style={styles.grow}>
-                  <Text style={styles.name}>{deck.name}</Text>
-                  <Text style={styles.muted}>
-                    {totalCards(deck)} cards · hold to rename or delete
-                  </Text>
-                  {/*
-                    And what colours it is. Same pips as the deck
-                    screen, without the counts -- a row has space for
-                    "is this my Golgari deck" and not for the mana
-                    base behind it.
-                  */}
-                  {looks[deck.deck_id]?.colours?.length ? (
-                    <View style={styles.rowPips}>
-                      {(looks[deck.deck_id]?.colours ?? [])
-                        .map(({ colour }) => (
-                        <View
-                          key={colour}
-                          style={[styles.rowPip,
-                                  { backgroundColor: PIP_COLOUR[colour] }]}
-                        >
-                          <Text style={[styles.rowPipLetter,
-                                        { color: PIP_INK[colour] }]}>
-                            {colour}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  ) : null}
-                </View>
-                <Text style={styles.plus}>›</Text>
-              </Pressable>
-              <Pressable
-                style={styles.rowScan}
-                accessibilityLabel={`Scan cards into ${deck.name}`}
-                onPress={() => {
-                  setProblem('');
-                  filling.current = deck;
-                  setFillingId(deck.deck_id);
-                }}
-              >
-                <Text style={styles.rowScanText}>Scan</Text>
-              </Pressable>
-            </View>
+                {looks[deck.deck_id]?.colours?.length ? (
+                  <View style={styles.rowPips}>
+                    {(looks[deck.deck_id]?.colours ?? [])
+                      .map(({ colour }) => (
+                      <View
+                        key={colour}
+                        style={[styles.rowPip,
+                                { backgroundColor: PIP_COLOUR[colour] }]}
+                      >
+                        <Text style={[styles.rowPipLetter,
+                                      { color: PIP_INK[colour] }]}>
+                          {colour}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+              <Text style={styles.plus}>›</Text>
+            </Pressable>
 
             {acting?.deck_id === deck.deck_id ? (
               <View style={styles.deckActions}>
@@ -1780,8 +1712,10 @@ const styles = StyleSheet.create({
   short: { color: '#e53e3e', minWidth: 24, fontWeight: '700' },
   searchBox: { minHeight: 0, flex: 1, paddingVertical: 10 },
   result: {
-    flexDirection: 'row',
     alignItems: 'center',
+    borderBottomColor: '#2d3142',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
     gap: 10,
     paddingVertical: 10,
   },
@@ -1855,26 +1789,6 @@ const styles = StyleSheet.create({
   commanderCards: { alignItems: 'flex-start', flexDirection: 'row', gap: 12,
                     justifyContent: 'flex-start' },
   commanderCardBox: { alignItems: 'flex-start', width: 132 },
-  deckRow: {
-    alignItems: 'stretch',
-    // The rule belongs to the whole row now that the row has two
-    // parts. Left on the name half it stopped short of the button
-    // and read as a broken underline.
-    borderBottomColor: '#2d3142',
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    gap: 8,
-    paddingVertical: 4,
-  },
-  rowScan: {
-    alignItems: 'center',
-    borderColor: '#2f6f9f',
-    borderRadius: 10,
-    borderWidth: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
-  rowScanText: { color: '#8ec5ff', fontSize: 14, fontWeight: '600' },
   coverRow: { alignItems: 'center', flexDirection: 'row', gap: 10,
               marginTop: 8 },
   coverArt: {
