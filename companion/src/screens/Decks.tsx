@@ -62,7 +62,13 @@ import {
   totalCards,
   type DeckRecord,
 } from '../lib/decks.ts';
-import type { Deck, DeckEntry, ShortfallRow, SlotFacts } from '../lib/decks.ts';
+import type {
+  Deck,
+  DeckColour,
+  DeckEntry,
+  ShortfallRow,
+  SlotFacts,
+} from '../lib/decks.ts';
 
 interface Props {
   state: AppState;
@@ -113,6 +119,65 @@ export function DeckListScreen({
   */
   const filling = useRef<Deck | null>(null);
   const [fillingId, setFillingId] = useState('');
+  /**
+   * What each deck looks like, for the list.
+   *
+   * The commander's art and the deck's colours, which is what makes
+   * a list of names readable at a glance -- four decks called after
+   * their commanders all read the same until you can see them.
+   *
+   * Computed once for every deck rather than per row: the colours
+   * need a colour identity per card name, and asking per deck per
+   * card would be hundreds of queries to draw one screen. One
+   * batched lookup covers the lot.
+   */
+  const [looks, setLooks] = useState<Record<string, {
+    art: string; colours: DeckColour[];
+  }>>({});
+
+  useEffect(() => {
+    if (!rows.length) {
+      setLooks({});
+      return;
+    }
+    let live = true;
+    void (async () => {
+      const names = rows.flatMap((deck) => [
+        ...(deck.decklist ?? []), ...(deck.commander ?? []),
+      ].map((e) => e.name));
+      const identities = await state.identitiesFor(names);
+      const next: Record<string, { art: string; colours: DeckColour[] }> = {};
+      for (const deck of rows) {
+        const entries = [
+          ...(deck.decklist ?? []), ...(deck.commander ?? []),
+        ];
+        // `deckColours` reads colour identity off slot facts, so the
+        // name lookup is shaped into the same thing rather than the
+        // counting being written a second time for this screen.
+        const slots: Record<string, SlotFacts> = {};
+        for (const entry of entries) {
+          const identity = identities.get(entry.name.trim().toLowerCase());
+          if (!identity) continue;
+          slots[entryKey(entry)] = {
+            printing_id: entry.printing_id ?? '',
+            color_identity: identity,
+          };
+        }
+        const lead = (deck.commander ?? [])[0];
+        let art = lead?.printing_id ?? '';
+        if (lead && !art) {
+          // A commander typed from a list has no printing recorded.
+          // One query, and only for the decks that need it.
+          const printings = await state.printingsOf(lead.name)
+            .catch(() => []);
+          art = printings[0]?.printing_id ?? '';
+        }
+        next[deck.deck_id] = { art, colours: deckColours(entries, slots) };
+      }
+      if (live) setLooks(next);
+    })().catch(() => { if (live) setLooks({}); });
+    return () => { live = false; };
+  }, [rows, state]);
 
   const load = useCallback(async () => setRows(await decks.list()), [decks]);
   useEffect(() => {
@@ -253,11 +318,56 @@ export function DeckListScreen({
                   setProblem('');
                 }}
               >
+                {/*
+                  The commander's artwork, on the left.
+
+                  Four decks named after their commanders all read
+                  the same as a column of text. The painting is the
+                  thing you recognise without reading, which is what
+                  a list is for.
+                */}
+                {looks[deck.deck_id]?.art ? (
+                  <Image
+                    style={styles.rowArt}
+                    source={artSource(
+                      looks[deck.deck_id]?.art ?? '', 'art_crop')}
+                    resizeMode="cover"
+                    accessibilityLabel={(deck.commander ?? [])[0]?.name ?? ''}
+                  />
+                ) : (
+                  // A placeholder of the same size, so a deck with no
+                  // commander does not shuffle the row above it
+                  // sideways while the art loads.
+                  <View style={[styles.rowArt, styles.rowArtEmpty]} />
+                )}
                 <View style={styles.grow}>
                   <Text style={styles.name}>{deck.name}</Text>
                   <Text style={styles.muted}>
                     {totalCards(deck)} cards · hold to rename or delete
                   </Text>
+                  {/*
+                    And what colours it is. Same pips as the deck
+                    screen, without the counts -- a row has space for
+                    "is this my Golgari deck" and not for the mana
+                    base behind it.
+                  */}
+                  {looks[deck.deck_id]?.colours?.length ? (
+                    <View style={styles.rowPips}>
+                      {(looks[deck.deck_id]?.colours ?? [])
+                        .map(({ colour }) => (
+                        <View
+                          key={colour}
+                          style={[styles.rowPip,
+                                  { backgroundColor: PIP_COLOUR[colour] }]}
+                        >
+                          <Text style={[styles.rowPipLetter,
+                                        { color: PIP_INK[colour] }]}>
+                            {colour}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  ) : null}
                 </View>
                 <Text style={styles.plus}>›</Text>
               </Pressable>
@@ -1664,6 +1774,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   rowScanText: { color: '#8ec5ff', fontSize: 14, fontWeight: '600' },
+  rowArt: {
+    // Scryfall's art crop is 626x457. A card ratio here would
+    // letterbox the painting into a stripe.
+    aspectRatio: 626 / 457,
+    backgroundColor: '#11151d',
+    borderRadius: 6,
+    width: 76,
+  },
+  rowArtEmpty: { borderColor: '#242b3a', borderWidth: 1 },
+  rowPips: { flexDirection: 'row', gap: 4, marginTop: 5 },
+  rowPip: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 18,
+    justifyContent: 'center',
+    width: 18,
+  },
+  rowPipLetter: { fontSize: 10, fontWeight: '800' },
   pipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 },
   pip: {
     alignItems: 'center',

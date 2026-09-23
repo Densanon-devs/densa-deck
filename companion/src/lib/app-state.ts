@@ -833,6 +833,17 @@ ${more}`;
     return out;
   }
 
+  /**
+   * Colour identities for a pile of card names, in one go.
+   *
+   * The deck list wants the colours of every deck at once, and
+   * resolving each deck's slots the way the deck screen does would
+   * be a round of queries per deck per card.
+   */
+  async identitiesFor(names: string[]): Promise<Map<string, string[]>> {
+    return this.store.identitiesFor?.(names) ?? new Map();
+  }
+
   /** Every printing of a card this phone's index knows. */
   async printingsOf(cardName: string): Promise<CataloguePrintingRow[]> {
     return this.store.printingsByName?.(cardName) ?? [];

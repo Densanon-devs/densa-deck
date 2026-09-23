@@ -1198,6 +1198,53 @@ export class LocalStore {
     return out;
   }
 
+  /**
+   * Colour identities for a pile of card names, in one go.
+   *
+   * For the deck LIST, which wants the colours of every deck at
+   * once. Resolving each deck's slots the way the deck screen does
+   * would be a round of queries per deck per card; this is one query
+   * per four hundred distinct names across all of them.
+   *
+   * Keyed by lowercased name because identity belongs to the card
+   * rather than to the printing -- every printing of Sol Ring is
+   * colourless.
+   */
+  async identitiesFor(
+    names: string[],
+    /*
+      How many names to ask about in one statement.
+
+      Four hundred because SQLite limits how many bound parameters a
+      statement may carry, and the limit is a BUILD option -- 999 on
+      older builds, which is what Android ships, and 32766 on newer
+      ones. Node's built-in SQLite is the generous kind, so a test
+      here cannot demonstrate the limit; it is a parameter so the
+      LOOP can be tested instead, which is the part that could be
+      written wrong.
+    */
+    chunk = 400,
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    const wanted = [...new Set(
+      (names ?? []).map((n) => String(n ?? '').trim()).filter(Boolean),
+    )];
+    const CHUNK = Math.max(1, chunk);
+    for (let i = 0; i < wanted.length; i += CHUNK) {
+      const slice = wanted.slice(i, i + CHUNK);
+      const holes = slice.map(() => '?').join(', ');
+      const rows = await this.db.all<{
+        name: string; color_identity: string;
+      }>(`SELECT name, color_identity FROM oracle WHERE name IN (${holes})`,
+        slice);
+      for (const row of rows ?? []) {
+        out.set(String(row.name ?? '').trim().toLowerCase(),
+          [...String(row.color_identity ?? '').toUpperCase()]
+            .filter((c) => 'WUBRG'.includes(c)));
+      }
+    }
+    return out;
+  }
   async printingsByName(name: string): Promise<Array<{
     printing_id: string; name: string;
     set_code: string; collector_number: string; rarity?: string;
