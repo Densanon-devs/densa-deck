@@ -719,9 +719,10 @@ export function CardBrowser({
             <Text style={styles.quickLabel}>Tap to add, cheapest printing</Text>
             <Text style={styles.muted}>
               {quickAdd
-                ? 'A tap adds the card straight away. Long-press still '
-                  + 'removes one.'
-                : 'A tap opens the card to read first.'}
+                ? 'A tap adds it at once. Hold a card to open it — '
+                  + 'read it, pick a printing, or take one out.'
+                : 'A tap opens the card to read first. Holding one does '
+                  + 'the same.'}
             </Text>
           </View>
         </Pressable>
@@ -812,10 +813,17 @@ export function CardBrowser({
               key={card.scryfall_id || card.name}
               style={[styles.tile, !castable && styles.tileLocked,
                       adding === card.name && styles.tileAdding]}
-              // Locked out while its printings are being looked up.
-              // Quick-add is one tap and people tap twice; without
-              // this, an impatient second tap adds a second copy.
-              disabled={!castable || adding === card.name}
+              /*
+                Only the in-flight card is disabled, not the locked
+                ones.
+
+                A card outside the commander's colours cannot be
+                added, and `disabled` swallowed the long press with
+                it -- so the one card you most want to read, because
+                you are wondering why it is greyed out, was the one
+                you could not open.
+              */
+              disabled={adding === card.name}
               accessibilityState={{ disabled: !castable }}
               accessibilityHint={
                 castable
@@ -823,12 +831,31 @@ export function CardBrowser({
                   : `${card.name} is outside your commander's colours`
               }
               onPress={() => {
+                // Still not addable; the lock tag and the hint say
+                // why, and a long press now opens it to be read.
+                if (!castable) return;
                 // Quick-add beats the preview, which is the whole
                 // point of the switch; without it the tap opens the
                 // card to be read first.
                 if (quickAdd) return void quickPick(card);
                 return previewOnTap ? setPreview(card) : void onPick(card);
               }}
+              /*
+                Long press always opens the card.
+
+                One gesture that means one thing everywhere here: tap
+                does the action, hold looks at it. That is the way
+                back to reading a card in quick-add mode -- where a
+                tap adds it -- and it is also how you take one out
+                again, because the opened card carries Remove.
+
+                Worth naming: the hint under the quick-add switch
+                claimed "long-press still removes one" in 0.55.0 and
+                there was no long press handler in this file at all.
+                The sentence was written for a gesture that did not
+                exist.
+              */
+              onLongPress={() => setPreview(card)}
             >
               <Image
                 source={artSource(card.scryfall_id, 'small')}
@@ -1045,7 +1072,16 @@ export function CardBrowser({
               >
                 <Text style={styles.previewButtonText}>Close</Text>
               </Pressable>
-              {onUnpick ? (
+              {/*
+                Remove, only when there is something to remove.
+
+                Offered unconditionally it was a button that did
+                nothing for every card not yet in the deck -- which,
+                in a card browser, is nearly all of them. The count
+                above it already says how many are in here; this
+                agrees with it.
+              */}
+              {onUnpick && (countFor?.(preview) ?? 1) > 0 ? (
                 <Pressable
                   style={styles.previewButton}
                   onPress={() => void onUnpick(preview)}
