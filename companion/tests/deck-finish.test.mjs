@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  addToDeck,
+  removeFromDeck,
   carryPrintings,
   entryKey,
   formatDecklist,
@@ -171,5 +173,106 @@ describe('two finishes of one card are two slots', () => {
     const { cards } = parseDecklist('1 Sol Ring *F*\n1 Sol Ring *F*');
     assert.equal(cards.length, 1);
     assert.equal(cards[0].qty, 2);
+  });
+});
+
+describe('scanning a run of cards into one deck', () => {
+  /**
+   * Each scan builds on the deck as it is, not as it was when the
+   * camera opened. The screen keeps the growing deck in a ref for
+   * exactly this reason -- holding it in state would re-render a
+   * live camera preview on every card AND hand the next scan a
+   * decklist from before the last one went in, so each card would
+   * overwrite the one before it.
+   *
+   * The React half of that cannot be tested here. This is the
+   * library half: applying the same edit repeatedly has to
+   * accumulate.
+   */
+  const scan = (deck, slot) => addToDeck(deck, slot);
+
+  test('ten different cards make a deck of ten', () => {
+    let deck = [];
+    for (let i = 0; i < 10; i += 1) {
+      deck = scan(deck, { name: `Card ${i}`, qty: 1, printing_id: `p${i}` });
+    }
+    assert.equal(deck.length, 10);
+    assert.equal(deck.reduce((n, e) => n + e.qty, 0), 10);
+  });
+
+  test('the same card four times is one slot of four', () => {
+    let deck = [];
+    for (let i = 0; i < 4; i += 1) {
+      deck = scan(deck, { name: 'Sol Ring', qty: 1, printing_id: 'p' });
+    }
+    assert.equal(deck.length, 1);
+    assert.equal(deck[0].qty, 4);
+  });
+
+  test('a foil and a plain copy stay apart across a run', () => {
+    // The finish is part of the key now, so a run holding both does
+    // not merge them into one line.
+    let deck = [];
+    deck = scan(deck, { name: 'Sol Ring', qty: 1, printing_id: 'p',
+                        finish: 'foil' });
+    deck = scan(deck, { name: 'Sol Ring', qty: 1, printing_id: 'p' });
+    deck = scan(deck, { name: 'Sol Ring', qty: 1, printing_id: 'p',
+                        finish: 'foil' });
+    assert.equal(deck.length, 2);
+    assert.equal(deck.find((e) => e.finish === 'foil').qty, 2);
+    assert.equal(deck.find((e) => !e.finish).qty, 1);
+  });
+
+  test('nothing already in the deck is lost', () => {
+    // The failure the ref exists to prevent, stated at the level
+    // where it can be asserted.
+    const before = [{ name: 'Island', qty: 9, printing_id: 'i' }];
+    const after = scan(before, { name: 'Sol Ring', qty: 1, printing_id: 'p' });
+    assert.equal(after.find((e) => e.name === 'Island').qty, 9);
+    assert.equal(after.length, 2);
+  });
+});
+
+describe('adding and removing agree about what a slot is', () => {
+  /**
+   * `removeFromDeck` has keyed on the finish since the key learned
+   * about it; `addToDeck` was still dropping it. So a scanned foil
+   * went in as an ordinary copy -- merging with the plain one
+   * already there -- and then could not be taken out again as a
+   * foil, because no slot matched.
+   *
+   * Two halves of one pair disagreeing about what a slot is, which
+   * is the kind of thing that only shows up as cards quietly going
+   * missing.
+   */
+  test('a foil added is a foil in the deck', () => {
+    const deck = addToDeck([], { name: 'Sol Ring', printing_id: 'p',
+                                 finish: 'foil' });
+    assert.equal(deck[0].finish, 'foil');
+  });
+
+  test('and can be taken back out', () => {
+    let deck = addToDeck([], { name: 'Sol Ring', printing_id: 'p',
+                               finish: 'foil' });
+    deck = removeFromDeck(deck, { name: 'Sol Ring', printing_id: 'p',
+                                  finish: 'foil' });
+    assert.deepEqual(deck, []);
+  });
+
+  test('a plain copy is not stored as a nonfoil one', () => {
+    // Absent and 'nonfoil' mean the same thing and have to produce
+    // the same key, or every deck ever saved changes shape.
+    const deck = addToDeck([], { name: 'Sol Ring', printing_id: 'p',
+                                 finish: 'nonfoil' });
+    assert.equal(deck[0].finish, undefined);
+  });
+
+  test('removing the plain one leaves the foil alone', () => {
+    let deck = addToDeck([], { name: 'Sol Ring', printing_id: 'p',
+                               finish: 'foil' });
+    deck = addToDeck(deck, { name: 'Sol Ring', printing_id: 'p' });
+    deck = removeFromDeck(deck, { name: 'Sol Ring', printing_id: 'p' });
+    assert.equal(deck.length, 1);
+    assert.equal(deck[0].finish, 'foil');
   });
 });
