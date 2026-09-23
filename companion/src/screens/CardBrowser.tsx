@@ -38,8 +38,12 @@ import {
 import type { AppState } from '../lib/app-state.ts';
 import { artSource } from '../lib/images.ts';
 import { withinIdentity } from '../lib/decks.ts';
-import { ownedLine, variantsLine, yoursFirst }
-  from '../lib/printing-picker.ts';
+import {
+  cheapestPrinting,
+  ownedLine,
+  variantsLine,
+  yoursFirst,
+} from '../lib/printing-picker.ts';
 import type {
   CardQuery,
   CatalogueCard,
@@ -157,6 +161,24 @@ export function CardBrowser({
   nearEnd = 0,
 }: Props) {
   const [preview, setPreview] = useState<CatalogueCard | null>(null);
+  /**
+   * Tap to add, without stopping to look.
+   *
+   * Building a deck normally wants the preview -- at thumbnail size
+   * you cannot read the rules text, and adding something you have
+   * misidentified is a mistake you find later. But filling in
+   * thirty lands and the obvious staples is not that job, and three
+   * taps a card for cards you already know is most of an evening.
+   *
+   * Off by default, and per-session rather than remembered: it
+   * changes what a tap MEANS, and a setting that silently survived
+   * a restart would add a card the next time somebody meant to look
+   * at one.
+   */
+  const [quickAdd, setQuickAdd] = useState(false);
+  /** The card being resolved, so a double tap cannot add it twice. */
+  const [adding, setAdding] = useState('');
+
   // Every printing of the card being looked at, so you can swipe through the
   // art. The same card in six sets is six different pictures, and which one
   // you own or want is a real question — this is the only place in the app
@@ -265,6 +287,32 @@ export function CardBrowser({
   /** The ids alone, for the ordering, which does not care how many. */
   const ownedIds = useMemo(
     () => new Set(ownedCounts.keys()), [ownedCounts]);
+  /**
+   * Add a card at its cheapest printing, with no preview.
+   *
+   * Resolving the printings is one query against this phone's own
+   * index, the same one the preview would run -- so this works with
+   * no signal, which is when someone is most likely to be building
+   * from what they have.
+   */
+  const quickPick = useCallback(async (card: CatalogueCard) => {
+    setAdding(card.name);
+    try {
+      const { printings } = await state.printingsFor(card.name);
+      const mine = await state.ownedCountsOf(
+        card.name, ownedOnly ? ownedIn : '');
+      const pick = cheapestPrinting(
+        printings, new Set(mine.keys()), ownedOnly);
+      // No printings at all means an index that has never heard of
+      // it. The name-level add still works and is the honest
+      // fallback -- "some copy of this card" is exactly what a deck
+      // slot has always been allowed to mean.
+      await onPick(card, pick);
+    } finally {
+      setAdding('');
+    }
+  }, [state, onPick, ownedOnly, ownedIn]);
+
 
   /**
    * The pager's list: yours first, and only yours when you asked.
@@ -648,6 +696,38 @@ export function CardBrowser({
       </ScrollView>
 
       {/*
+        What a tap does.
+
+        A checkbox rather than another filter chip, because it does
+        not narrow what is shown -- it changes what touching a card
+        MEANS, and that is worth looking different from the row of
+        things that change the list.
+
+        Only where a tap would otherwise open the card. On the
+        wishlist a tap already adds, and offering to make it add
+        harder would be a switch with nothing behind it.
+      */}
+      {previewOnTap ? (
+        <Pressable
+          style={styles.quickRow}
+          onPress={() => setQuickAdd((on) => !on)}
+        >
+          <View style={[styles.box, quickAdd && styles.boxOn]}>
+            {quickAdd ? <Text style={styles.tick}>{'✓'}</Text> : null}
+          </View>
+          <View style={styles.quickWords}>
+            <Text style={styles.quickLabel}>Tap to add, cheapest printing</Text>
+            <Text style={styles.muted}>
+              {quickAdd
+                ? 'A tap adds the card straight away. Long-press still '
+                  + 'removes one.'
+                : 'A tap opens the card to read first.'}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
+
+      {/*
         WHICH of your cards. Only while "Only mine" is on, because on its own
         it would read as "cards in this collection and also every card in
         Magic", which is not a question anyone is asking.
@@ -730,17 +810,25 @@ export function CardBrowser({
           return (
             <Pressable
               key={card.scryfall_id || card.name}
-              style={[styles.tile, !castable && styles.tileLocked]}
-              disabled={!castable}
+              style={[styles.tile, !castable && styles.tileLocked,
+                      adding === card.name && styles.tileAdding]}
+              // Locked out while its printings are being looked up.
+              // Quick-add is one tap and people tap twice; without
+              // this, an impatient second tap adds a second copy.
+              disabled={!castable || adding === card.name}
               accessibilityState={{ disabled: !castable }}
               accessibilityHint={
                 castable
                   ? undefined
                   : `${card.name} is outside your commander's colours`
               }
-              onPress={() =>
-                previewOnTap ? setPreview(card) : void onPick(card)
-              }
+              onPress={() => {
+                // Quick-add beats the preview, which is the whole
+                // point of the switch; without it the tap opens the
+                // card to be read first.
+                if (quickAdd) return void quickPick(card);
+                return previewOnTap ? setPreview(card) : void onPick(card);
+              }}
             >
               <Image
                 source={artSource(card.scryfall_id, 'small')}
@@ -1064,6 +1152,25 @@ const styles = StyleSheet.create({
   // Filled when selected, not merely outlined. Green text on the dark
   // background was legible in isolation and not at 12px in a row of eight —
   // the selected chip became the hardest one to read, which is backwards.
+  quickRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 8,
+  },
+  quickWords: { flex: 1 },
+  quickLabel: { color: '#e4e6eb', fontSize: 14, fontWeight: '600' },
+  box: {
+    alignItems: 'center',
+    borderColor: '#4a5568',
+    borderRadius: 5,
+    borderWidth: 2,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  boxOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
+  tick: { color: '#0f1117', fontSize: 14, fontWeight: '900' },
   chipOn: { backgroundColor: '#38a169', borderColor: '#38a169' },
   chipText: { color: '#c9ced9', fontSize: 12, flexShrink: 0 },
   chipTextOn: { color: '#ffffff', fontWeight: '700' },
@@ -1075,6 +1182,7 @@ const styles = StyleSheet.create({
   },
   // Dimmed rather than hidden, and the art dimmed harder than the name so
   // the card is still identifiable at a glance.
+  tileAdding: { opacity: 0.45 },
   tileLocked: { opacity: 0.75 },
   artLocked: { opacity: 0.35 },
   lockTag: {

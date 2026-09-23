@@ -147,3 +147,52 @@ export function ownedLine(
   if (foil > 0) return `You own ${total} · ${foil} foil`;
   return `You own ${total}`;
 }
+
+/** A printing with enough on it to be priced and chosen. */
+export interface PricedRow {
+  printing_id: string;
+  price_usd?: number | null;
+}
+
+/**
+ * The one to buy, when nobody wants to look.
+ *
+ * Quick-add exists so a deck can be built by tapping, and the
+ * question it silently answers is "which printing" -- forty of them
+ * for a common card, all the same card. Cheapest is the only answer
+ * that is defensible without looking: it is what the deck would
+ * actually cost, which is the number this mode is for.
+ *
+ * Unpriced rows are not free. They are rows Scryfall has no price
+ * for, and treating a missing number as zero would make every
+ * unpriced printing win every time -- the exact `Number('')` trap
+ * this project has already paid for once. They are used only when
+ * nothing at all is priced, and then the order is by id so two taps
+ * on the same card give the same answer.
+ *
+ * `onlyOwned` narrows to the shelf first, for the same reason the
+ * pager does: with Only Mine on, offering a printing you do not have
+ * contradicts the thing that was asked for. It falls back to the
+ * full list rather than to nothing, because a card owned with no
+ * printing recorded is still a card you own.
+ */
+export function cheapestPrinting<T extends PricedRow>(
+  rows: T[],
+  owned: Set<string> = new Set(),
+  onlyOwned = false,
+): T | undefined {
+  const all = rows ?? [];
+  if (!all.length) return undefined;
+  const mine = all.filter((r) => owned.has(r.printing_id));
+  const pool = onlyOwned && mine.length ? mine : all;
+
+  const priced = pool.filter((r) => typeof r.price_usd === 'number'
+    && Number.isFinite(r.price_usd) && (r.price_usd as number) >= 0);
+  const from = priced.length ? priced : pool;
+  return [...from].sort((a, b) => {
+    const left = typeof a.price_usd === 'number' ? a.price_usd : 0;
+    const right = typeof b.price_usd === 'number' ? b.price_usd : 0;
+    return left - right
+      || String(a.printing_id).localeCompare(String(b.printing_id));
+  })[0];
+}

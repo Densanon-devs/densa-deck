@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
 import {
+  cheapestPrinting,
   matchesSet,
   orderPrintings,
   ownedLine,
@@ -249,5 +250,87 @@ describe('how many of this printing you have', () => {
 
   test('more foils than copies cannot happen and does not break it', () => {
     assert.equal(ownedLine({ total: 1, foil: 5 }), 'You own 1 foil');
+  });
+});
+
+describe('the printing quick-add picks', () => {
+  /**
+   * Quick-add exists so a deck can be built by tapping, and the
+   * question it silently answers is "which printing" -- forty of
+   * them for a common card, all the same card. Cheapest is the only
+   * answer defensible without looking: it is what the deck would
+   * actually cost, which is the number this mode is for.
+   */
+  const ROWS = [
+    { printing_id: 'a', price_usd: 4 },
+    { printing_id: 'b', price_usd: 0.25 },
+    { printing_id: 'c', price_usd: 1.5 },
+  ];
+
+  test('the cheapest one', () => {
+    assert.equal(cheapestPrinting(ROWS).printing_id, 'b');
+  });
+
+  test('free is cheaper than cheap', () => {
+    const free = [...ROWS, { printing_id: 'z', price_usd: 0 }];
+    assert.equal(cheapestPrinting(free).printing_id, 'z');
+  });
+
+  test('an unpriced printing is NOT free', () => {
+    /*
+      A missing price is "Scryfall has no number for this", and
+      treating it as zero would make every unpriced printing win
+      every time. This project has paid for that exact assumption
+      once already -- `Number('')` is 0, and a blank price became a
+      confident $0.00.
+    */
+    const some = [...ROWS, { printing_id: 'y', price_usd: null },
+      { printing_id: 'x' }];
+    assert.equal(cheapestPrinting(some).printing_id, 'b');
+  });
+
+  test('unless nothing at all is priced', () => {
+    // Then there is no cheapest, and the answer has to be stable
+    // rather than correct: two taps on one card give one result.
+    const none = [{ printing_id: 'q' }, { printing_id: 'p' }];
+    assert.equal(cheapestPrinting(none).printing_id, 'p');
+  });
+
+  test('a tie is broken the same way twice', () => {
+    const tied = [{ printing_id: 'n', price_usd: 1 },
+      { printing_id: 'm', price_usd: 1 }];
+    assert.equal(cheapestPrinting(tied).printing_id, 'm');
+    assert.equal(cheapestPrinting([...tied].reverse()).printing_id, 'm');
+  });
+
+  test('nothing to choose from is no choice, not a crash', () => {
+    assert.equal(cheapestPrinting([]), undefined);
+    assert.equal(cheapestPrinting(undefined), undefined);
+  });
+});
+
+describe('quick-add with Only Mine on', () => {
+  const ROWS = [
+    { printing_id: 'cheap', price_usd: 0.25 },
+    { printing_id: 'mine', price_usd: 9 },
+  ];
+
+  test('takes the cheapest of YOURS, not the cheapest there is', () => {
+    // Offering a printing you do not own contradicts the filter, and
+    // the cheap one is no use if it is not in the box.
+    assert.equal(
+      cheapestPrinting(ROWS, new Set(['mine']), true).printing_id, 'mine');
+  });
+
+  test('and the cheapest overall when the filter is off', () => {
+    assert.equal(
+      cheapestPrinting(ROWS, new Set(['mine']), false).printing_id, 'cheap');
+  });
+
+  test('owning none of them falls back rather than refusing', () => {
+    // A card owned with no printing recorded is still owned. An
+    // empty answer here would make the button do nothing.
+    assert.equal(
+      cheapestPrinting(ROWS, new Set(), true).printing_id, 'cheap');
   });
 });
