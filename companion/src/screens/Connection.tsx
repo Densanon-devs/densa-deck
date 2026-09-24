@@ -637,16 +637,23 @@ export function ConnectionScreen({
             in Settings.
           </Text>
           <Text style={styles.muted}>
-            2. Tailscale is running on this phone, not just on the PC.
+            2. This phone and the PC are on the same Wi-Fi. Wi-Fi is the
+            normal path and the fast one; mobile data cannot reach a PC in
+            your house.
           </Text>
           <Text style={styles.muted}>
-            3. The PC has moved to a different Wi-Fi address since you paired.
-            The tunnel address is the one that survives that — if Tailscale
-            answers and Wi-Fi does not, nothing is actually wrong.
-          </Text>
-          <Text style={styles.muted}>
-            4. Windows Firewall is refusing the connection. It only ever asks
+            3. Windows Firewall is refusing the connection. It only ever asks
             once, and answering “Cancel” that one time is permanent.
+          </Text>
+          <Text style={styles.muted}>
+            4. The PC has moved to a different Wi-Fi address since you paired.
+            Re-pair, or set up Tailscale — the tunnel address survives that,
+            and it is what tells this phone the new local address.
+          </Text>
+          <Text style={styles.muted}>
+            5. If you use Tailscale, it has to be running on this phone and
+            not only on the PC. Tailscale is optional: it is for reaching the
+            PC when you are not at home.
           </Text>
         </View>
       ) : null}

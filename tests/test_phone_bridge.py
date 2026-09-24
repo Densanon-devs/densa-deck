@@ -324,6 +324,64 @@ class TestPairingUrlPointsWhereSomethingListens:
                            {"dns_name": "box.tail1.ts.net"},
                            {"configured": False}, "tok") == ""
 
+
+class TestPairingWorksOverWiFiAlone:
+    """Tailscale is an addition, not a prerequisite.
+
+    The common case is a phone and a desktop on the same network, which
+    needs no tunnel, no account and no third party. Requiring a tailnet to
+    pair AT ALL was the bug: with none, `pairing_url` returned "" and the
+    desktop could hand a phone nothing, on a network where the two could see
+    each other perfectly well.
+    """
+
+    def test_lan_only_still_pairs(self):
+        from densa_deck.app.phone import pairing_url
+        url = pairing_url(
+            {"tailnet_host": "", "lan_host": "192.168.1.40", "port": 8791,
+             "companion_port": 8792, "companion_hosts": ["192.168.1.40"]},
+            {}, {"configured": False}, "tok")
+        assert url.startswith("http://192.168.1.40:8791/scan?t=tok")
+        assert "api=http://192.168.1.40:8792" in url
+
+    def test_and_carries_the_lan_address_for_the_app_to_try_first(self):
+        # Emitted even when it equals `api`. One redundant probe buys the
+        # self-healing path; without it a phone paired over Wi-Fi alone is
+        # stranded by the next DHCP lease change.
+        from densa_deck.app.phone import pairing_url
+        url = pairing_url(
+            {"tailnet_host": "", "lan_host": "192.168.1.40", "port": 8791,
+             "companion_port": 8792, "companion_hosts": ["192.168.1.40"]},
+            {}, {"configured": False}, "tok")
+        assert "lan=http://192.168.1.40:8792" in url
+
+    def test_a_tailnet_still_wins_the_page_address(self):
+        # It is the address that works from anywhere. The app is told about
+        # both and prefers the LAN one at runtime.
+        from densa_deck.app.phone import pairing_url
+        url = pairing_url(
+            {"tailnet_host": "100.64.1.2", "lan_host": "192.168.1.40",
+             "port": 8791, "companion_port": 8792,
+             "companion_hosts": ["100.64.1.2"]},
+            {}, {"configured": False}, "tok")
+        assert url.startswith("http://100.64.1.2:8791/scan?t=tok")
+        assert "api=http://100.64.1.2:8792" in url
+        assert "lan=http://192.168.1.40:8792" in url
+
+    def test_neither_address_still_yields_nothing(self):
+        from densa_deck.app.phone import pairing_url
+        assert pairing_url(
+            {"tailnet_host": "", "lan_host": "", "port": 8791},
+            {}, {"configured": False}, "tok") == ""
+
+    def test_serve_still_wins_over_everything(self):
+        from densa_deck.app.phone import pairing_url
+        url = pairing_url(
+            {"tailnet_host": "100.64.1.2", "lan_host": "192.168.1.40",
+             "port": 8791},
+            {"dns_name": "box.tail1.ts.net"}, {"configured": True}, "tok")
+        assert url == "https://box.tail1.ts.net/scan?t=tok"
+
     def test_no_token_yields_nothing(self):
         from densa_deck.app.phone import pairing_url
         assert pairing_url({"tailnet_host": "100.64.1.2", "port": 8791},

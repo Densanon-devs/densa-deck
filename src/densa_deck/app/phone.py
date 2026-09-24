@@ -424,7 +424,12 @@ class PhoneBridge:
             "tailnet_host": tailnet_hosts[0] if tailnet_hosts else "",
             # Whether a phone can actually reach this right now. False means
             # the URL we hand out would just hang.
-            "reachable_from_phone": bool(tailnet_hosts),
+            #
+            # A LAN address counts. It was tailnet-only, which reported "no
+            # phone can reach this" to a desktop sitting on the same Wi-Fi as
+            # the phone, with the bridge listening on exactly the address the
+            # phone would have used.
+            "reachable_from_phone": bool(tailnet_hosts or self.lan_host),
             "tls": self.ssl_context is not None,
             "companion_port": self.companion_port,
             "companion_hosts": list(self.companion_hosts),
@@ -1376,50 +1381,72 @@ def phone_url(dns_name: str, token: str) -> str:
 def pairing_url(bridge_status: dict, ts: dict, serve: dict, token: str) -> str:
     """The address the phone should actually open.
 
+    Wi-Fi first. The common case is a phone and a desktop on the same
+    network, and that needs no tunnel, no account and no third party — the
+    bridge already binds this machine's private address, so a phone on the
+    same Wi-Fi can talk to it directly.
+
+    Tailscale is an ADDITION on top of that, not a prerequisite. It buys one
+    thing: the same connection from somewhere else. Requiring it to pair at
+    all was the bug — with no tailnet this returned "" and the desktop had no
+    way to hand a phone anything, on a network where the two machines could
+    see each other perfectly well.
+
     Picks by what is genuinely listening, not by what would be nicest:
 
       * `tailscale serve` configured -> the HTTPS MagicDNS name it fronts.
-      * otherwise -> plain HTTP straight to this machine's tailnet address,
-        which the bridge binds directly.
+      * a tailnet address -> plain HTTP straight to it.
+      * otherwise -> plain HTTP to the LAN address.
 
     Getting this wrong is not a cosmetic bug. Pointing a phone at
     `https://<name>.ts.net` with no Serve running means dialling port 443
     where nothing listens: the browser sits there spinning rather than
     reporting an error, which is exactly the "we are hanging" symptom.
 
-    Plain HTTP is not a downgrade in confidentiality — a 100.64/10 address is
-    only routable inside the tailnet and WireGuard already encrypts the hop.
-    The certificate would only buy `isSecureContext`, i.e. a live camera
-    viewfinder, at the cost of publishing this machine's name to the public
-    CT log forever.
+    Plain HTTP is not a downgrade in confidentiality on either path. A
+    100.64/10 address is only routable inside the tailnet and WireGuard
+    already encrypts the hop; a private LAN address does not leave the
+    building. The certificate would only buy `isSecureContext`, i.e. a live
+    camera viewfinder in the BROWSER, at the cost of publishing this
+    machine's name to the public CT log forever. The app does not need it.
     """
     if not token:
         return ""
     if serve.get("configured") and ts.get("dns_name"):
         return phone_url(ts["dns_name"], token)
-    host = bridge_status.get("tailnet_host") or ""
-    if host:
-        scheme = bridge_status.get("scheme", "http")
-        port = bridge_status.get("port", DEFAULT_PORT)
-        url = f"{scheme}://{host}:{port}/scan?t={token}"
-        # The native app cannot use the TLS port: Android refuses a
-        # self-signed certificate and offers no way to override it from
-        # JavaScript. Carrying the plain endpoint in the SAME link means one
-        # QR code serves both the web page and the app — the browser ignores
-        # the extra parameter, and the app does not have to guess at port
-        # arithmetic to find its way home.
-        companion_port = bridge_status.get("companion_port")
-        if companion_port and bridge_status.get("companion_hosts"):
-            url += f"&api=http://{host}:{companion_port}"
-            # The local address as well, so the phone can take the fast path
-            # when it is on the same Wi-Fi. It is a starting point rather than
-            # a fact: a DHCP lease moves, and the phone re-learns the current
-            # one from /health on any successful contact.
-            lan = bridge_status.get("lan_host") or ""
-            if lan:
-                url += f"&lan=http://{lan}:{companion_port}"
-        return url
-    return ""
+
+    lan = bridge_status.get("lan_host") or ""
+    tailnet = bridge_status.get("tailnet_host") or ""
+    # The page host: the tailnet one when there is one, because that address
+    # works from anywhere and the LAN one does not. Either way the app is
+    # told about both below.
+    host = tailnet or lan
+    if not host:
+        return ""
+
+    scheme = bridge_status.get("scheme", "http")
+    port = bridge_status.get("port", DEFAULT_PORT)
+    url = f"{scheme}://{host}:{port}/scan?t={token}"
+
+    # The native app cannot use the TLS port: Android refuses a self-signed
+    # certificate and offers no way to override it from JavaScript. Carrying
+    # the plain endpoint in the SAME link means one QR code serves both the
+    # web page and the app — the browser ignores the extra parameters, and
+    # the app does not have to guess at port arithmetic to find its way home.
+    companion_port = bridge_status.get("companion_port")
+    if companion_port and bridge_status.get("companion_hosts"):
+        url += f"&api=http://{host}:{companion_port}"
+        # And the LAN address, which the app TRIES FIRST. It is a starting
+        # point rather than a fact: a DHCP lease moves, and the phone
+        # re-learns the current one from /health on any successful contact.
+        #
+        # Emitted even when it is the same as `api`, which is the no-tunnel
+        # case. Costing one redundant probe buys the self-healing path, and
+        # without it a phone paired over Wi-Fi alone would be stranded by the
+        # next lease change with nothing able to tell it the new address.
+        if lan:
+            url += f"&lan=http://{lan}:{companion_port}"
+    return url
 
 
 def qr_matrix(data: str) -> list[list[bool]] | None:
