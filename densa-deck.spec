@@ -162,6 +162,22 @@ a = Analysis(
         "datasets",
         "pyarrow",
         "sympy",
+        # OpenCV, which the app INSTALLS ON DEMAND rather than ships.
+        #
+        # `api.py` has a whole `scan_install` flow that pip-installs it and
+        # then proves it imports, because desktop photo scanning is opt-in
+        # and most people never turn it on. PyInstaller's static analysis
+        # finds the lazy `import cv2` inside those functions anyway and drags
+        # the wheel in: cv2.pyd is 86 MB and its ffmpeg DLL another 31 MB.
+        #
+        # That is 117 MB on every customer's download for a feature they
+        # have not asked for, and it shadows the copy the install flow would
+        # put there. 0.7.0 was 262 MB before this line; the documented size
+        # is ~107 MB.
+        "cv2",
+        "opencv",
+        "opencv_python",
+        "opencv_python_headless",
     ],
     noarchive=False,
 )
@@ -182,6 +198,13 @@ def _is_cuda_dll(entry):
     return any(tok in base for tok in (
         "cublas", "cudart", "cudnn", "cufft", "curand", "cusolver",
         "cusparse", "nvrtc", "nvjpeg", "nvjitlink",
+        # llama.cpp's own CUDA backend, which the list above missed
+        # because it is not named after a CUDA library. 31 MB of GPU
+        # kernels for a machine that, by the argument above, has no
+        # matching toolkit to run them. llama_cpp loads its backends
+        # dynamically and falls back to CPU when one is absent -- which
+        # the build's `analyst show` smoke test proves before shipping.
+        "ggml-cuda",
     ))
 
 a.binaries = [b for b in a.binaries if not _is_cuda_dll(b)]
