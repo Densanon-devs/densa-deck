@@ -12,7 +12,14 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import type { AppSnapshot, AppState } from '../lib/app-state.ts';
 import type { TierSnapshot } from '../lib/protocol.ts';
@@ -27,6 +34,15 @@ import { fractionDone, progressLine }
 import { describeStage } from '../lib/index-source.ts';
 import { pricedInWords } from '../lib/price-refresh.ts';
 import { reporting } from './report.ts';
+
+/**
+ * Where the written guide lives.
+ *
+ * A constant rather than a string in the markup: it is the one piece
+ * of this screen that has to match something outside the repository,
+ * and a URL buried in JSX is a URL nobody finds when the site moves.
+ */
+const HELP_URL = 'https://toolkit.densanon.com/densa-deck-help.html';
 
 interface Props {
   state: AppState;
@@ -339,6 +355,40 @@ export function ConnectionScreen({
           </Pressable>
         </View>
       ) : null}
+
+      {/*
+        How the thing works.
+
+        On the web rather than in the app, deliberately: it covers the
+        desktop and the licence as well as the phone, it can be fixed
+        the day something is wrong instead of in the next build, and
+        it is the same page whichever of the two you are reading it
+        on.
+
+        The cost is that it needs a connection, which a scanner in a
+        shop may not have. Named rather than hidden, because a link
+        that silently does nothing is worse than one that says what
+        it needs.
+      */}
+      <View style={styles.pcOffer}>
+        <Text style={styles.pcTitle}>How it works</Text>
+        <Text style={styles.summary}>
+          Everything the app can do, on the phone and on the desktop,
+          with a clear line where Pro starts.
+        </Text>
+        <Pressable
+          style={styles.pcButton}
+          onPress={() => {
+            void Linking.openURL(HELP_URL).catch(() => setProblem(
+              `Could not open ${HELP_URL}`));
+          }}
+        >
+          <Text style={styles.pcButtonText}>Open the guide</Text>
+        </Pressable>
+        <Text style={styles.muted}>
+          Opens {HELP_URL} in your browser. Needs a connection.
+        </Text>
+      </View>
 
       {/*
         The card index. Above the PC diagnostics because it matters to
