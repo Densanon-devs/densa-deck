@@ -1,16 +1,29 @@
 # mtg-deck-engine (Densa Deck)
 
-Commercial MTG deck analysis platform. Free tools on `toolkit.densanon.com`,
-Pro desktop app sold via Stripe one-time purchase. **Released v0.2.0** to
-GitHub on 2026-04-24; **11 post-release commits queued for v0.3.0.**
+Commercial MTG deck analysis platform. Two halves that ship separately:
+
+* **Desktop** (`src/densa_deck/`) — the engine, the analysis, the licence.
+  **0.7.0**, built and installed 2026-09-24, at
+  `G:\My Drive\Densanon LLC\DensaDeck\DensaDeck-Desktop-0.7.0-windows.zip`.
+  NOT yet cut as a GitHub Release and the version manifest is NOT bumped —
+  both of those publish to customers and are a deliberate manual step.
+* **Android companion** (`companion/`) — an Expo/React Native app that is a
+  real product in its own right, not a remote control. Offline-first: it
+  holds its own copy of the card index, scans and identifies cards with no
+  PC, and builds decks. **0.57.0 / versionCode 137.** Branch
+  `feature/companion-app`, dropped to the same Drive folder.
+* **Guide** — `toolkit.densanon.com/densa-deck-help.html`, everything both
+  halves do with each entry tagged Free / Needs a PC / Pro. Settings links
+  to it. Lives in `densanon-devs/densanon-toolkit`.
 
 ## Stack
 
 - Python 3.11+, Pydantic, httpx, Rich CLI, SQLite
 - llama-cpp-python (optional, Pro analyst model)
 - pywebview for the desktop UI shell
-- PyInstaller for desktop binary (~107 MB folder mode after CUDA / torch / scipy
-  excludes — see `densa-deck.spec`'s post-Analysis filter)
+- PyInstaller for desktop binary (~122 MB folder mode / 65 MB zipped, after
+  CUDA / torch / scipy / **OpenCV** excludes — see `densa-deck.spec`'s
+  post-Analysis filter)
 
 ## Architecture
 
@@ -47,9 +60,18 @@ GitHub on 2026-04-24; **11 post-release commits queued for v0.3.0.**
   Full plan + rationale: `docs/COLLECTION_PLAN.md`.
 - `benchmarks/` — 6 built-in gauntlet suites (casual-commander, cedh, modern-meta, etc.)
 
-`app/phone.py` — phone-as-scanner bridge. Binds 127.0.0.1 ONLY; reached via
-`tailscale serve` (which also supplies the HTTPS origin the phone camera
-requires). Token-paired, explicit route allow-list, stopped on app close.
+`app/phone.py` — phone-as-scanner bridge. Binds THREE specific addresses:
+loopback, this machine's private LAN address, and its tailnet address when
+there is one. Never 0.0.0.0 — that distinction is the whole safety argument,
+because 0.0.0.0 would also answer on whatever cafe Wi-Fi the laptop joins
+next. Token-paired, explicit route allow-list, stopped on app close.
+
+**Wi-Fi is the primary path; Tailscale is optional** (0.7.0). The phone tries
+the LAN address first on every call and falls back to the tunnel. Until
+0.7.0 `pairing_url()` returned "" with no tailnet, so a desktop and a phone
+on the same network could not be introduced at all even though the bridge
+was listening on exactly the address the phone would have used.
+
 Page at `app/static/phone/scan.html` — note the .spec needs its own glob
 for that subdirectory; `static/*` does not recurse.
 
@@ -147,19 +169,84 @@ Tier detection order: `MTG_ENGINE_TIER` env var → saved license file → `conf
 - **Success page:** `toolkit.densanon.com/densa-deck-success.html`
 - **Version manifest:** `toolkit.densanon.com/densa-deck-version.json`
 - **Binary release:** GitHub Release on `densanon-devs/densa-deck`, asset
-  `Densa-Deck-<version>-windows.zip` (folder mode, ~107 MB unzipped, ~55 MB zipped)
+  `Densa-Deck-<version>-windows.zip` (folder mode, ~122 MB unzipped, ~65 MB
+  zipped). **0.7.0 is built and on Drive but NOT released** — cutting the
+  Release and bumping the version manifest publish to customers.
+- **Desktop install on this box:** `%LOCALAPPDATA%\Programs\Densa Deck`,
+  with Desktop + Start Menu shortcuts that run `densa-deck app` (the bare
+  exe is the CLI and opens a console). Installed FROM the shipped zip, so
+  what runs here is byte-for-byte what a customer gets. `pip install -e .`
+  under Python 313 also exists and points at `src/` — that one is always
+  current by definition.
+
+## The Android Companion (`companion/`)
+
+Expo 54 / React Native. A product, not a remote control: everything below
+works with no PC and no signal.
+
+**Build and ship** — `android/` is gitignored and regenerated:
+```bash
+cd companion
+npx expo prebuild --platform android --clean
+cd android && export JAVA_HOME="C:/Program Files/Java/jdk-17" &&   ./gradlew assembleRelease --no-daemon
+cd ../.. && python scripts/ship_companion.py     # verifies + copies to Drive
+```
+`JAVA_HOME` on this box points at a JDK 8 that does not exist; every gradle
+call needs the export. `--no-daemon` because daemons accumulate at 1-3 GB
+each. `ship_companion.py` refuses to ship unless the four version sources
+agree AND the version string is actually inside the built JS bundle.
+
+**Tests:** `npm test` (node --test, ~1,230 of them) and `npx tsc --noEmit`.
+Some run against a REAL SQLite via `node:sqlite` (`tests/real-sqlite.mjs`) —
+`tests/harness.mjs` reimplements queries rather than executing them, so it
+has no columns and cannot catch a missing one. That gap shipped a
+`no such column: price_usd` crash; schema and ordering are tested for real
+now.
+
+**Schema migrations are automatic.** `CREATE TABLE IF NOT EXISTS` does
+nothing to an existing table, so a new column reached fresh installs only.
+`src/lib/migrate.ts` reads the schema's own CREATE statements back, diffs
+them against `PRAGMA table_info`, and adds what is missing. Adding a column
+needs no migration written — but tables are created, THEN migrated, THEN
+indexes, because an index over a column being added cannot exist first.
+
+**What needs the PC:** deleting a collection, tagging a card into a group,
+the set list, wishlist adds, build-from-collection, and all analysis
+(combos, brackets, Rule 0, suggestions). Everything else is local.
+
+**Three things the index must be refreshed to gain:** artist names (basic
+land scanning), the written-off set list, and which printings come in foil.
+All three arrive together in one download.
 
 ## Building the Desktop Binary
 
 ```bash
 pip install pywebview llama-cpp-python httpx pydantic rich
 python scripts/build_desktop.py
-# Output: dist/densa-deck/ (~107 MB, folder mode)
+# Output: dist/densa-deck/ (~122 MB, folder mode)
 ```
+
+**Close the app first.** The build starts with `rmtree(dist/)` and dies on
+`WinError 5` if `densa-deck.exe` is running, naming a file rather than the
+running process.
 
 `densa-deck.spec` excludes torch / scipy / transformers / faiss / django / etc.
 to keep the bundle small, AND filters CUDA / cuBLAS DLLs from a.binaries (see
 `_is_cuda_dll` in the spec). llama_cpp falls back to CPU on customer machines.
+
+Two excludes added 2026-09-24 after an unfiltered 0.7.0 came out at 262 MB:
+
+* **`cv2` / OpenCV, 117 MB.** `api.py` has a `scan_install` flow that
+  pip-installs OpenCV ON DEMAND, because desktop photo scanning is opt-in.
+  PyInstaller's static analysis finds the lazy `import cv2` inside those
+  functions and bundles the wheel anyway — 86 MB of `cv2.pyd` plus a 31 MB
+  ffmpeg DLL, shipped to everyone for a feature most never enable, and
+  shadowing the copy the install flow would put there.
+* **`ggml-cuda.dll`, 31 MB.** `_is_cuda_dll` matched CUDA LIBRARY names, so
+  llama.cpp's own CUDA backend walked past it.
+
+262 MB -> 122 MB. The build's `analyst show` smoke test is what proves
+dropping the GPU backend did not break the analyst — do not skip it.
 
 `scripts/build_desktop.py` handles a Windows cp1252 stdout decoding gotcha (Rich
 box-drawing chars in `analyst show` output) — see `feedback_windows_stdout_cp1252.md`.
@@ -178,10 +265,25 @@ box-drawing chars in `analyst show` output) — see `feedback_windows_stdout_cp1
 
 ## Testing
 
-**474 tests, all passing in ~16s:**
+**2,165 passing, 18 failing, 2 skipped, ~9m30s** (2026-09-24):
 ```bash
 PYTHONPATH=src python -m pytest tests/
 ```
+
+It is slow because `test_phone_bridge.py` binds real sockets — that file
+alone is ~2.5 minutes. Budget for it; it is not hung.
+
+**The 18 failures are all `test_app_icon.py` and none of them are a real
+defect.** They assert on PNGs that `scripts/make_icons.py` writes into
+`companion/android/app/src/main/res/`, which is GITIGNORED and regenerated
+by `expo prebuild --clean` — so they fail for anyone who has built the
+companion. The shipped icon is fine: `make_icons.py` also writes
+`companion/assets/adaptive-icon.png`, pre-fitted to Android's safe circle,
+and Expo regenerates the mipmaps from that. Verified 2026-09-24 by pulling
+the launcher foreground out of the shipped APK — 8,989 red pixels among
+26,053 opaque, i.e. the real artwork rather than the white ghost that test
+was written to catch. **The fix is to repoint the test at
+`companion/assets/`; asserting on a regenerated directory cannot work.**
 
 Key test files:
 - `test_licensing.py` (25 tests) — includes JS compat locks
