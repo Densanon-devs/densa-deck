@@ -227,7 +227,10 @@ class TestDecks:
 class TestAnalyst:
     """The PC does the thinking; the phone shows the answer."""
 
-    def test_analyzing_a_deck(self, paired):
+    def test_analyzing_a_deck(self, paired, monkeypatch):
+        # Pro, said explicitly. This used to pass only because it read the
+        # developer's own licence out of the real home directory.
+        monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
         _api, bridge = paired
         reply = call(bridge, "analyst/analyze",
                      {"decklist_text": DECKLIST, "name": "Shop brew"})

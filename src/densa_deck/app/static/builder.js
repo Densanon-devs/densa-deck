@@ -55,6 +55,15 @@
   // run first. The Build view may not be rendered in early test harnesses.
   function e(id) { return document.getElementById(id); }
 
+  // Card art (card-art.js). Guarded so a page without it still renders
+  // plain names rather than throwing.
+  function artRef(name) {
+    return window.CardArt ? window.CardArt.ref(name) : escape(name);
+  }
+  function artThumb(name, opts) {
+    return window.CardArt ? window.CardArt.thumb(name, opts) : "";
+  }
+
   // ---------------- initial wire + autosave ----------------
 
   function wireOnce() {
@@ -100,11 +109,15 @@
       builderState.query.offset = 0;
       debouncedSearch();
     });
-    const typeSel = e("filter-type");
-    if (typeSel) typeSel.addEventListener("change", () => {
-      builderState.query.types = Array.from(typeSel.selectedOptions).map(o => o.value);
-      builderState.query.offset = 0;
-      debouncedSearch();
+    // Toggle chips in the options band, rather than a Ctrl-click list that
+    // needed seven rows of height the Arena layout does not have.
+    document.querySelectorAll(".filter-type").forEach(cb => {
+      cb.addEventListener("change", () => {
+        builderState.query.types = Array.from(document.querySelectorAll(".filter-type"))
+          .filter(x => x.checked).map(x => x.value);
+        builderState.query.offset = 0;
+        debouncedSearch();
+      });
     });
     const fmtSel = e("filter-format");
     if (fmtSel) fmtSel.addEventListener("change", () => {
@@ -494,6 +507,8 @@
     tile.className = "card-tile";
     // Lets paintOwnershipBadges find its tile after an async batch lookup.
     tile.dataset.cardName = card.name || "";
+    // Hover shows the card full size beside the pool, as Arena does.
+    if (window.CardArt) window.CardArt.tag(tile, card.name);
     // Highlight cards that would complete a near-miss combo for the
     // current draft. The set is refreshed on every detection cycle —
     // see _builderComboCompleterSet maintained by detectBuilderCombos.
@@ -565,7 +580,7 @@
     document.querySelectorAll(".filter-color").forEach(cb => { cb.checked = false; });
     const cmcMin = e("filter-cmc-min"); if (cmcMin) cmcMin.value = "";
     const cmcMax = e("filter-cmc-max"); if (cmcMax) cmcMax.value = "";
-    const typeSel = e("filter-type"); if (typeSel) Array.from(typeSel.options).forEach(o => { o.selected = false; });
+    document.querySelectorAll(".filter-type").forEach(cb => { cb.checked = false; });
     const raritySel = e("filter-rarity"); if (raritySel) raritySel.value = "";
     const maxPrice = e("filter-max-price"); if (maxPrice) maxPrice.value = "";
     const idRadio = document.querySelector("input[name='color-match-mode'][value='identity']");
@@ -635,7 +650,11 @@
     // A printing carried on the card itself, for the re-add path: the +
     // button hands back the stored entry, and a slot that named a printing
     // must not lose it just because someone asked for one more copy.
-    const chosen = printing || (card.set_code ? {
+    // Only a slot that actually named a printing carries one. A search
+    // result has the default printing's set_code on it too, and treating
+    // that as a choice keyed every tile click as "Name (SET)" with no
+    // collector number -- a printing nobody picked.
+    const chosen = printing || ((card.printing_id || card.collector_number) ? {
       set_code: card.set_code,
       collector_number: card.collector_number,
       printing_id: card.printing_id,
@@ -734,17 +753,6 @@
 
   // ---------------- deck rendering ----------------
 
-  const TYPE_ORDER = [
-    ["Creatures", e => e.is_creature],
-    ["Instants", e => e.is_instant],
-    ["Sorceries", e => e.is_sorcery],
-    ["Artifacts", e => e.is_artifact && !e.is_creature],
-    ["Enchantments", e => e.is_enchantment && !e.is_creature],
-    ["Planeswalkers", e => e.is_planeswalker],
-    ["Battles", e => e.is_battle],
-    ["Lands", e => e.is_land],
-    ["Other", () => true],
-  ];
 
   /**
    * How many cards each zone holds, written onto its tab.
@@ -799,7 +807,7 @@
 
     const over = Object.entries(totals)
       .filter(([name, n]) => n > maxCopies && !UNLIMITED.has(name.toLowerCase()))
-      .map(([name, n]) => `${n} copies of ${escape(name)} — ${maxCopies} allowed`);
+      .map(([name, n]) => `${n} copies of ${artRef(name)} — ${maxCopies} allowed`);
 
     const board = Object.values(builderState.deck.sideboard || {})
       .reduce((a, c) => a + (c.qty || 0), 0);
@@ -813,15 +821,43 @@
     host.classList.toggle("hidden", !over.length);
   }
 
+  // Mana-value columns, as MTG Arena lays a deck out. Lands get their own
+  // column at the end rather than sitting in 0 with the free spells.
+  const MV_COLUMNS = ["0", "1", "2", "3", "4", "5", "6", "7+"];
+  const ALWAYS_SHOWN = new Set(["1", "2", "3", "4", "5", "6"]);
+
+  function mvColumn(ent) {
+    if (ent.is_land) return "Lands";
+    const mv = Math.floor(Number(ent.cmc) || 0);
+    return mv >= 7 ? "7+" : String(mv);
+  }
+
+  // Creatures first within a stack, then the rest by type, then by name —
+  // the order a player reads a curve in.
+  function stackOrder(ent) {
+    if (ent.is_creature) return 0;
+    if (ent.is_planeswalker) return 1;
+    if (ent.is_instant || ent.is_sorcery) return 2;
+    if (ent.is_artifact) return 3;
+    if (ent.is_enchantment) return 4;
+    return 5;
+  }
+
+  /** The exact art for a slot: its chosen printing, else the card's default. */
+  function slotImage(ent) {
+    const id = String(ent.printing_id || ent.scryfall_id || "").toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) return "";
+    return `https://cards.scryfall.io/normal/front/${id[0]}/${id[1]}/${id}.jpg`;
+  }
+
   function renderDeck() {
     const host = e("build-deck-body");
     if (!host) return;
     renderZoneCounts();
     renderOverLimit();
     const entries = builderState.deck[builderState.activeZone];
-    const names = Object.keys(entries);
-    // Count summary
-    const totalCount = names.reduce((a, n) => a + entries[n].qty, 0);
+    const keys = Object.keys(entries);
+    const totalCount = keys.reduce((a, n) => a + entries[n].qty, 0);
     const countEl = e("build-deck-count");
     if (countEl) countEl.textContent = `${totalCount} card${totalCount === 1 ? "" : "s"} in ${builderState.activeZone}`;
     const titleEl = e("build-deck-title");
@@ -829,72 +865,87 @@
     const validityEl = e("build-deck-validity");
     if (validityEl) validityEl.innerHTML = renderValidity();
 
-    if (!names.length) {
-      host.innerHTML = `<p class="panel-hint">No cards in ${builderState.activeZone}. Click a card on the left to add it.</p>`;
+    if (!keys.length) {
+      host.innerHTML = `<p class="panel-hint deck-empty">No cards in ${builderState.activeZone}. Click a card above to add it.</p>`;
       return;
     }
-    // Group by primary type
-    const groups = [];
-    const placed = new Set();
-    for (const [groupLabel, pred] of TYPE_ORDER) {
-      const groupNames = names.filter(n => !placed.has(n) && pred(entries[n]));
-      groupNames.forEach(n => placed.add(n));
-      if (!groupNames.length) continue;
-      groupNames.sort((a, b) => {
+
+    const columns = new Map();
+    for (const col of [...MV_COLUMNS, "Lands"]) columns.set(col, []);
+    for (const k of keys) columns.get(mvColumn(entries[k])).push(k);
+
+    const html = [];
+    for (const [col, colKeys] of columns) {
+      if (!colKeys.length && !ALWAYS_SHOWN.has(col)) continue;
+      colKeys.sort((a, b) => {
         const da = entries[a], db = entries[b];
-        if (da.cmc !== db.cmc) return da.cmc - db.cmc;
+        const t = stackOrder(da) - stackOrder(db);
+        if (t) return t;
         return entryName(a, da).localeCompare(entryName(b, db));
       });
-      groups.push({ label: groupLabel, names: groupNames });
+      const count = colKeys.reduce((a, k) => a + entries[k].qty, 0);
+      html.push(`
+        <div class="mv-column">
+          <div class="mv-column-header"><span>${escape(col)}</span><span class="mv-count">${count || ""}</span></div>
+          <div class="mv-stack">
+            ${colKeys.map(k => {
+              const ent = entries[k];
+              const name = entryName(k, ent);
+              const label = printingLabel(ent);
+              const src = slotImage(ent);
+              // No id (a card added from a suggestion) still gets its art:
+              // card-art.js resolves the name and fills the slot in.
+              const art = src
+                ? `<img src="${escape(src)}" alt="" loading="lazy" onerror="this.remove()">`
+                : `<span class="card-thumb card-thumb-full stack-fill" data-card="${escape(name)}" data-card-thumb></span>`;
+              return `
+                <div class="stack-card" data-card="${escape(name)}" data-key="${escape(k)}"
+                     title="${escape(name)}${label ? " · " + escape(label) : ""} — click to remove one, right-click for printing">
+                  <div class="stack-card-text">
+                    <span class="stack-card-name">${escape(name)}</span>
+                    <span class="stack-card-cost">${escape(ent.mana_cost || "")}</span>
+                  </div>
+                  ${art}
+                  ${ent.qty > 1 ? `<span class="stack-qty">×${ent.qty}</span>` : ""}
+                  <div class="stack-card-actions">
+                    <button class="qty-btn" data-act="dec" title="Remove one">−</button>
+                    <button class="qty-btn" data-act="inc" title="Add one">+</button>
+                    <button class="qty-btn deck-printing${label ? " deck-printing-set" : ""}"
+                            data-act="printing" title="Which printing this slot means">${escape(label || "any")}</button>
+                  </div>
+                </div>`;
+            }).join("")}
+          </div>
+        </div>`);
     }
+    host.innerHTML = `<div class="mv-columns">${html.join("")}</div>`;
 
-    host.innerHTML = groups.map(g => `
-      <div class="deck-type-group">
-        <div class="deck-type-group-header">${escape(g.label)} (${g.names.reduce((a, n) => a + entries[n].qty, 0)})</div>
-        ${g.names.map(n => {
-          const ent = entries[n];
-          const label = printingLabel(ent);
-          return `
-            <div class="deck-row">
-              <div class="qty-controls">
-                <button class="qty-btn" data-act="dec" data-name="${escape(n)}" title="Remove one">−</button>
-                <span class="qty-value">${ent.qty}</span>
-                <button class="qty-btn" data-act="inc" data-name="${escape(n)}" title="Add one">+</button>
-              </div>
-              <span class="card-name">${escape(entryName(n, ent))}</span>
-              <!-- Which exact card this slot means, and the way to change it.
-                   "any" is not a gap: it is the normal answer, and the one an
-                   imported list gives. Saying so beats leaving the question
-                   invisible until the deck is valued wrongly. -->
-              <button class="qty-btn deck-printing${label ? " deck-printing-set" : ""}"
-                      data-act="printing" data-name="${escape(n)}"
-                      title="Which printing this slot means">${escape(label || "any")}</button>
-              <span class="card-cmc" title="${escape(ent.mana_cost || "")}">${ent.cmc || 0}</span>
-            </div>
-          `;
-        }).join("")}
-      </div>
-    `).join("");
-
-    // Delegated click handler — the qty buttons carry data-act so we
-    // don't need a per-button listener (faster on large decks).
-    host.onclick = (ev) => {
-      const btn = ev.target.closest(".qty-btn");
-      if (!btn) return;
-      const key = btn.dataset.name;
-      if (btn.dataset.act === "inc") {
-        // Re-use the same shape — we don't have the full card object
-        // at this point, only the stored entry fields, so build a
-        // minimal Card-shaped payload and route through addToDeck. The
-        // entry already carries its printing, so the copy lands in the
-        // same slot rather than opening a second, loose one.
-        const ent = entries[key];
+    const act = (key, what) => {
+      const ent = entries[key];
+      if (!ent) return;
+      if (what === "inc") {
+        // The entry carries its printing, so the copy lands in the same slot.
         addToDeck(Object.assign({}, ent, { name: entryName(key, ent) }));
-      } else if (btn.dataset.act === "dec") {
+      } else if (what === "dec") {
         decrementCard(key);
-      } else if (btn.dataset.act === "printing") {
+      } else if (what === "printing") {
         openPrintingPicker(key);
       }
+    };
+
+    // Arena's gesture: clicking a card in the deck takes one out. The small
+    // buttons on hover add one, remove one, or choose the printing.
+    host.onclick = (ev) => {
+      const cardEl = ev.target.closest(".stack-card");
+      if (!cardEl) return;
+      const btn = ev.target.closest(".qty-btn");
+      act(cardEl.dataset.key, btn ? btn.dataset.act : "dec");
+    };
+    host.oncontextmenu = (ev) => {
+      const cardEl = ev.target.closest(".stack-card");
+      if (!cardEl) return;
+      ev.preventDefault();
+      act(cardEl.dataset.key, "printing");
     };
   }
 
@@ -970,11 +1021,14 @@
       </div>
       <button class="btn btn-outline btn-slim" data-any="1">Any printing</button>
       ${rows.map((r, i) => `
-        <button class="btn btn-outline btn-slim" data-i="${i}">
-          ${escape(String(r.set_code || "").toUpperCase())}
-          ${escape(r.collector_number || "")}
-          ${r.price_usd != null ? `· $${Number(r.price_usd).toFixed(2)}` : ""}
-          ${r.owned ? `· ${r.owned} owned` : ""}
+        <button class="btn btn-outline btn-slim printing-picker-row thumb-row" data-i="${i}">
+          ${r.image_url ? artThumb(name, { full: true, src: r.image_url }) : ""}
+          <span>
+            ${escape(String(r.set_code || "").toUpperCase())}
+            ${escape(r.collector_number || "")}
+            ${r.price_usd != null ? `· $${Number(r.price_usd).toFixed(2)}` : ""}
+            ${r.owned ? `· ${r.owned} owned` : ""}
+          </span>
         </button>`).join("")}`;
 
     panel.onclick = (ev) => {
@@ -1180,7 +1234,9 @@
         return;
       }
       const top = (r.combos || []).slice(0, 5).map(c => `
-        <li title="${escape(c.short_label)}">${escape(c.short_label)}</li>
+        <li title="${escape(c.short_label)}">${escape(c.short_label)}
+          <div class="card-strip">${(c.cards || []).map(n => artThumb(n)).join("")}</div>
+        </li>
       `).join("");
       const more = r.match_count > 5 ? `<div class="panel-hint">+${r.match_count - 5} more</div>` : "";
       body.innerHTML = `
@@ -1421,6 +1477,7 @@
         return `
         <div class="suggest-row" data-name="${escape(s.name)}" data-cmc="${s.cmc}" data-mc="${escape(s.mana_cost)}" data-tl="${escape(s.type_line)}">
           <div class="suggest-rank">#${i + 1}</div>
+          ${artThumb(s.name, { full: true, src: s.image_url || "" })}
           <div class="suggest-card">
             <div class="suggest-name">${escape(s.name)} <span class="status-text">${escape(s.mana_cost || "")}</span> <span class="status-text" style="margin-left:6px">${priceTxt}</span></div>
             <div class="status-text">${escape(s.type_line || "")} &middot; ${escape(s.role || "")}</div>
@@ -1543,8 +1600,9 @@
              data-source="${escape(p.source)}" data-signal="${escape(p.signal)}" data-reason="${escape(p.reason)}"
              style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-bottom:1px solid var(--color-border, #2c2c2c)">
           <div style="font-weight:600;color:${kindColor};min-width:42px">${p.kind.toUpperCase()}</div>
+          ${artThumb(p.card_name)}
           <div style="flex:1;min-width:0">
-            <div><strong>${escape(p.card_name)}</strong> <span class="status-text">(${escape(p.source)}, score ${Number(p.score).toFixed(1)})</span></div>
+            <div><strong>${artRef(p.card_name)}</strong> <span class="status-text">(${escape(p.source)}, score ${Number(p.score).toFixed(1)})</span></div>
             <div class="status-text">${escape(p.reason)}</div>
             <div class="iterate-delta status-text" style="margin-top:2px;font-family:ui-monospace,monospace"></div>
           </div>
@@ -1737,7 +1795,8 @@
         return `<div style="display:flex;gap:8px;padding:4px;border-bottom:1px solid var(--color-border, #2c2c2c)">
           <div style="color:${color};font-weight:600;min-width:18px">${mark}</div>
           <div style="font-weight:600;min-width:42px">${r.kind.toUpperCase()}</div>
-          <div style="flex:1">${escape(r.card_name)}</div>
+          ${artThumb(r.card_name)}
+          <div style="flex:1">${artRef(r.card_name)}</div>
           <div class="status-text">${escape(r.created_at || "")}</div>
         </div>`;
       }).join("");

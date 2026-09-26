@@ -417,12 +417,20 @@ async function bootstrap() {
         const flagsLine = (r.flags || []).length
           ? `<p class="panel-hint">flags: ${r.flags.map(escape).join("; ")}</p>`
           : "";
+        const bigArt = window.CardArt
+          ? window.CardArt.thumb(r.card_name, { full: true }).replace('class="card-thumb card-thumb-full', 'class="card-thumb card-thumb-full card-thumb-lg')
+          : "";
         target.innerHTML = `
-          <div class="duel-verdict">
-            <div class="duel-verdict-headline">${escape(r.card_name)} ${verifiedBadge}</div>
+          <div style="display:flex;gap:14px;align-items:flex-start">
+            ${bigArt}
+            <div style="flex:1;min-width:0">
+              <div class="duel-verdict">
+                <div class="duel-verdict-headline">${cardRef(r.card_name)} ${verifiedBadge}</div>
+              </div>
+              <p>${escape(r.summary).replace(/\n/g, "<br>")}</p>
+              ${flagsLine}
+            </div>
           </div>
-          <p>${escape(r.summary).replace(/\n/g, "<br>")}</p>
-          ${flagsLine}
         `;
       }
     } catch (e) {
@@ -671,7 +679,7 @@ function showDbDiffModal(diff) {
   const section = (label, names, cssClass) => {
     const count = (diff.counts && diff.counts[label]) || names.length;
     if (count === 0) return "";
-    const listItems = (names || []).map(n => `<li>${escape(n)}</li>`).join("");
+    const listItems = (names || []).map(n => `<li>${cardRef(n)}</li>`).join("");
     const truncatedNote = (count > names.length)
       ? `<p class="panel-hint subtle">Showing ${names.length} of ${count} — more truncated for render speed.</p>`
       : "";
@@ -1085,7 +1093,7 @@ function renderAnalysis(r, target) {
         <h3>Issues</h3>
         <ul class="issue-list">
           ${r.issues.map(i =>
-            `<li class="severity-${escape(i.severity)}">${escape(i.message)}${i.card ? " ("+escape(i.card)+")" : ""}</li>`
+            `<li class="severity-${escape(i.severity)}">${escape(i.message)}${i.card ? " ("+cardRef(i.card)+")" : ""}</li>`
           ).join("")}
         </ul>
       </div>` : ""}
@@ -1106,7 +1114,7 @@ function renderAnalysis(r, target) {
           <tbody>
             ${r.castability.unreliable_cards.map(c =>
               `<tr>
-                <td>${escape(c.name)}</td>
+                <td>${cardThumbRef(c.name)}</td>
                 <td>${escape(c.mana_cost)}</td>
                 <td>${(c.on_curve_probability * 100).toFixed(0)}%</td>
                 <td>${escape(c.bottleneck_color || "-")}</td>
@@ -1126,7 +1134,7 @@ function renderAnalysis(r, target) {
           <tbody>
             ${r.staples.missing.map(s =>
               `<tr>
-                <td>${escape(s.name)}</td>
+                <td>${cardThumbRef(s.name)}</td>
                 <td><span class="badge-${escape(s.priority)}">${escape(s.priority)}</span></td>
                 <td>${escape(s.reason)}</td>
               </tr>`
@@ -1205,8 +1213,9 @@ async function fillNearMissCombosForCurrentDeck() {
     list.innerHTML = (r.near_combos || []).map(c => `
       <div class="combo-row">
         <div class="combo-label">${escape(c.short_label)}</div>
+        ${cardStrip(c.cards, c.missing_cards)}
         <div class="combo-meta">
-          <span class="status-text">missing: <strong>${escape(c.missing_cards.join(" + "))}</strong></span>
+          <span class="status-text">missing: <strong>${(c.missing_cards || []).map(cardRef).join(" + ")}</strong></span>
           ${c.popularity ? `<span class="status-text">${c.popularity.toLocaleString()} decks on Spellbook</span>` : ""}
           <a href="#" class="external-link combo-link" data-url="${escape(c.spellbook_url)}">Open on Spellbook &rarr;</a>
         </div>
@@ -1286,6 +1295,7 @@ async function fillCombosForCurrentDeck() {
     list.innerHTML = (r.combos || []).map(c => `
       <div class="combo-row">
         <div class="combo-label">${escape(c.short_label)}</div>
+        ${cardStrip(c.cards)}
         <div class="combo-meta">
           ${c.bracket_tag ? `<span class="badge-${escape(c.bracket_tag.toLowerCase())}" style="padding:1px 6px;border-radius:8px;font-size:0.72rem">tier ${escape(c.bracket_tag)}</span>` : ""}
           ${c.popularity ? `<span class="status-text">${c.popularity.toLocaleString()} decks on Spellbook</span>` : ""}
@@ -1331,7 +1341,7 @@ async function fillUnresolvedSuggestions(badNames) {
         return;
       }
       slot.innerHTML = matches.map(m =>
-        `<span class="suggest-chip" data-replace="${escape(m)}">${escape(m)}</span>`
+        `<span class="suggest-chip" data-replace="${escape(m)}" data-card="${escape(m)}">${escape(m)}</span>`
       ).join(" ");
       // Wire click-to-fix: swap the bad name in the decklist textarea with the pick
       slot.querySelectorAll(".suggest-chip").forEach(chip => {
@@ -1823,9 +1833,9 @@ async function showDiff(vA, vB) {
   try {
     const d = await callApi("diff_deck_versions", state.currentDeckId, vA, vB);
     const addedList = Object.entries(d.added).map(([n, q]) =>
-      `<li class="diff-add">+${q} ${escape(n)}</li>`).join("") || "<li class='status-text'>(none)</li>";
+      `<li class="diff-add thumb-row">+${q} ${cardThumbRef(n)}</li>`).join("") || "<li class='status-text'>(none)</li>";
     const removedList = Object.entries(d.removed).map(([n, q]) =>
-      `<li class="diff-remove">-${q} ${escape(n)}</li>`).join("") || "<li class='status-text'>(none)</li>";
+      `<li class="diff-remove thumb-row">-${q} ${cardThumbRef(n)}</li>`).join("") || "<li class='status-text'>(none)</li>";
     const scoreList = Object.entries(d.score_deltas).map(([n, v]) => {
       const sign = v >= 0 ? "+" : "";
       const cls = v >= 0 ? "diff-add" : "diff-remove";
@@ -1842,12 +1852,12 @@ async function showDiff(vA, vB) {
         ${comboGained.length ? `
           <strong class="diff-add">Newly complete (${comboGained.length}):</strong>
           <ul>${comboGained.map(c =>
-            `<li class="diff-add">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+            `<li class="diff-add">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a>${cardStrip(c.cards)}</li>`,
           ).join("")}</ul>` : ""}
         ${comboLost.length ? `
           <strong class="diff-remove">Now broken (${comboLost.length}):</strong>
           <ul>${comboLost.map(c =>
-            `<li class="diff-remove">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+            `<li class="diff-remove">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a>${cardStrip(c.cards)}</li>`,
           ).join("")}</ul>` : ""}
       </div>
     ` : "";
@@ -1955,8 +1965,8 @@ async function runAnalystCompare() {
         return `<tr><td>${escape(k)}</td><td style="text-align:right;color:${color};font-weight:600">${s}${v}</td></tr>`;
       })
       .join("");
-    const addedSample = (r.added_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
-    const removedSample = (r.removed_cards || []).slice(0, 6).map(escape).join(", ") || "(none)";
+    const addedSample = (r.added_cards || []).slice(0, 6).map(cardRef).join(", ") || "(none)";
+    const removedSample = (r.removed_cards || []).slice(0, 6).map(cardRef).join(", ") || "(none)";
     // Combo gained / lost — only render the section when at least one
     // bucket is non-empty. Each row carries an external-link affordance
     // pointing at the upstream Spellbook page (handled below).
@@ -1968,12 +1978,12 @@ async function runAnalystCompare() {
         ${cmpGained.length ? `
           <strong class="diff-add">Newly complete in B (${cmpGained.length}):</strong>
           <ul>${cmpGained.map(c =>
-            `<li class="diff-add">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+            `<li class="diff-add">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a>${cardStrip(c.cards)}</li>`,
           ).join("")}</ul>` : ""}
         ${cmpLost.length ? `
           <strong class="diff-remove">Lost in B (${cmpLost.length}):</strong>
           <ul>${cmpLost.map(c =>
-            `<li class="diff-remove">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a></li>`,
+            `<li class="diff-remove">${escape(c.short_label)} <a href="#" class="external-link" data-url="${escape(c.spellbook_url)}">[?]</a>${cardStrip(c.cards)}</li>`,
           ).join("")}</ul>` : ""}
       </div>
     ` : "";
@@ -2142,7 +2152,7 @@ async function refreshPods() {
       </div>
       ${(pod.members || []).map(m => `
         <div class="pod-member">
-          <span class="grow">${escape(m.commander_name)}</span>
+          <span class="grow">${cardThumbRef(m.commander_name)}</span>
           <span class="subtle">${escape(m.archetype || "unknown")}${
             m.power_level ? ` · power ${m.power_level}` : ""}</span>
           <button class="btn btn-outline btn-slim pod-drop-member"
@@ -2400,7 +2410,7 @@ function renderManaReliability(m) {
   }).join("");
 
   const worst = (m.unreliable_cards || []).slice(0, 8).map(([name, cmc, rate]) =>
-    `<li>${escape(name)} <span class="status-text">cost ${cmc} &middot; castable on curve ${(rate * 100).toFixed(0)}%</span></li>`
+    `<li class="thumb-row">${cardThumbRef(name)} <span class="status-text">cost ${cmc} &middot; castable on curve ${(rate * 100).toFixed(0)}%</span></li>`
   ).join("");
 
   return `
@@ -2454,7 +2464,7 @@ function renderGoldfish(r) {
   }).join("");
 
   const mostCast = (r.most_cast_spells || []).slice(0, 8).map(([name, count]) =>
-    `<li>${escape(name)} <span class="status-text">cast in ${count} games</span></li>`
+    `<li class="thumb-row">${cardThumbRef(name)} <span class="status-text">cast in ${count} games</span></li>`
   ).join("");
 
   // Combo wins panel — only renders when combos were actually evaluated.
@@ -2878,11 +2888,34 @@ function renderCoachSessionList() {
     const li = document.createElement("li");
     const active = state.coachToken === s.token ? "active" : "";
     li.className = active;
+    li.classList.add("coach-session-row");
     li.innerHTML = `
-      <span class="deck-name">${escape(s.deck_name)}</span>
-      <span class="deck-meta">${s.turn_count} turn${s.turn_count === 1 ? "" : "s"}</span>
+      <div class="coach-session-main">
+        <span class="deck-name">${escape(s.deck_name)}</span>
+        <span class="deck-meta">${s.turn_count} turn${s.turn_count === 1 ? "" : "s"}</span>
+      </div>
+      <button class="coach-session-delete" type="button"
+              title="Delete this session" aria-label="Delete session for ${escape(s.deck_name)}">&times;</button>
     `;
     li.addEventListener("click", () => resumeCoachSession(s.token, s.deck_name));
+    // Quick delete. No confirm dialog: a session is a chat, not a deck,
+    // and the list is where people clear out the ones they are done with.
+    li.querySelector(".coach-session-delete").addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      try {
+        await callApi("coach_close", s.token);
+      } catch (e) {
+        toast("Delete failed: " + e.message, "error");
+        return;
+      }
+      if (state.coachToken === s.token) {
+        state.coachToken = null;
+        state.coachMessages = [];
+        els.coach_active.classList.add("hidden");
+        els.coach_empty.classList.remove("hidden");
+      }
+      await refreshCoachView();
+    });
     els.coach_sessions_list.appendChild(li);
   });
 }
@@ -3119,6 +3152,33 @@ function installHelpPopoverHandlers() {
 }
 
 // ------------------------------ Utilities ------------------------------
+
+// ------------------------------ Card art in rendered output ------------------------------
+// Thin wrappers over window.CardArt (card-art.js, loaded after this file),
+// so every panel below degrades to plain escaped text if it is missing.
+
+/** A card name with the hover preview. */
+function cardRef(name) {
+  return window.CardArt ? window.CardArt.ref(name) : escape(name);
+}
+
+/** Art-crop thumbnail + hover name, for list rows and table cells. */
+function cardThumbRef(name) {
+  if (!window.CardArt) return escape(name);
+  return `<span class="thumb-row">${window.CardArt.thumb(name)}${window.CardArt.ref(name)}</span>`;
+}
+
+/** A row of small whole cards (a combo line); `missing` get a dashed outline. */
+function cardStrip(names, missing) {
+  if (!window.CardArt || !(names || []).length) return "";
+  const miss = new Set((missing || []).map(n => String(n).toLowerCase()));
+  return `<div class="card-strip">${names.map(n => {
+    const t = window.CardArt.thumb(n, { full: true });
+    return miss.has(String(n).toLowerCase())
+      ? t.replace('class="card-thumb', 'class="card-strip-missing card-thumb')
+      : t;
+  }).join("")}</div>`;
+}
 
 function escape(s) {
   if (s === null || s === undefined) return "";

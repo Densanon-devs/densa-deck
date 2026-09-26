@@ -1472,16 +1472,52 @@ code {
 /* Scoped to .view.active so the height calc only applies to the
    visible Build view — when the user is on Analyze/Decks/Coach the
    hidden Build grid doesn't reserve viewport space. */
-.view.active .build-grid {
-  display: grid;
-  grid-template-columns: 30% 50% 20%;
-  gap: 12px;
-  padding: 12px;
-  height: calc(100vh - 140px);
-  min-height: 500px;
+/* Arena layout: pool on top, options band, deck stacks along the bottom. */
+.view.active .build-arena {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 110px);
+  min-height: 640px;
 }
 
-.build-search-col,
+.build-pool {
+  flex: 0 0 38%;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px;
+}
+
+.build-options {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.build-options-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.build-bottom {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 8px;
+}
+.build-bottom .build-deck-col { flex: 1 1 auto; min-width: 0; }
+.build-bottom .build-stats-col { flex: 0 0 280px; }
+
 .build-deck-col,
 .build-stats-col {
   background: var(--color-surface, #1a1d29);
@@ -2948,3 +2984,209 @@ code {
   border-color: #2f6f9f;
   color: #fff;
 }
+
+/* -------- Card art (card-art.js) --------
+   A named card anywhere in the app: hover for the full card, and a small
+   art crop in list rows. The art is Scryfall's, hotlinked. */
+.card-ref {
+  cursor: help;
+  border-bottom: 1px dotted var(--color-text-muted);
+}
+.card-ref:hover { color: var(--color-accent); border-bottom-color: var(--color-accent); }
+
+.card-thumb {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 32px;
+  margin-right: 8px;
+  vertical-align: middle;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+}
+.card-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-thumb-full { width: 63px; height: 88px; border-radius: 4px; }
+/* Unknown to the catalogue, or the image would not load: take no space
+   rather than leave an empty frame in the row. */
+.card-thumb.card-thumb-none { display: none; }
+
+.card-preview {
+  position: fixed;
+  z-index: 9999;
+  width: 244px;
+  height: 340px;
+  pointer-events: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--color-surface-raised);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+.card-preview img { width: 100%; height: 100%; display: block; }
+.card-preview.hidden { display: none; }
+
+/* -------- Build: options band (Arena layout) -------- */
+.build-options .build-search-input { width: 220px; margin: 0; }
+.build-options .filter-group { margin: 0; display: flex; align-items: center; gap: 6px; }
+.build-options .filter-inline { margin: 0; white-space: nowrap; }
+.build-options .filter-group select,
+.build-options .filter-group input[type="number"] { width: auto; }
+.build-options #filter-max-price { width: 80px; }
+.build-options .cmc-range input { width: 56px; }
+.build-options .filter-label { display: inline; margin: 0; }
+
+/* Colour and type toggles: the checkbox is the state, the chip is the look. */
+.mana-chip, .type-chip { cursor: pointer; }
+.mana-chip input, .type-chip input { position: absolute; opacity: 0; pointer-events: none; }
+.mana-chip span {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  font-weight: 700; font-size: 0.8rem; color: #111;
+  opacity: 0.35; border: 2px solid transparent;
+}
+.mana-W span { background: #f8f3d8; }
+.mana-U span { background: #9cc9ef; }
+.mana-B span { background: #b9aeb0; }
+.mana-R span { background: #f09a7a; }
+.mana-G span { background: #93c8a0; }
+.mana-C span { background: #cfcfcf; }
+.mana-chip input:checked + span { opacity: 1; border-color: var(--color-text); }
+.type-chip span {
+  display: inline-block; padding: 3px 9px; border-radius: 12px;
+  font-size: 0.78rem; border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.type-chip input:checked + span {
+  color: var(--color-text); border-color: var(--color-accent);
+  background: rgba(74, 144, 226, 0.18);
+}
+.mana-chip input:focus-visible + span,
+.type-chip input:focus-visible + span { outline: 2px solid var(--color-accent); }
+
+.build-options .build-deck-controls { margin: 0; }
+.build-options #build-deck-title { margin: 0; font-size: 1rem; white-space: nowrap; }
+.build-options .build-zone-tabs { margin: 0; border-bottom: none; }
+.build-options .build-deck-meta { display: flex; gap: 10px; align-items: center; font-size: 0.85rem; }
+
+/* -------- Build: deck stacked by mana value -------- */
+.build-bottom .build-deck-body { overflow: auto; position: relative; }
+.mv-columns {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-height: 100%;
+}
+.mv-column { flex: 0 0 132px; }
+.mv-column-header {
+  display: flex; justify-content: space-between;
+  font-size: 0.8rem; font-weight: 700;
+  color: var(--color-text-muted);
+  padding: 0 4px 4px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 6px;
+}
+.mv-stack { display: flex; flex-direction: column; padding-bottom: 150px; }
+
+/* Each card shows its title bar; the next one covers the rest. The last in
+   a column shows whole because nothing covers it. */
+.stack-card {
+  position: relative;
+  width: 132px;
+  height: 184px;
+  margin-bottom: -156px;
+  border-radius: 7px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.45);
+  transition: transform 0.08s;
+}
+.stack-card:last-child { margin-bottom: 0; }
+.stack-card:hover { transform: translateX(4px); z-index: 5; border-color: var(--color-accent); }
+.stack-card img,
+.stack-card .stack-fill {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0;
+}
+.stack-card .stack-fill img { object-fit: cover; }
+/* Under the image: what shows if the art never arrives. */
+.stack-card-text {
+  position: absolute; inset: 0; padding: 5px 6px;
+  display: flex; justify-content: space-between; gap: 4px;
+  font-size: 0.72rem; line-height: 1.2;
+}
+.stack-card-name { font-weight: 600; overflow: hidden; }
+.stack-card-cost { font-family: Consolas, monospace; opacity: 0.8; white-space: nowrap; }
+.stack-qty {
+  position: absolute; top: 4px; right: 4px; z-index: 2;
+  background: rgba(0, 0, 0, 0.8); color: #fff;
+  font-weight: 700; font-size: 0.78rem;
+  padding: 1px 6px; border-radius: 9px;
+}
+.stack-card-actions {
+  position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 3;
+  display: none; gap: 4px; justify-content: center;
+}
+.stack-card:hover .stack-card-actions { display: flex; }
+.stack-card-actions .qty-btn {
+  background: rgba(0, 0, 0, 0.8); color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px; padding: 1px 7px; font-size: 0.78rem; cursor: pointer;
+}
+.stack-card-actions .deck-printing-set { border-color: var(--color-accent); }
+.build-deck-body .deck-empty { padding: 20px; }
+
+/* The printing picker lands in the deck panel; float it over the stacks. */
+.build-bottom .build-deck-body .printing-picker {
+  position: absolute; top: 8px; right: 8px; z-index: 20;
+  width: 360px; max-height: calc(100% - 16px); overflow: auto;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px;
+}
+.build-pool .build-search-results {
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+}
+
+/* -------- Coach: session list quick delete -------- */
+.deck-list li.coach-session-row { display: flex; align-items: center; gap: 8px; }
+.coach-session-main { flex: 1; min-width: 0; }
+.coach-session-delete {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.coach-session-delete:hover { color: #fff; background: var(--color-primary); }
+.build-options .build-deck-controls label {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0;
+}
+
+/* Shared by every panel that shows cards (see card-art.js). */
+.thumb-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.thumb-row > .card-thumb { margin-right: 0; }
+.card-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 2px; }
+.card-strip .card-thumb { margin-right: 0; }
+.card-strip .card-thumb-full { width: 73px; height: 102px; }
+.card-strip .card-strip-missing { outline: 2px dashed var(--color-warning); outline-offset: 1px; }
+.card-thumb-lg { width: 146px; height: 204px; border-radius: 7px; }
+td > .thumb-row { min-height: 34px; }
+.build-options .build-deck-controls label { flex-direction: row; }
+.printing-picker .printing-picker-row {
+  display: flex; width: 100%; justify-content: flex-start;
+  align-items: center; gap: 8px; text-align: left; margin: 3px 0;
+}
+.suggest-row .card-thumb-full { margin: 0 8px; }
+
+li > .card-strip { margin-top: 8px; }
+
+.scan-log-row .card-thumb { align-self: center; }

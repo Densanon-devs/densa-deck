@@ -131,72 +131,61 @@ Mainboard:
 
     <!-- ============ BUILD VIEW ============ -->
     <section id="view-build" class="view">
-      <div class="build-grid">
-        <!-- Search column -->
-        <aside class="build-search-col">
-          <div class="build-search-header">
-            <h2>Card search</h2>
-            <span id="build-search-status" class="status-text"></span>
+      <!-- Laid out like MTG Arena's deck builder: the cards to choose from
+           across the top, every option in one band through the middle, and
+           the deck along the bottom stacked into mana-value columns. -->
+      <div class="build-arena">
+
+        <!-- Top: the card pool. Click a card to add it. -->
+        <section class="build-pool">
+          <div id="build-search-results" class="build-search-results"></div>
+          <div class="build-search-footer">
+            <button id="build-search-more-btn" class="btn btn-outline btn-slim hidden">Load more</button>
           </div>
-          <input type="text" id="build-search-input" class="build-search-input" placeholder="Card name (e.g. Sol Ring)">
+        </section>
 
-          <details class="build-filters" open>
-            <summary>Filters</summary>
-            <div class="filter-group">
-              <label class="filter-label">Colors</label>
-              <div class="color-filters">
-                <label><input type="checkbox" class="filter-color" value="W"> W</label>
-                <label><input type="checkbox" class="filter-color" value="U"> U</label>
-                <label><input type="checkbox" class="filter-color" value="B"> B</label>
-                <label><input type="checkbox" class="filter-color" value="R"> R</label>
-                <label><input type="checkbox" class="filter-color" value="G"> G</label>
-                <label><input type="checkbox" class="filter-color" value="C"> Colorless</label>
-              </div>
-              <label class="filter-inline">
-                <input type="radio" name="color-match-mode" value="identity" checked>
-                Commander identity (no new colors)
-              </label>
-              <label class="filter-inline">
-                <input type="radio" name="color-match-mode" value="any">
-                Any of selected
-              </label>
-              <!-- The third question two colours can ask, and the one that was
-                   missing: U+B meaning Dimir cards only, not every blue card
-                   and every black one. -->
-              <label class="filter-inline">
-                <input type="radio" name="color-match-mode" value="exact">
-                Exactly these colors
-              </label>
+        <!-- Middle: search, filters, and the deck's own controls. -->
+        <section class="build-options">
+          <div class="build-options-row build-filters">
+            <input type="text" id="build-search-input" class="build-search-input" placeholder="Search cards (e.g. Sol Ring)">
+
+            <div class="filter-group color-filters" title="Colours">
+              <label class="mana-chip mana-W"><input type="checkbox" class="filter-color" value="W"><span>W</span></label>
+              <label class="mana-chip mana-U"><input type="checkbox" class="filter-color" value="U"><span>U</span></label>
+              <label class="mana-chip mana-B"><input type="checkbox" class="filter-color" value="B"><span>B</span></label>
+              <label class="mana-chip mana-R"><input type="checkbox" class="filter-color" value="R"><span>R</span></label>
+              <label class="mana-chip mana-G"><input type="checkbox" class="filter-color" value="G"><span>G</span></label>
+              <label class="mana-chip mana-C"><input type="checkbox" class="filter-color" value="C"><span>C</span></label>
+            </div>
+            <!-- The third question two colours can ask: U+B meaning Dimir
+                 cards only, not every blue card and every black one. -->
+            <div class="filter-group color-match" title="How the colours combine">
+              <label class="filter-inline"><input type="radio" name="color-match-mode" value="identity" checked> Identity</label>
+              <label class="filter-inline"><input type="radio" name="color-match-mode" value="any"> Any</label>
+              <label class="filter-inline"><input type="radio" name="color-match-mode" value="exact"> Exactly</label>
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Mana value</label>
-              <div class="cmc-range">
-                <input type="number" id="filter-cmc-min" placeholder="min" min="0" max="20">
-                <span>to</span>
-                <input type="number" id="filter-cmc-max" placeholder="max" min="0" max="20">
-              </div>
+            <div class="filter-group cmc-range" title="Mana value">
+              <span class="filter-label">MV</span>
+              <input type="number" id="filter-cmc-min" placeholder="min" min="0" max="20">
+              <span>&ndash;</span>
+              <input type="number" id="filter-cmc-max" placeholder="max" min="0" max="20">
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Types</label>
-              <select id="filter-type" multiple size="7">
-                <option value="creature">Creature</option>
-                <option value="instant">Instant</option>
-                <option value="sorcery">Sorcery</option>
-                <option value="artifact">Artifact</option>
-                <option value="enchantment">Enchantment</option>
-                <option value="planeswalker">Planeswalker</option>
-                <option value="land">Land</option>
-                <option value="battle">Battle</option>
-              </select>
-              <p class="panel-hint subtle">Ctrl-click to select multiple.</p>
+            <div class="filter-group type-filters" title="Card types">
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="creature"><span>Creature</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="instant"><span>Instant</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="sorcery"><span>Sorcery</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="artifact"><span>Artifact</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="enchantment"><span>Enchantment</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="planeswalker"><span>Planeswalker</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="land"><span>Land</span></label>
+              <label class="type-chip"><input type="checkbox" class="filter-type" value="battle"><span>Battle</span></label>
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Format legal</label>
+            <div class="filter-group" title="Format legal">
               <select id="filter-format">
-                <option value="">(any)</option>
+                <option value="">Any format</option>
                 <option value="commander" selected>Commander</option>
                 <option value="modern">Modern</option>
                 <option value="standard">Standard</option>
@@ -207,10 +196,9 @@ Mainboard:
               </select>
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Rarity</label>
+            <div class="filter-group" title="Rarity">
               <select id="filter-rarity">
-                <option value="">(any)</option>
+                <option value="">Any rarity</option>
                 <option value="common">Common</option>
                 <option value="uncommon">Uncommon</option>
                 <option value="rare">Rare</option>
@@ -218,57 +206,27 @@ Mainboard:
               </select>
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Max price (USD)</label>
-              <input type="number" id="filter-max-price" placeholder="(any)" min="0" step="0.5">
+            <div class="filter-group" title="Maximum price in USD">
+              <input type="number" id="filter-max-price" placeholder="Max $" min="0" step="0.5">
             </div>
 
-            <div class="filter-group">
-              <label class="filter-label">Collection</label>
-              <label class="filter-inline">
-                <input type="radio" name="ownership-filter" value="" checked>
-                All cards
-              </label>
-              <label class="filter-inline">
-                <input type="radio" name="ownership-filter" value="owned">
-                Cards I own
-              </label>
-              <label class="filter-inline">
-                <input type="radio" name="ownership-filter" value="unowned">
-                Cards I don't own
-              </label>
-              <!-- WHICH of your cards. A grouping you have made is usually
-                   the shape of the deck you are making, and the collections
-                   were already there without being reachable from here. -->
+            <div class="filter-group ownership-filters" title="Your collection">
+              <label class="filter-inline"><input type="radio" name="ownership-filter" value="" checked> All</label>
+              <label class="filter-inline"><input type="radio" name="ownership-filter" value="owned"> Owned</label>
+              <label class="filter-inline"><input type="radio" name="ownership-filter" value="unowned"> Not owned</label>
+              <!-- WHICH of your cards: a grouping you have made is usually
+                   the shape of the deck you are making. -->
               <select id="build-owned-in" class="hidden">
                 <option value="">In any collection</option>
               </select>
             </div>
 
-            <div class="filter-group">
-              <button id="build-search-clear" class="btn btn-outline btn-slim">Clear filters</button>
-            </div>
-          </details>
-
-          <div id="build-search-results" class="build-search-results"></div>
-          <div class="build-search-footer">
-            <button id="build-search-more-btn" class="btn btn-outline btn-slim hidden">Load more</button>
+            <button id="build-search-clear" class="btn btn-outline btn-slim">Clear filters</button>
+            <span id="build-search-status" class="status-text"></span>
           </div>
-        </aside>
 
-        <!-- Deck column -->
-        <div class="build-deck-col">
-          <div class="build-deck-header">
+          <div class="build-options-row build-deck-controls">
             <h2 id="build-deck-title">Untitled deck</h2>
-            <div class="build-deck-meta">
-              <span id="build-deck-count">0 cards</span>
-              <span id="build-deck-combo-badge" class="combo-badge hidden" title="Click to scroll to combos panel">0 combos</span>
-              <span id="build-deck-format-note"></span>
-              <span id="build-deck-validity" class="status-text"></span>
-            </div>
-          </div>
-
-          <div class="build-deck-controls">
             <label>Name
               <input type="text" id="build-deck-name" placeholder="My new deck">
             </label>
@@ -283,6 +241,17 @@ Mainboard:
                 <option value="pioneer">Pioneer</option>
               </select>
             </label>
+            <div class="build-zone-tabs">
+              <button class="zone-tab active" data-zone="mainboard">Mainboard</button>
+              <button class="zone-tab" data-zone="sideboard">Sideboard</button>
+              <button class="zone-tab" data-zone="commander">Commander</button>
+            </div>
+            <div class="build-deck-meta">
+              <span id="build-deck-count">0 cards</span>
+              <span id="build-deck-combo-badge" class="combo-badge hidden" title="Click to scroll to combos panel">0 combos</span>
+              <span id="build-deck-format-note"></span>
+              <span id="build-deck-validity" class="status-text"></span>
+            </div>
             <div class="build-deck-actions">
               <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a new deck (Pro)">Save deck (Pro)</button>
               <button id="build-suggest-btn" class="btn btn-outline" title="Pro: suggest 8 high-leverage adds based on role gaps + combo near-misses">Suggest adds (Pro)</button>
@@ -292,29 +261,26 @@ Mainboard:
               <span id="build-save-status" class="status-text"></span>
             </div>
           </div>
+        </section>
 
-          <div class="build-zone-tabs">
-            <button class="zone-tab active" data-zone="mainboard">Mainboard</button>
-            <button class="zone-tab" data-zone="sideboard">Sideboard</button>
-            <button class="zone-tab" data-zone="commander">Commander</button>
+        <!-- Bottom: the deck, stacked by mana value, with stats beside it. -->
+        <section class="build-bottom">
+          <div class="build-deck-col">
+            <!-- Over the limit, not blocked at it. -->
+            <div id="build-over-limit" class="build-over-limit hidden"></div>
+            <div id="build-deck-body" class="build-deck-body"></div>
           </div>
-          <!-- Over the limit, not blocked at it. -->
-          <div id="build-over-limit" class="build-over-limit hidden"></div>
-
-          <div id="build-deck-body" class="build-deck-body"></div>
-        </div>
-
-        <!-- Stats column -->
-        <aside class="build-stats-col">
-          <div id="build-collection-panel" class="build-collection-panel hidden">
-            <h2>Your collection</h2>
-            <div id="build-collection-body"></div>
-          </div>
-          <h2>Stats</h2>
-          <div id="build-stats-body" class="build-stats-body">
-            <p class="panel-hint">Add cards to see live stats.</p>
-          </div>
-        </aside>
+          <aside class="build-stats-col">
+            <div id="build-collection-panel" class="build-collection-panel hidden">
+              <h2>Your collection</h2>
+              <div id="build-collection-body"></div>
+            </div>
+            <h2>Stats</h2>
+            <div id="build-stats-body" class="build-stats-body">
+              <p class="panel-hint">Add cards to see live stats.</p>
+            </div>
+          </aside>
+        </section>
       </div>
     </section>
 
@@ -1442,6 +1408,7 @@ Mainboard:
 
   <script src="tour.js"></script>
   <script src="app.js"></script>
+  <script src="card-art.js"></script>
   <script src="builder.js"></script>
   <script src="collection.js"></script>
   <script src="scan.js"></script>

@@ -79,10 +79,14 @@ class AppApi:
         # separate from the card/version DBs so it's cheap to write on every
         # launch without touching SQLite. Defaults to the same directory as
         # the card database so everything lives under ~/.densa-deck/.
-        self._state_path = (
-            Path(state_path) if state_path
-            else Path.home() / ".densa-deck" / "app_state.json"
-        )
+        # (The comment was the intent; the code used the home directory
+        # regardless, so a test's temp DB still wrote the real app_state.)
+        if state_path:
+            self._state_path = Path(state_path)
+        elif db_path:
+            self._state_path = Path(db_path).parent / "app_state.json"
+        else:
+            self._state_path = Path.home() / ".densa-deck" / "app_state.json"
         self._db: CardDatabase | None = None
         self._vstore: VersionStore | None = None
         # Progress state for long-running background operations (ingest + model
@@ -135,10 +139,17 @@ class AppApi:
         self._last_ingest_diff: dict | None = None
         # Persistence path for coach sessions — load on init so a user who
         # restarts the app finds their prior conversations intact.
-        self._session_path = (
-            Path(session_path) if session_path
-            else Path.home() / ".densa-deck" / "coach_sessions.json"
-        )
+        # Next to the card DB when one is given, as drafts.json and combos.db
+        # already are. Defaulting to the home directory regardless meant every
+        # AppApi pointed at a temp DB -- i.e. the test suite -- wrote its
+        # sessions into the user's real file: 1,039 "TestDeck" / "MyDeck"
+        # sessions accumulated in one Coach list before anyone noticed.
+        if session_path:
+            self._session_path = Path(session_path)
+        elif db_path:
+            self._session_path = Path(db_path).parent / "coach_sessions.json"
+        else:
+            self._session_path = Path.home() / ".densa-deck" / "coach_sessions.json"
         self._load_coach_sessions()
         # If a prior launch (or this one's license loader) quarantined a
         # corrupt license.key, surface that so the user knows why they might
@@ -2288,6 +2299,53 @@ class AppApi:
                     GROUP BY set_code ORDER BY MAX(rowid) DESC LIMIT ?""",
             (int(limit),)).fetchall()
         return {"sets": [{"set_code": r[0], "cards": r[1]} for r in rows]}
+
+    # Enough for a full deck plus its sideboard and suggestions in one call,
+    # small enough that a runaway caller cannot turn it into a table scan.
+    CARD_IMAGE_BATCH_LIMIT = 400
+
+    @_safe
+    def get_card_images(self, names: list | None = None) -> dict:
+        """Card name -> hotlinked Scryfall image URLs, for showing art inline.
+
+        Most of the desktop shows cards by NAME -- analysis output, combo
+        lines, suggestions -- with no printing in hand. This resolves each
+        name to the catalogue's default printing so every panel can show the
+        card, not just the two that happened to carry an image URL.
+
+        Returns {"images": {name: {"small", "normal", "art", "scryfall"}}}, keyed by
+        the name exactly as sent. Names the catalogue does not know are
+        simply absent, so the caller keeps its text. Cached per session:
+        the same deck's names are asked for by several panels in a row.
+        """
+        from densa_deck.data.images import card_image_urls, scryfall_page_url
+
+        cache: dict = self.__dict__.setdefault("_card_image_cache", {})
+        wanted = []
+        for raw in list(names or [])[: self.CARD_IMAGE_BATCH_LIMIT]:
+            name = str(raw or "").strip()
+            if name and name not in wanted:
+                wanted.append(name)
+
+        db = self._get_db()
+        out: dict = {}
+        for name in wanted:
+            key = name.lower()
+            if key not in cache:
+                entry = None
+                try:
+                    card = db.lookup_by_name(name) or db.lookup_alias(name)
+                except Exception:
+                    card = None
+                urls = card_image_urls(getattr(card, "scryfall_id", "") or "") if card else {}
+                if urls:
+                    entry = {"small": urls["small"], "normal": urls["normal"],
+                             "art": urls["art_crop"],
+                             "scryfall": scryfall_page_url(card.scryfall_id)}
+                cache[key] = entry
+            if cache[key]:
+                out[name] = cache[key]
+        return {"images": out}
 
     @_safe
     def get_card_detail(self, printing_id: str = "", card_name: str = "") -> dict:
@@ -6539,6 +6597,13 @@ class AppApi:
         with entry["turn_lock"]:
             with self._coach_lock:
                 removed = self._coach_sessions.pop(token, None)
+        if removed is not None:
+            # Sessions are otherwise only written on shutdown, so a delete
+            # followed by a crash or a killed process would come back.
+            try:
+                self._save_coach_sessions()
+            except Exception:
+                pass
         return {"closed": removed is not None}
 
     @_safe

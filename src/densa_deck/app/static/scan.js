@@ -21,6 +21,21 @@
   };
 
   function e(id) { return document.getElementById(id); }
+
+  /**
+   * A thumbnail of THIS printing (card-art.js), from its image URL or, for a
+   * log entry that only kept the id, one built from the printing id. Never
+   * the catalogue's default art: a scan is about which printing it is.
+   */
+  function printingThumb(name, imageUrl, printingId, opts) {
+    if (!window.CardArt) return "";
+    let src = imageUrl || "";
+    const id = String(printingId || "").trim().toLowerCase();
+    if (!src && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) {
+      src = `https://cards.scryfall.io/normal/front/${id[0]}/${id[1]}/${id}.jpg`;
+    }
+    return src ? window.CardArt.thumb(name, Object.assign({ src }, opts || {})) : "";
+  }
   function money(v) {
     return (v === null || v === undefined) ? "—" : "$" + Number(v).toFixed(2);
   }
@@ -166,11 +181,16 @@
       const owned = c.owned ? `<span class="collection-tag collection-tag-owned">owned ${c.owned}</span>` : "";
       return `
         <div class="printing-row">
-          <div class="printing-ident">
-            <div class="collection-name">${escape(c.name)} ${owned}</div>
-            <div class="subtle">${escape(c.set_name)} ·
-              ${escape((c.set_code || "").toUpperCase())} #${escape(c.collector_number)}
-              · ${escape(c.rarity || "")}</div>
+          <!-- The whole card of this printing: the question being asked is
+               "which of these is in your hand", and that is answered by eye. -->
+          <div class="printing-ident thumb-row">
+            ${printingThumb(c.name, c.image_url, c.printing_id, { full: true })}
+            <div>
+              <div class="collection-name">${escape(c.name)} ${owned}</div>
+              <div class="subtle">${escape(c.set_name)} ·
+                ${escape((c.set_code || "").toUpperCase())} #${escape(c.collector_number)}
+                · ${escape(c.rarity || "")}</div>
+            </div>
           </div>
           <div class="printing-actions">${finishBtns}</div>
         </div>`;
@@ -199,7 +219,9 @@
     if (!host) return;
     const last = state.lastFiled;
     if (!last) { host.innerHTML = ""; return; }
-    host.innerHTML = `
+    host.innerHTML =
+      printingThumb(last.candidate.name, last.candidate.image_url, last.candidate.printing_id)
+      + `
       <span class="scan-last-name">${last.copies > 1 ? `${last.copies}× ` : ""}`
       + `${escape(last.candidate.name)}</span>
       <button class="btn btn-outline btn-slim" data-copies="1">+1 more</button>
@@ -365,6 +387,7 @@
           const mark = entry.added ? "✓" : "·";
           return `<div class="scan-log-row ${entry.added ? "" : "scan-log-skipped"}">
                     <span class="scan-log-mark">${mark}</span>
+                    <span style="align-self:center;display:inline-flex">${printingThumb(entry.card_name, "", entry.printing_id)}</span>
                     <span class="scan-log-name">${escape(entry.card_name)}</span>
                     <span class="subtle">${escape(set)}</span>
                     <span class="scan-log-price">${price}</span>

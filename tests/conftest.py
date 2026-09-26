@@ -6,6 +6,21 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _keep_tests_out_of_the_real_home(tmp_path_factory, monkeypatch):
+    """Point the home directory at a temp dir for every test.
+
+    Anything that resolves `~/.densa-deck/...` at call time -- coach
+    sessions, app state, drafts, config -- otherwise lands in the user's
+    real data. It did: over 1,000 test coach sessions had piled up in one
+    user's Coach list. Paths frozen at import time (module constants) are
+    not covered by this and must take an explicit path in tests.
+    """
+    home = tmp_path_factory.mktemp("home")
+    for var in ("USERPROFILE", "HOME"):
+        monkeypatch.setenv(var, str(home))
+
+
+@pytest.fixture(autouse=True)
 def _no_real_combo_bulk_download(monkeypatch):
     """Keep combo refreshes off the network unless a test says otherwise.
 

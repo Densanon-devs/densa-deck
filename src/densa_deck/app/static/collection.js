@@ -274,9 +274,12 @@
             <span class="qty-value">${it.quantity}</span>
             <button class="qty-btn" data-act="inc" data-item="${it.item_id}" title="Add one">+</button>
           </div>
-          <div class="collection-card">
-            <div class="collection-name">${escape(it.card_name)} ${finishTag}${condTag}${loc}</div>
-            <div class="collection-set subtle">${setTxt}</div>
+          <div class="collection-card thumb-row">
+            ${cardThumb(it.card_name, it.image_url, it.printing_id)}
+            <div>
+              <div class="collection-name">${escape(it.card_name)} ${finishTag}${condTag}${loc}</div>
+              <div class="collection-set subtle">${setTxt}</div>
+            </div>
           </div>
           <div class="collection-value">${val}</div>
           <button class="btn btn-outline btn-slim" data-act="lists"
@@ -376,7 +379,7 @@
     out.innerHTML = `
       <p><strong>${built.total_cards}</strong> of ${built.target_size} cards`
       + (built.colors?.length ? ` · ${escape(built.colors.join(""))}` : "")
-      + (built.commander ? ` · ${escape(built.commander)}` : "") + `</p>
+      + (built.commander ? ` · ${cardRef(built.commander)}` : "") + `</p>
       <p class="panel-hint">${built.playable_in_colors} of ${built.pool_size}
         cards in this collection are legal in these colours.</p>
       ${roles}
@@ -673,7 +676,7 @@
       warning.classList.toggle("hidden", !wanted.length);
       warning.innerHTML = wanted.length
         ? `<strong>${wanted.length}</strong> of these are in decks of yours: ` +
-          wanted.slice(0, 6).map(w => escape(w.card_name)).join(", ") +
+          wanted.slice(0, 6).map(w => cardRef(w.card_name)).join(", ") +
           (wanted.length > 6 ? "…" : "")
         : "";
     }
@@ -741,7 +744,7 @@
     warn.classList.toggle("hidden", !wanted.length);
     warn.innerHTML = wanted.length
       ? `<p class="build-over-limit-line">${wanted.length} of these are in ` +
-        `decks of yours: ${wanted.map(w => escape(w.card_name)).join(", ")}</p>`
+        `decks of yours: ${wanted.map(w => cardRef(w.card_name)).join(", ")}</p>`
       : "";
 
     ["retire-price", "retire-buyer", "retire-confirm"].forEach(id => {
@@ -812,6 +815,22 @@
     if (id.length < 8 || !/^[0-9a-f][0-9a-f-]*$/.test(id)) return "";
     const ext = size === "png" ? "png" : "jpg";
     return `https://cards.scryfall.io/${size}/front/${id[0]}/${id[1]}/${id}.${ext}`;
+  }
+
+  /** A card name that shows the card on hover (plain text if card-art.js is absent). */
+  function cardRef(name) {
+    return window.CardArt ? window.CardArt.ref(name) : escape(name || "");
+  }
+
+  /**
+   * A row thumbnail of THIS printing. Rows here are about which printing you
+   * hold, so they use its own image — falling back to one built from the
+   * printing id, and only then to the catalogue's default art for the name.
+   */
+  function cardThumb(name, imageUrl, printingId, opts) {
+    if (!window.CardArt) return "";
+    const src = imageUrl || cardImageUrl(printingId, "normal");
+    return window.CardArt.thumb(name, Object.assign({ src }, opts || {}));
   }
 
   /**
@@ -1055,7 +1074,8 @@
     }
     if (!r || r.ok === false) { host.innerHTML = ""; return; }
 
-    const chip = (n) => `<span class="synergy-chip">${escape(n)}</span>`;
+    // data-card: hover a chip to see the card (card-art.js).
+    const chip = (n) => `<span class="synergy-chip" data-card="${escape(n)}">${escape(n)}</span>`;
 
     // What it is doing here. Only the shortfalls are called out — "you have
     // twelve ramp and wanted ten" is not a problem, and saying so trains
@@ -1095,7 +1115,7 @@
            <ul class="synergy-list">${r.combo_completions.map(c =>
              `<li>${c.cards.map(chip).join(" + ")}
                 ${c.still_missing.length
-                  ? `<span class="subtle">still needs ${c.still_missing.map(escape).join(", ")}</span>`
+                  ? `<span class="subtle">still needs ${c.still_missing.map(cardRef).join(", ")}</span>`
                   : "<span class=\"synergy-now\">completes it</span>"}
               </li>`).join("")}</ul></div>`
       : "";
@@ -1171,12 +1191,16 @@
         ? `<span class="collection-tag collection-tag-owned">owned ${p.owned}</span>` : "";
       return `
         <div class="printing-row">
-          <div class="printing-ident">
-            <div class="collection-name">
-              ${escape(p.set_name)} ${ownedTag}
+          <!-- The whole card: telling printings apart is done by sight. -->
+          <div class="printing-ident thumb-row">
+            ${cardThumb(p.name, p.image_url, p.printing_id, { full: true })}
+            <div>
+              <div class="collection-name">
+                ${escape(p.set_name)} ${ownedTag}
+              </div>
+              <div class="subtle">${escape(p.set_code.toUpperCase())} #${escape(p.collector_number)}
+                · ${escape(p.rarity)} · ${escape(p.released_at)}</div>
             </div>
-            <div class="subtle">${escape(p.set_code.toUpperCase())} #${escape(p.collector_number)}
-              · ${escape(p.rarity)} · ${escape(p.released_at)}</div>
           </div>
           <div class="printing-actions">
             ${finishBtns}
