@@ -1167,10 +1167,44 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             # The phone is across a network; a stack trace helps nobody there.
             self._json(200, {"ok": False, "error": str(exc)})
             return
+        # Tell the desktop page the phone changed something, so it redraws
+        # without a manual refresh. sync/push signals from sync_push itself,
+        # with the areas its events touched.
+        area = _CHANGES_AREA.get(route)
+        if area and not (isinstance(result, dict) and result.get("ok") is False):
+            note = getattr(self.bridge._api, "_note_remote_change", None)
+            if note is not None:
+                try:
+                    note({area})
+                except Exception:
+                    pass
         # Routes are expected to return a dict; anything else is wrapped so
         # the wire shape stays predictable rather than silently varying.
         self._json(200, result if isinstance(result, dict)
                    else {"ok": True, "data": result})
+
+
+# Phone routes that change what the desktop shows, and the part they change.
+_CHANGES_AREA = {
+    "commit": "collection",
+    "adjust": "collection",
+    "collection/move": "collection",
+    "collection/set-quantity": "collection",
+    "collection/delete": "collection",
+    "collection/rename": "collection",
+    "collection/add-to": "collection",
+    "collection/remove-from": "collection",
+    "group/tag-scanned": "collection",
+    "group/tag-item": "collection",
+    "group/untag-item": "collection",
+    "group/from-deck": "collection",
+    "new-collection": "collection",
+    "capture": "collection",
+    "wishlist/add": "wishlist",
+    "wishlist/remove": "wishlist",
+    "wishlist/acquire": "wishlist",
+    "decks/save": "decks",
+}
 
 
 _DENIED_HTML = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">

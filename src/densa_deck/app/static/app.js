@@ -511,6 +511,68 @@ async function bootstrap() {
       startComboRefresh();
     });
   }
+  watchRemoteChanges();
+}
+
+// ------------------------------ Changes made on the phone ------------------------------
+
+// The phone's edits reach the PC through the bridge, on a thread this page
+// knows nothing about. Without this, a deck deleted on the phone stayed in
+// My Decks until something else happened to redraw the list. The call is
+// an in-memory read, so asking every couple of seconds costs nothing; a
+// hidden or minimised window does not ask at all.
+const REMOTE_POLL_MS = 2000;
+
+function watchRemoteChanges() {
+  // -1 is "this page just loaded": the first answer is only the current
+  // sequence, since the page has already drawn current data. (Not 0 -- 0 is
+  // also "nothing has changed yet", and the first change must still count.)
+  let since = -1;
+  let busy = false;
+  const tick = async () => {
+    if (busy || document.hidden) return;
+    busy = true;
+    try {
+      const r = await callApi("get_remote_changes", since);
+      since = r.seq;
+      if (r.areas && r.areas.length) await applyRemoteChanges(r.areas);
+    } catch (e) {
+      // Upkeep, not a feature the user started: never toast about it.
+    } finally {
+      busy = false;
+    }
+  };
+  tick();
+  setInterval(tick, REMOTE_POLL_MS);
+}
+
+async function applyRemoteChanges(areas) {
+  const has = (a) => areas.includes(a);
+  if (has("decks")) {
+    await refreshDeckList();
+    // The deck open in the editor was deleted on the phone: close it rather
+    // than go on showing (and offering to save over) a deck that is gone.
+    // A deck merely edited there is left alone -- reloading it could throw
+    // away typing in progress here.
+    if (state.currentDeckId && state.decks &&
+        !state.decks.some(d => d.deck_id === state.currentDeckId)) {
+      state.currentDeckId = null;
+      state.currentSnapshot = null;
+      els.deck_editor_open.classList.add("hidden");
+      els.deck_editor_empty.classList.remove("hidden");
+      toast("That deck was deleted on your phone.", "info");
+    }
+  }
+  if (has("collection") || has("wishlist")) {
+    if (typeof window.__builderInvalidateOwnership === "function") {
+      window.__builderInvalidateOwnership();
+    }
+    const view = document.getElementById("view-collection");
+    if (view && view.classList.contains("active") &&
+        typeof window.__collectionActivate === "function") {
+      await window.__collectionActivate();
+    }
+  }
 }
 
 async function maybePromptStaleCombos() {

@@ -403,3 +403,49 @@ class TestTheIncrementalPathCarriesAsMuchAsTheBaseline:
             "the sender never recorded a printing, so nothing was tested")
         assert [p.get("set_code") for p in theirs.printings] == \
                [p.get("set_code") for p in mine.printings]
+
+
+class TestThePcPageHearsAboutIt:
+    """A deck deleted on the phone stayed on the PC's My Decks list until
+    something else redrew it. Applying a peer's events now bumps a change
+    counter the page polls, naming what changed."""
+
+    def test_a_fresh_page_is_told_only_the_current_sequence(self, pair):
+        first = _unwrap(pair.b.get_remote_changes(-1))
+        assert first["areas"] == []
+
+    def test_a_deck_arriving_marks_decks_changed(self, pair):
+        # Sequence 0 is "nothing has changed yet", and the first change
+        # after it must still be reported.
+        seen = _unwrap(pair.b.get_remote_changes(-1))["seq"]
+        assert seen == 0
+        pair.a.save_deck_version("blue", "Blue Deck", DECK, "commander", "")
+        pair.a_to_b()
+        changed = _unwrap(pair.b.get_remote_changes(seen))
+        assert "decks" in changed["areas"]
+        assert changed["seq"] > seen
+
+    def test_a_deck_deleted_on_the_other_side_is_reported(self, pair):
+        pair.a.save_deck_version("blue", "Blue Deck", DECK, "commander", "")
+        pair.a_to_b()
+        seen = _unwrap(pair.b.get_remote_changes(-1))["seq"]
+        head = _unwrap(pair.a.sync_status())["head"]
+        pair.a.delete_deck("blue")
+        # From the cursor, as a paired phone syncs: a pull from 0 is a
+        # baseline of what EXISTS, which cannot carry a deletion.
+        pair.a_to_b(since=head)
+        changed = _unwrap(pair.b.get_remote_changes(seen))
+        assert changed["areas"] == ["decks"]
+        assert _unwrap(pair.b.list_saved_decks()) == []
+
+    def test_nothing_new_means_nothing_to_redraw(self, pair):
+        pair.a.save_deck_version("blue", "Blue Deck", DECK, "commander", "")
+        pair.a_to_b()
+        seen = _unwrap(pair.b.get_remote_changes(-1))["seq"]
+        pair.a_to_b()      # replays are duplicates, not changes
+        assert _unwrap(pair.b.get_remote_changes(seen))["areas"] == []
+
+    def test_its_own_edits_are_not_reported_as_remote(self, pair):
+        seen = _unwrap(pair.b.get_remote_changes(-1))["seq"]
+        pair.b.save_deck_version("red", "Red Deck", DECK, "commander", "")
+        assert _unwrap(pair.b.get_remote_changes(seen))["areas"] == []

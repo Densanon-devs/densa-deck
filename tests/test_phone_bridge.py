@@ -481,6 +481,17 @@ class TestScanFlow:
         assert items[0]["finish"] == "foil"
         assert items[0]["condition"] == "LP"
 
+    def test_filing_a_card_from_the_phone_tells_the_desktop_page(self, bridge, api):
+        """End to end, through the real request handler: the desktop's
+        Collection tab redraws without a manual refresh."""
+        bridge.start()
+        seen = api.get_remote_changes(-1)["data"]["seq"]
+        _post(bridge.port, "commit",
+              {"printing_id": CMM, "card_name": "Sol Ring",
+               "finish": "nonfoil", "condition": "NM"}, bridge.token)
+        changed = api.get_remote_changes(seen)["data"]
+        assert changed["areas"] == ["collection"]
+
     def test_session_accumulates_across_requests(self, bridge):
         bridge.start()
         _post(bridge.port, "commit",
@@ -989,3 +1000,15 @@ class TestThePairingIsNotThrownAway:
         path.write_text('{"token": ""}', encoding="utf-8")
         monkeypatch.setenv("DENSA_PHONE_TOKEN_FILE", str(path))
         assert len(load_or_create_token()) >= 24
+
+
+def test_a_phone_route_that_changes_things_tells_the_desktop_page():
+    """Direct phone routes (filing a scan, saving a deck to the PC) change
+    the desktop too, and must bump the same counter sync does."""
+    from densa_deck.app import phone
+
+    assert phone._CHANGES_AREA["commit"] == "collection"
+    assert phone._CHANGES_AREA["decks/save"] == "decks"
+    # Reads never do.
+    for route in ("identify", "collection/list", "decks/list", "cards/search"):
+        assert route not in phone._CHANGES_AREA

@@ -122,6 +122,10 @@ class AppApi:
         # atomic but compound sequences (get-modify-store) are not.
         self._progress_lock = threading.Lock()
         self._coach_lock = threading.Lock()
+        # Changes a peer (the phone) has applied -- see _note_remote_change.
+        self._remote_lock = threading.Lock()
+        self._remote_seq = 0
+        self._remote_areas: list[tuple[int, list[str]]] = []
         self._backend_lock = threading.Lock()
         # Signalled by close() so background workers (ingest, analyst pull)
         # can notice an app shutdown and bail out early instead of leaving
@@ -4968,7 +4972,40 @@ class AppApi:
         result = sync.apply_many(parsed)
         if peer and cursor is not None:
             sync.log.set_peer_cursor(peer, int(cursor))
+        if result.get("applied"):
+            self._note_remote_change({_SYNC_AREA.get(e.kind, "other") for e in parsed})
         return {**result, "head": sync.log.head(), "device": sync.log.device}
+
+    def _note_remote_change(self, areas: set) -> None:
+        """Record that a peer changed something, for the desktop page to see.
+
+        The phone's edits land through the bridge, on a thread the page knows
+        nothing about, so a deck deleted on the phone stayed on the PC's My
+        Decks list until something else happened to re-render it. The page
+        polls `get_remote_changes` and redraws what these areas name.
+        """
+        with self._remote_lock:
+            self._remote_seq += 1
+            self._remote_areas.append((self._remote_seq, sorted(areas)))
+            del self._remote_areas[:-50]
+
+    @_safe
+    def get_remote_changes(self, since: int = -1) -> dict:
+        """Areas changed by a peer after `since`, and the sequence to send next.
+
+        Cheap by design -- an in-memory read -- because the page asks every
+        couple of seconds. A negative `since` (a page just loaded) returns
+        only the current sequence: a fresh page has already drawn current
+        data. Not 0 for that: 0 is also the sequence before anything has
+        changed, and a page holding it must still hear about the FIRST change.
+        """
+        with self._remote_lock:
+            seq = self._remote_seq
+            if since < 0 or since >= seq:
+                return {"seq": seq, "areas": []}
+            areas = sorted({a for s, names in self._remote_areas if s > since
+                            for a in names})
+        return {"seq": seq, "areas": areas}
 
     @_safe
     def sync_status(self) -> dict:
@@ -7394,6 +7431,21 @@ def _export_mtgo(deck) -> tuple[str, str]:
     _emit(Zone.SIDEBOARD, "true")
     lines.append("</Deck>")
     return "\n".join(lines) + "\n", f"{_safe_filename(deck.name)}.dek"
+
+
+# Which part of the desktop a synced event changes, so the page redraws
+# only that. Keyed by the kind strings in sync/log.py.
+_SYNC_AREA = {
+    "deck-upsert": "decks",
+    "deck-delete": "decks",
+    "deck-game": "decks",
+    "stack-delta": "collection",
+    "stack-set": "collection",
+    "membership": "collection",
+    "collection-upsert": "collection",
+    "collection-delete": "collection",
+    "wishlist": "wishlist",
+}
 
 
 def _safe_filename(name: str) -> str:

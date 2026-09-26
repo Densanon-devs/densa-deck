@@ -26,6 +26,7 @@ import {
   ActivityIndicator,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -39,6 +40,7 @@ import { uuid } from '../lib/uuid.ts';
 import { CardBrowser } from './CardBrowser.tsx';
 import { ScanScreen } from './Scan.tsx';
 import { reporting } from './report.ts';
+import { usePullToSync } from './usePullToSync.ts';
 import {
   DeckStore,
   addToDeck,
@@ -172,6 +174,7 @@ export function DeckListScreen({
   useEffect(() => {
     void load().catch(reporting('your decks', setProblem));
   }, [load]);
+  const pull = usePullToSync(state, load, reporting('your decks', setProblem));
 
   const create = useCallback(async () => {
     const chosen = name.trim() || 'Untitled deck';
@@ -223,7 +226,11 @@ export function DeckListScreen({
   );
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl {...pull} tintColor="#e4e6eb" />}
+    >
       <Text style={styles.title}>Decks</Text>
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
@@ -602,16 +609,25 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     [],
   );
 
-  useEffect(() => {
-    void (async () => {
-      const found = await decks.get(deckId);
-      if (!found) return;
-      setDeck(found);
-      setText(formatDecklist(found.decklist, found.sideboard,
-                             found.commander));
-      setRecord(await decks.recordFor(deckId));
-    })().catch(reporting('opening the deck', setProblem));
+  // The decklist text as last loaded or saved -- what "no unsaved edits" means.
+  const loadedText = React.useRef('');
+  const loadDeck = useCallback(async () => {
+    const found = await decks.get(deckId);
+    if (!found) return;
+    setDeck(found);
+    const fresh = formatDecklist(found.decklist, found.sideboard,
+                                 found.commander);
+    // A refresh must not throw away typing: keep the text box whenever it
+    // no longer matches what was last loaded, i.e. it has unsaved edits.
+    setText((current) => (current === loadedText.current ? fresh : current));
+    loadedText.current = fresh;
+    setRecord(await decks.recordFor(deckId));
   }, [decks, deckId]);
+  useEffect(() => {
+    void loadDeck().catch(reporting('opening the deck', setProblem));
+  }, [loadDeck]);
+  const pull = usePullToSync(state, loadDeck,
+                             reporting('refreshing the deck', setProblem));
 
   /**
    * Log a result.
@@ -797,7 +813,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             };
       await state.saveDeck(next);
       setDeck(next);
-      setText(formatDecklist(next.decklist, next.sideboard, next.commander));
+      setText((loadedText.current = formatDecklist(next.decklist, next.sideboard, next.commander)));
       await recheck(mergeCounts(next.decklist, next.sideboard));
     },
     [deck, decks, recheck, zone],
@@ -831,7 +847,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       };
       await state.saveDeck(next);
       setDeck(next);
-      setText(formatDecklist(next.decklist, next.sideboard, next.commander));
+      setText((loadedText.current = formatDecklist(next.decklist, next.sideboard, next.commander)));
       setPickingCommander(false);
       await recheck(mergeCounts(next.decklist, next.sideboard));
     },
@@ -897,7 +913,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     };
     await state.saveDeck(next);
     setDeck(next);
-    setText(formatDecklist(next.decklist, next.sideboard, next.commander));
+    setText((loadedText.current = formatDecklist(next.decklist, next.sideboard, next.commander)));
     await recheck(mergeCounts(next.decklist, next.sideboard));
   }, [deck, state, recheck]);
   const drop = useCallback(
@@ -1037,6 +1053,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         the end as more pages arrive.
       */
       maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+      refreshControl={<RefreshControl {...pull} tintColor="#e4e6eb" />}
       scrollEventThrottle={200}
       onScroll={(event) => {
         const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;

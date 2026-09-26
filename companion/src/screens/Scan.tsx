@@ -36,6 +36,7 @@ import React, {
 import {
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -89,6 +90,7 @@ import { SetSymbol } from './SetSymbol.tsx';
 import { rarityColour } from '../lib/set-symbol.ts';
 import { CollectionBar } from './CollectionBar.tsx';
 import { reporting } from './report.ts';
+import { usePullToSync } from './usePullToSync.ts';
 
 interface Props {
   state: AppState;
@@ -468,6 +470,12 @@ export function ScanScreen({ state, deck, onClose }: Props) {
       setIndexFetch(snapshot.indexFetch ?? null);
     });
   }, [state, loadCollections]);
+  const reloadScan = useCallback(async () => {
+    await loadCollections();
+    setTarget(await state.scanTarget());
+  }, [state, loadCollections]);
+  const pull = usePullToSync(state, reloadScan,
+                             reporting('refreshing', setProblem));
 
   const chooseTarget = useCallback(
     (uid: string) => {
@@ -1262,6 +1270,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
         style={styles.scroll}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        refreshControl={<RefreshControl {...pull} tintColor="#e4e6eb" />}
       >
       {/*
         What a scan DOES. Two words rather than a settings toggle, because

@@ -25,6 +25,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -46,6 +47,7 @@ import type {
 import type { CollectionRow } from '../lib/store.ts';
 import { uuid } from '../lib/uuid.ts';
 import { reporting } from './report.ts';
+import { usePullToSync } from './usePullToSync.ts';
 
 interface Props {
   state: AppState;
@@ -90,6 +92,12 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
     // there even before the PC answers.
     void state.collections().then(setShelves).catch(() => setShelves([]));
   }, [load, state]);
+  const reloadAll = useCallback(async () => {
+    await load();
+    setShelves(await state.collections().catch(() => []));
+  }, [load, state]);
+  const pull = usePullToSync(state, reloadAll,
+                             reporting('your PC decks', setProblem));
 
   const openDeck = useCallback(
     async (deck: DesktopDeck) => {
@@ -183,7 +191,11 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   }, [built, decks, shelves, pickedShelf, onOpenLocal]);
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl {...pull} tintColor="#e4e6eb" />}
+    >
       <Text style={styles.title}>On your PC</Text>
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
