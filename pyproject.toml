@@ -27,6 +27,10 @@ desktop = [
     # than Electron (~20 MB overhead vs ~150 MB) and doesn't need a
     # separate browser runtime. Optional — CLI still works without it.
     "pywebview>=5.0",
+    # Draws the phone pairing QR code in Settings. The app runs without it
+    # and shows only the link, which is exactly why its absence from a
+    # build went unnoticed: 0.7.0 rebuilt on an interpreter that lacked it.
+    "qrcode>=7.0",
 ]
 analyst = [
     # Local GGUF inference for the LLM analyst layer. Optional — the analyst

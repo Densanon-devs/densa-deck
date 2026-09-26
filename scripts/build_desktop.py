@@ -27,11 +27,20 @@ DIST_DIR = REPO_ROOT / "dist"
 def check_pyinstaller():
     try:
         import PyInstaller  # noqa: F401
-        return True
     except ImportError:
         print("ERROR: PyInstaller not installed.")
         print("Install with: pip install -e .[desktop]")
         return False
+    # Optional at runtime, so a build without it succeeds and quietly ships
+    # a pairing screen with no QR code. Refuse instead.
+    try:
+        import qrcode  # noqa: F401
+    except ImportError:
+        print(f"ERROR: qrcode is not installed for {sys.executable}.")
+        print("The phone pairing QR code would be missing from this build.")
+        print("Install with: pip install -e .[desktop]")
+        return False
+    return True
 
 
 def clean():

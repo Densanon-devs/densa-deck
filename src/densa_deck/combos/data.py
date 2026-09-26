@@ -124,6 +124,32 @@ class ComboStore:
         row = conn.execute("SELECT COUNT(*) FROM combos").fetchone()
         return row[0] if row else 0
 
+    def prune_combos_except(self, keep_ids: Iterable[str]) -> int:
+        """Delete every combo not in `keep_ids`, index rows included.
+
+        Upserts only ever add or replace, so a combo Commander Spellbook
+        retires would otherwise stay in the store and keep being detected.
+        Only meaningful after reading a COMPLETE dataset. Returns how many
+        were removed.
+        """
+        conn = self.connect()
+        conn.execute("BEGIN")
+        try:
+            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _keep (combo_id TEXT PRIMARY KEY)")
+            conn.execute("DELETE FROM _keep")
+            conn.executemany("INSERT OR IGNORE INTO _keep (combo_id) VALUES (?)",
+                             ((i,) for i in keep_ids))
+            conn.execute("DELETE FROM combo_card_index "
+                         "WHERE combo_id NOT IN (SELECT combo_id FROM _keep)")
+            removed = conn.execute("DELETE FROM combos "
+                                   "WHERE combo_id NOT IN (SELECT combo_id FROM _keep)").rowcount
+            conn.execute("DROP TABLE _keep")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return removed
+
     def get_metadata(self, key: str) -> str | None:
         conn = self.connect()
         row = conn.execute(
@@ -564,19 +590,32 @@ def _refresh_from_bulk(store: "ComboStore", *, user_agent: str, progress_cb=None
     try:
         _download_bulk(dest, user_agent=user_agent, progress_cb=progress_cb)
 
+        before = store.combo_count()
+        kept: list[str] = []
+
         def combos() -> Iterator[Combo]:
-            seen = 0
             for raw in _iter_bulk_variants(dest):
                 combo = _parse_variant(raw)
                 if combo:
-                    seen += 1
-                    if seen % 5000 == 0:
+                    kept.append(combo.combo_id)
+                    if len(kept) % 5000 == 0:
                         _report(progress_cb,
-                                int(_PROGRESS_PAGE_SCALE * (0.5 + 0.45 * min(1.0, seen / 120_000))),
-                                seen, f"Saving combos... {seen:,}")
+                                int(_PROGRESS_PAGE_SCALE * (0.5 + 0.45 * min(1.0, len(kept) / 120_000))),
+                                len(kept), f"Saving combos... {len(kept):,}")
                     yield combo
 
-        return store.upsert_combos(combos())
+        written = store.upsert_combos(combos())
+
+        # The reader raises on a file that ends early, so reaching here means
+        # this is the whole dataset and anything else in the store has been
+        # retired upstream. Still refuse to prune on a file that came back
+        # far smaller than what we hold: a bad day upstream should not be
+        # able to empty someone's combo data.
+        if written and written >= before // 2:
+            _report(progress_cb, int(_PROGRESS_PAGE_SCALE * 0.97), written,
+                    "Removing retired combos...")
+            store.prune_combos_except(kept)
+        return written
     finally:
         for leftover in (dest, dest.with_suffix(dest.suffix + ".part")):
             try:

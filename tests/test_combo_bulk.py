@@ -136,4 +136,51 @@ def test_two_argument_progress_callbacks_still_work(tmp_path, monkeypatch):
     calls = []
     assert refresh_combo_snapshot(store=store,
                                   progress_cb=lambda p, c: calls.append((p, c))) == 1
-    assert calls == [(10, 0)]
+    assert calls[0] == (10, 0)
+
+
+def _seed(store, ids):
+    store.upsert_combos(combo_data._parse_variant(_variant(i)) for i in ids)
+
+
+def _index_ids(store):
+    return {r[0] for r in store.connect().execute(
+        "SELECT DISTINCT combo_id FROM combo_card_index")}
+
+
+def test_a_full_bulk_refresh_removes_combos_retired_upstream(tmp_path, monkeypatch):
+    store = ComboStore(tmp_path / "combos.db")
+    _seed(store, range(0, 12))                      # what an older download left
+    monkeypatch.setattr(combo_data, "_download_bulk",
+                        _fake_download([_variant(i) for i in range(2, 14)]))
+
+    assert refresh_combo_snapshot(store=store) == 12
+
+    expected = {_variant(i)["id"] for i in range(2, 14)}
+    ids = {r[0] for r in store.connect().execute("SELECT combo_id FROM combos")}
+    assert ids == expected                          # 0 and 1 are gone, 12-13 added
+    assert _index_ids(store) == expected            # and not left behind in the index
+
+
+def test_does_not_prune_when_the_file_is_far_smaller_than_the_store(tmp_path, monkeypatch):
+    store = ComboStore(tmp_path / "combos.db")
+    _seed(store, range(100))
+    monkeypatch.setattr(combo_data, "_download_bulk",
+                        _fake_download([_variant(i) for i in range(10)]))
+
+    refresh_combo_snapshot(store=store)
+
+    assert store.combo_count() == 100
+
+
+def test_the_paged_fallback_never_prunes(tmp_path, monkeypatch):
+    store = ComboStore(tmp_path / "combos.db")
+    _seed(store, range(20))
+
+    async def walk(*, user_agent, progress_cb=None, start_url=None):
+        return [combo_data._parse_variant(_variant(i)) for i in range(3)]
+    monkeypatch.setattr(combo_data, "_walk_variants", walk)
+
+    refresh_combo_snapshot(store=store)             # bulk is offline in tests
+
+    assert store.combo_count() == 20
