@@ -31,14 +31,35 @@ def check_pyinstaller():
         print("ERROR: PyInstaller not installed.")
         print("Install with: pip install -e .[desktop]")
         return False
-    # Optional at runtime, so a build without it succeeds and quietly ships
-    # a pairing screen with no QR code. Refuse instead.
+    # Every one of these is optional at RUNTIME -- the app degrades rather
+    # than crashing without it -- so a build on an interpreter that lacks one
+    # succeeds and quietly ships without the feature. 0.7.0 did exactly that
+    # when rebuilt on a different Python: no pairing QR code, no MCP server
+    # (a paid feature), and no photo-scan OCR. Refuse instead.
+    missing = [(mod, what) for mod, what in _REQUIRED_OPTIONAL if not _importable(mod)]
+    if missing:
+        print(f"ERROR: {sys.executable} is missing packages this build must bundle:")
+        for mod, what in missing:
+            print(f"  {mod:<28} {what}")
+        print("Install with: pip install -e .[desktop,mcp]")
+        return False
+    return True
+
+
+_REQUIRED_OPTIONAL = [
+    ("qrcode", "phone pairing QR code in Settings"),
+    ("mcp.server.fastmcp", "`densa-deck mcp serve` (Claude Desktop, Pro)"),
+    ("webview", "the desktop window itself"),
+    ("llama_cpp", "the local analyst model"),
+] + ([("winrt.windows.media.ocr", "photo-scan OCR (Windows.Media.Ocr)")]
+     if sys.platform == "win32" else [])
+
+
+def _importable(module: str) -> bool:
+    import importlib
     try:
-        import qrcode  # noqa: F401
-    except ImportError:
-        print(f"ERROR: qrcode is not installed for {sys.executable}.")
-        print("The phone pairing QR code would be missing from this build.")
-        print("Install with: pip install -e .[desktop]")
+        importlib.import_module(module)
+    except Exception:
         return False
     return True
 
@@ -112,6 +133,24 @@ def verify():
         print("  make it into the PyInstaller bundle. Check densa-deck.spec")
         print("  hidden_imports + excludes.")
         return False
+
+    # The MCP server, from the frozen binary: installed on the build machine
+    # is not the same as bundled, and this feature is sold.
+    print("Smoke-testing `mcp selftest` (verifies the MCP server is bundled)...")
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as home:
+        env = {**os.environ, "MTG_ENGINE_TIER": "pro", "PYTHONIOENCODING": "utf-8",
+               "HOME": home, "USERPROFILE": home}
+        result = subprocess.run([str(binary), "mcp", "selftest"],
+                                capture_output=True, timeout=60, env=env)
+    out = result.stdout.decode("utf-8", errors="replace")
+    if result.returncode != 0 or "tools registered" not in out.lower():
+        print("ERROR: MCP selftest FAILED in the built binary:")
+        for line in (out + result.stderr.decode("utf-8", errors="replace")).splitlines()[-15:]:
+            print(f"    {line}")
+        return False
+    print("  MCP server: OK.")
 
     print("Binary verified successfully.")
     return True

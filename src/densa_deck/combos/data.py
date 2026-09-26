@@ -42,6 +42,7 @@ from typing import Iterable, Iterator
 import httpx
 
 from densa_deck.combos.models import Combo
+from densa_deck.data.thread_conn import ThreadConnections, connect_shared
 
 DEFAULT_COMBO_DB_PATH = Path.home() / ".densa-deck" / "combos.db"
 SPELLBOOK_API_BASE = "https://backend.commanderspellbook.com"
@@ -94,14 +95,14 @@ class ComboStore:
     def __init__(self, db_path: Path | str = DEFAULT_COMBO_DB_PATH):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._local = threading.local()
+        self._local = ThreadConnections()
         self._schema_lock = threading.Lock()
         self._schema_ready = False
 
     def connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = connect_shared(self.db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             with self._schema_lock:
@@ -112,10 +113,8 @@ class ComboStore:
         return conn
 
     def close(self):
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None
+        # Every thread's connection, not only the caller's: see thread_conn.
+        self._local.close_all()
 
     # -------------------------------------------------------------- counts
 

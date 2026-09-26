@@ -99,7 +99,9 @@ SCREENS = {
     "deleting a deck spares the cards": "never touches the cards",
     # Building a deck out of ONE collection rather than everything owned —
     # a grouping you made is usually the shape of the deck you are making.
-    "building from one collection": "Anywhere",
+    # Was "Anywhere" until 93b53a5 renamed the chip: that read as the whole
+    # catalogue, and the row means every collection of yours.
+    "building from one collection": "Any of mine",
     # The PC's decks, and making a new one out of a shelf. Both needed the
     # desktop and neither was reachable from the phone.
     "decks that live on the PC": "Decks saved on your PC",

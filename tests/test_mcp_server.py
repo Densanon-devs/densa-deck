@@ -392,6 +392,8 @@ class TestMcpSelftestCommand:
     with a clear summary line."""
 
     def test_selftest_succeeds_in_pro_mode(self, tmp_path):
+        # The SDK is an optional extra, as for the tests above.
+        pytest.importorskip("mcp.server.fastmcp")
         import subprocess
         import sys
         env = {**os.environ, "MTG_ENGINE_TIER": "pro",

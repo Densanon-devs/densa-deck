@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from densa_deck.models import Card, CardFace, CardLayout, CardTag, Color, Legality
+from densa_deck.data.thread_conn import ThreadConnections, connect_shared
 
 DEFAULT_DB_PATH = Path.home() / ".densa-deck" / "cards.db"
 
@@ -143,14 +144,14 @@ class CardDatabase:
         # dispatcher thread and the background ingest thread, so hand each
         # thread its own connection. WAL mode (set below) lets concurrent
         # readers coexist with a single writer at the SQLite level.
-        self._local = threading.local()
+        self._local = ThreadConnections()
         self._schema_lock = threading.Lock()
         self._schema_ready = False
 
     def connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = connect_shared(self.db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             with self._schema_lock:
@@ -162,10 +163,8 @@ class CardDatabase:
         return conn
 
     def close(self):
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None
+        # Every thread's connection, not only the caller's: see thread_conn.
+        self._local.close_all()
 
     def get_metadata(self, key: str) -> str | None:
         conn = self.connect()
@@ -222,7 +221,7 @@ class CardDatabase:
         if not path.exists():
             return False
         conn = self.connect()
-        current = getattr(self._local, "collection_attached", None)
+        current = self._local.meta.get("collection_attached")
         if current == str(path):
             return True
         if current:
@@ -234,7 +233,7 @@ class CardDatabase:
             conn.execute("ATTACH DATABASE ? AS collection", (str(path),))
         except sqlite3.OperationalError:
             return False
-        self._local.collection_attached = str(path)
+        self._local.meta["collection_attached"] = str(path)
         return True
 
     def printing_count(self) -> int:

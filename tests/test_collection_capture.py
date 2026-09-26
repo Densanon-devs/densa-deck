@@ -290,6 +290,7 @@ class TestFullFrameIsNotACard:
         frame = np.full((1500, 2000, 3), 90, dtype=np.uint8)
         assert detect_card(frame).found is False
 
+    @needs_cv   # the other half of this class runs without OpenCV; this one draws with it
     def test_a_card_filling_most_of_the_frame_still_detects(self):
         """The guard must not reject someone holding a card up close."""
         import cv2 as _cv

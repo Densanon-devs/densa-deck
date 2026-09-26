@@ -31,6 +31,16 @@ desktop = [
     # and shows only the link, which is exactly why its absence from a
     # build went unnoticed: 0.7.0 rebuilt on an interpreter that lacked it.
     "qrcode>=7.0",
+    # Photo-scan OCR through Windows' built-in engine (collection/
+    # scan_backends.py). Same story as qrcode: missing, the Scan tab says
+    # "no OCR engine found" and nothing else complains.
+    "winrt-runtime>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Globalization>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Storage>=3.2,<4; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=3.2,<4; sys_platform == 'win32'",
 ]
 analyst = [
     # Local GGUF inference for the LLM analyst layer. Optional — the analyst

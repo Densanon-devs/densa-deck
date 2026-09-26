@@ -59,7 +59,11 @@ hidden_imports = (
     # cryptography backs the self-signed certificate that gives the phone a
     # secure context (and therefore a live camera) without any public CA.
     + collect_submodules("cryptography", on_error="ignore")
-    + collect_submodules("mcp", on_error="ignore")
+    # Not mcp.cli: it is the SDK's own developer tool, and importing it
+    # without its `typer` extra calls sys.exit(1), which on_error="ignore"
+    # does not catch -- the whole build dies. The server never imports it.
+    + collect_submodules("mcp", filter=lambda name: not name.startswith("mcp.cli"),
+                         on_error="ignore")
     + collect_submodules("httpx_sse", on_error="ignore")
     + collect_submodules("sse_starlette", on_error="ignore")
     + collect_submodules("starlette", on_error="ignore")

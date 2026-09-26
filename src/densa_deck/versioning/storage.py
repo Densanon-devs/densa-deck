@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 from densa_deck.data.database import DEFAULT_DB_PATH
+from densa_deck.data.thread_conn import ThreadConnections, connect_shared
 
 _VERSION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS decks (
@@ -163,14 +164,14 @@ class VersionStore:
         # Thread-local connections — the desktop app shares one VersionStore
         # across the dispatcher thread and any background worker threads,
         # and sqlite3.Connection is pinned to its creating thread by default.
-        self._local = threading.local()
+        self._local = ThreadConnections()
         self._schema_lock = threading.Lock()
         self._schema_ready = False
 
     def connect(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path))
+            conn = connect_shared(self.db_path)
             conn.execute("PRAGMA journal_mode=WAL")
             with self._schema_lock:
                 if not self._schema_ready:
@@ -205,10 +206,8 @@ class VersionStore:
         conn.commit()
 
     def close(self):
-        conn = getattr(self._local, "conn", None)
-        if conn is not None:
-            conn.close()
-            self._local.conn = None
+        # Every thread's connection, not only the caller's: see thread_conn.
+        self._local.close_all()
 
     def save_version(
         self,
