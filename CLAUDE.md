@@ -92,9 +92,15 @@ free tier. Tier mappings live in `tiers.COMMAND_FEATURES`.
 
 ## Combo Integration (post-v0.2.0 work)
 
-**Commander Spellbook MIT-licensed integration.** Source:
-`backend.commanderspellbook.com/variants/`. ~30k variants. Polite walker
-(250ms inter-page sleep, custom UA).
+**Commander Spellbook MIT-licensed integration.** ~111.5k variants (2026-09).
+Refresh downloads the daily bulk file `json.commanderspellbook.com/variants.json.gz`
+(28 MB, not rate-limited) and streams it into the store — ~1 min, ~50 MB peak.
+The paged walk over `backend.commanderspellbook.com/variants/` is only the
+fallback: the API rate-limits it ~11k combos in, so it resumes across runs
+via `last_refresh_partial` / `last_refresh_next_url`, and a partial store is
+what makes "Update everything" re-offer Combo data. Download with
+`iter_raw` (the host sends `Content-Encoding: gzip`). `tests/conftest.py`
+disables the real bulk download in every test.
 
 Combo data lives in `~/.densa-deck/combos.db` (SQLite). Refresh via
 **Settings → Refresh combo data** in the desktop UI or `densa-deck combos refresh`.
