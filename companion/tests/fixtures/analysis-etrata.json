@@ -1,0 +1,318 @@
+{
+ "deck_name": "Etrata - Assassins",
+ "format": "commander",
+ "archetype": "stax",
+ "total_cards": 100,
+ "land_count": 36,
+ "ramp_count": 4,
+ "draw_count": 9,
+ "interaction_count": 18,
+ "average_cmc": 2.83,
+ "mana_curve": {
+  "1": 9,
+  "2": 22,
+  "3": 15,
+  "4": 10,
+  "5": 6,
+  "6": 1,
+  "7": 1
+ },
+ "color_distribution": {
+  "B": 73,
+  "U": 30
+ },
+ "color_sources": {
+  "W": 11,
+  "R": 11,
+  "U": 22,
+  "B": 30,
+  "G": 11
+ },
+ "type_distribution": {
+  "Creature": 24,
+  "Instant": 20,
+  "Land": 36,
+  "Artifact": 7,
+  "Sorcery": 8,
+  "Enchantment": 7
+ },
+ "scores": {
+  "mana_base": 90.0,
+  "ramp": 25,
+  "card_advantage": 85.0,
+  "interaction": 67,
+  "curve": 90.0,
+  "threat_density": 70
+ },
+ "issues": [
+  {
+   "severity": "warning",
+   "message": "Low ramp count (4). Recommended: 10-15",
+   "card": null
+  },
+  {
+   "severity": "info",
+   "message": "Low board wipe count (1). Consider 2-4 wipes for recovery.",
+   "card": null
+  }
+ ],
+ "recommendations": [
+  "Add 6 more ramp piece(s) to accelerate mana development.",
+  "Add more threats or win conditions — the deck may struggle to close games.",
+  "3 combos within 1 card of completion — see the near-miss panel to pick which one to lean into."
+ ],
+ "power": {
+  "overall": 5.8,
+  "tier": "focused",
+  "speed": 5.0,
+  "interaction": 7.0,
+  "combo_potential": 4.5,
+  "mana_efficiency": 8.0,
+  "win_condition_quality": 3.0,
+  "card_quality": 8.0,
+  "reasons_up": [
+   "Strong card selection (11 draw/cantrip sources)"
+  ],
+  "reasons_down": []
+ },
+ "advanced": {
+  "mana_base_grade": "C+",
+  "mana_base_notes": [
+   "Blue: good (22 sources / 20 pips)",
+   "Black: weak (30 sources / 64 pips) — frequent color issues",
+   "11 cards with 2+ pips of one color — high color strain"
+  ],
+  "synergies": [
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Edgar's Awakening",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Illicit Masquerade",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Macabre Reconstruction",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Edgar's Awakening",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Illicit Masquerade",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Macabre Reconstruction",
+    "reason": "Sacrifice + recursion creates a loop",
+    "strength": 0.8
+   },
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Briarblade Adept",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Case of the Stashed Skeleton",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Deadly Dispute",
+    "card_b": "Curious Inquiry",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Briarblade Adept",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Case of the Stashed Skeleton",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Lazav, Wearer of Faces",
+    "card_b": "Curious Inquiry",
+    "reason": "Tokens provide sacrifice fodder",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Assassin's Ink",
+    "card_b": "Case of the Stashed Skeleton",
+    "reason": "Cost reduction amplifies engine output",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Assassin's Ink",
+    "card_b": "Illicit Masquerade",
+    "reason": "Cost reduction amplifies engine output",
+    "strength": 0.7
+   },
+   {
+    "card_a": "Assassin's Ink",
+    "card_b": "Lazav, Familiar Stranger",
+    "reason": "Cost reduction amplifies engine output",
+    "strength": 0.7
+   }
+  ],
+  "advanced_recommendations": [
+   "Black mana sources are strained (0.5 sources per pip) — add Black sources or reduce Black pip demands."
+  ]
+ },
+ "castability": {
+  "unreliable_cards": [
+   {
+    "name": "Lost in the Maze",
+    "mana_cost": "{X}{U}{U}",
+    "on_curve_probability": 0.5617,
+    "bottleneck_color": "U"
+   }
+  ],
+  "color_bottlenecks": {
+   "U": 1
+  }
+ },
+ "staples": {
+  "format": "commander",
+  "color_identity": [
+   "B",
+   "U"
+  ],
+  "staple_coverage": 0.04,
+  "missing": [
+   {
+    "name": "Sol Ring",
+    "reason": "Best mana rock in the format",
+    "priority": "essential"
+   },
+   {
+    "name": "Command Tower",
+    "reason": "Free color-fixing land",
+    "priority": "essential"
+   },
+   {
+    "name": "Counterspell",
+    "reason": "Clean two-mana counter",
+    "priority": "essential"
+   },
+   {
+    "name": "Rhystic Study",
+    "reason": "Consistent card draw engine",
+    "priority": "essential"
+   },
+   {
+    "name": "Lightning Greaves",
+    "reason": "Haste + protection for commander",
+    "priority": "recommended"
+   },
+   {
+    "name": "Cyclonic Rift",
+    "reason": "Best board wipe in blue",
+    "priority": "recommended"
+   },
+   {
+    "name": "Swan Song",
+    "reason": "Efficient one-mana counter",
+    "priority": "recommended"
+   },
+   {
+    "name": "Mystic Remora",
+    "reason": "One-mana card draw engine",
+    "priority": "recommended"
+   },
+   {
+    "name": "Demonic Tutor",
+    "reason": "Best tutor in the format",
+    "priority": "recommended"
+   },
+   {
+    "name": "Toxic Deluge",
+    "reason": "Efficient board wipe that bypasses indestructible",
+    "priority": "recommended"
+   },
+   {
+    "name": "Vampiric Tutor",
+    "reason": "Top-of-library tutor",
+    "priority": "recommended"
+   },
+   {
+    "name": "Swiftfoot Boots",
+    "reason": "Hexproof + haste for commander",
+    "priority": "suggested"
+   },
+   {
+    "name": "Thought Vessel",
+    "reason": "Mana rock + no max hand size",
+    "priority": "suggested"
+   },
+   {
+    "name": "Solemn Simulacrum",
+    "reason": "Body + ramp + cantrip on death",
+    "priority": "suggested"
+   },
+   {
+    "name": "Skullclamp",
+    "reason": "Two-mana draw engine for token decks",
+    "priority": "suggested"
+   },
+   {
+    "name": "Chromatic Lantern",
+    "reason": "Any land taps for any color",
+    "priority": "suggested"
+   },
+   {
+    "name": "Brainstorm",
+    "reason": "Cheap card selection",
+    "priority": "suggested"
+   },
+   {
+    "name": "Ponder",
+    "reason": "Top-deck sculpting cantrip",
+    "priority": "suggested"
+   },
+   {
+    "name": "Feed the Swarm",
+    "reason": "Black enchantment removal",
+    "priority": "suggested"
+   },
+   {
+    "name": "Phyrexian Arena",
+    "reason": "Steady card advantage",
+    "priority": "suggested"
+   },
+   {
+    "name": "Animate Dead",
+    "reason": "Cheap reanimation staple",
+    "priority": "suggested"
+   },
+   {
+    "name": "Reanimate",
+    "reason": "One-mana graveyard revival",
+    "priority": "suggested"
+   }
+  ],
+  "present_staples": [
+   "Arcane Signet"
+  ]
+ },
+ "unresolved_cards": []
+}

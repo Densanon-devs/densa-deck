@@ -46,6 +46,7 @@ import type {
 // desktop knows.
 import type { CollectionRow } from '../lib/store.ts';
 import { uuid } from '../lib/uuid.ts';
+import { AnalysisSheet } from './AnalysisSheet.tsx';
 import { reporting } from './report.ts';
 import { usePullToSync } from './usePullToSync.ts';
 
@@ -65,7 +66,9 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<DesktopDeckDetail | null>(null);
-  const [analysis, setAnalysis] = useState('');
+  // The PC's analysis as it arrived; AnalysisSheet shows it.
+  const [analysis, setAnalysis] = useState<unknown>(null);
+  const [showAnalysis, setShowAnalysis] = useState(false);
   const [thinking, setThinking] = useState(false);
 
   // Building from a shelf.
@@ -101,7 +104,7 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
 
   const openDeck = useCallback(
     async (deck: DesktopDeck) => {
-      setAnalysis('');
+      setAnalysis(null);
       setProblem('');
       setOpen(await state.desktopDeck(deck.deck_id));
     },
@@ -112,9 +115,10 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   const analyse = useCallback(
     async (text: string, name: string) => {
       setThinking(true);
-      setAnalysis('');
+      setAnalysis(null);
       try {
-        setAnalysis(JSON.stringify(await state.analyze(text, name), null, 2));
+        setAnalysis(await state.analyze(text, name));
+        setShowAnalysis(true);
       } catch (err) {
         setProblem(
           `${(err as Error).message}. Analysis runs on your PC — it needs the ` +
@@ -385,7 +389,14 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
       ) : null}
 
       {thinking ? <ActivityIndicator color="#48bb78" /> : null}
-      {analysis ? <Text style={styles.analysis}>{analysis}</Text> : null}
+      {analysis ? (
+        <Pressable style={styles.secondary} onPress={() => setShowAnalysis(true)}>
+          <Text style={styles.secondaryText}>View analysis</Text>
+        </Pressable>
+      ) : null}
+      {analysis && showAnalysis ? (
+        <AnalysisSheet analysis={analysis} onClose={() => setShowAnalysis(false)} />
+      ) : null}
     </ScrollView>
   );
 }
@@ -465,11 +476,5 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 11,
     lineHeight: 16,
-  },
-  analysis: {
-    color: '#8a8f9c',
-    fontFamily: 'monospace',
-    fontSize: 11,
-    lineHeight: 16,
-  },
+  },
 });

@@ -39,6 +39,7 @@ import { artSource } from '../lib/images.ts';
 import { uuid } from '../lib/uuid.ts';
 import { CardBrowser } from './CardBrowser.tsx';
 import { ScanScreen } from './Scan.tsx';
+import { AnalysisSheet } from './AnalysisSheet.tsx';
 import { reporting } from './report.ts';
 import { usePullToSync } from './usePullToSync.ts';
 import {
@@ -459,7 +460,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');
   const [missing, setMissing] = useState<ShortfallRow[]>([]);
-  const [analysis, setAnalysis] = useState<string>('');
+  // The PC's analysis as it arrived; AnalysisSheet shows it.
+  const [analysis, setAnalysis] = useState<unknown>(null);
+  const [showAnalysis, setShowAnalysis] = useState(false);
   const [thinking, setThinking] = useState(false);
   // What the PC said when it took the deck. Kept on screen rather than as a
   // flash: "saved" that vanishes is indistinguishable from nothing happening.
@@ -960,17 +963,18 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const analyse = useCallback(async () => {
     if (!deck) return;
     setThinking(true);
-    setAnalysis('');
+    setAnalysis(null);
     try {
       const result = await state.analyze(
         formatDecklist(deck.decklist, deck.sideboard, deck.commander),
         deck.name,
       );
-      setAnalysis(JSON.stringify(result, null, 2));
+      setAnalysis(result);
+      setShowAnalysis(true);
     } catch (err) {
       // Said plainly rather than dressed up: the analysis genuinely cannot be
       // done here, and pretending otherwise would be worse than saying so.
-      setAnalysis('');
+      setAnalysis(null);
       setProblem(
         `${(err as Error).message}. Analysis runs on your PC — it needs the ` +
           'card database, so it only works when your PC is reachable.',
@@ -1644,7 +1648,14 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           </Text>
         </Pressable>
         {thinking ? <ActivityIndicator color="#48bb78" /> : null}
-        {analysis ? <Text style={styles.analysis}>{analysis}</Text> : null}
+        {analysis ? (
+          <Pressable style={styles.secondary} onPress={() => setShowAnalysis(true)}>
+            <Text style={styles.secondaryText}>View analysis</Text>
+          </Pressable>
+        ) : null}
+        {analysis && showAnalysis ? (
+          <AnalysisSheet analysis={analysis} onClose={() => setShowAnalysis(false)} />
+        ) : null}
       </Folding>
       )}
 
@@ -1998,11 +2009,5 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     paddingHorizontal: 6,
   },
-  badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  analysis: {
-    color: '#8a8f9c',
-    fontFamily: 'monospace',
-    fontSize: 11,
-    lineHeight: 16,
-  },
+  badgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
 });
