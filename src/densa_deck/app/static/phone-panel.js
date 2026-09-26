@@ -167,7 +167,7 @@
     if (!running) return;
 
     const url = s.phone_url || "";
-    e("phone-url").value = url || "(Tailscale name unavailable)";
+    e("phone-url").value = url || "(No network address found — is this computer on Wi-Fi?)";
     renderQr(s.qr, url);
 
     const serve = s.serve || {};
