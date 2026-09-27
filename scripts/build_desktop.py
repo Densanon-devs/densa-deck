@@ -175,7 +175,10 @@ def main():
         sys.exit(1)
 
     output_dir = DIST_DIR / "densa-deck"
-    size_mb = sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file()) / (1024 * 1024)
+    # The folder IS the ZIP download, and someone who unzips it has nothing
+    # else to go on: how to launch, where the data lives, how to update.
+    shutil.copyfile(REPO_ROOT / "packaging" / "README.txt", output_dir / "README.txt")
+    size_mb =sum(f.stat().st_size for f in output_dir.rglob("*") if f.is_file()) / (1024 * 1024)
 
     print()
     print("=" * 60)

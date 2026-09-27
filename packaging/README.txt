@@ -1,5 +1,5 @@
-DENSA DECK — v0.1.6
-=====================
+DENSA DECK
+==========
 
 Local deck analysis and AI coaching for Magic: The Gathering.
 All processing runs on your own machine. No account, no cloud, no telemetry.
@@ -12,7 +12,13 @@ Source:          https://github.com/densanon-devs/densa-deck
 HOW TO LAUNCH
 -------------
 
-1. Double-click `densa-deck.exe` in this folder.
+1. Double-click `densa-deck.exe` in this folder. A black console window
+   blinks for a moment, then the Densa Deck window opens. (Older builds
+   stopped at the blink; if yours does, you have one of those -- run
+   `densa-deck.exe app` from a command prompt, or get the current ZIP.)
+
+   Tip: right-click `densa-deck.exe` > Show more options > Send to >
+   Desktop (create shortcut) for a desktop icon.
 
    If Windows shows a SmartScreen warning ("Microsoft Defender SmartScreen
    prevented an unrecognized app from starting"), click `More info` at the
@@ -84,8 +90,8 @@ This includes the card database (`cards.db`), your saved deck versions
 sessions (`coach_sessions.json`).
 
 Delete that folder to wipe all app data. Delete this app folder
-(wherever you extracted it) to remove the app itself. There is no
-Windows uninstaller for v0.1.0 — the portable ZIP doesn't need one.
+(wherever you extracted it) to remove the app itself -- the portable ZIP
+has no uninstaller and doesn't need one.
 
 
 UPDATING

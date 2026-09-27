@@ -676,6 +676,15 @@ def main():
     args = parser.parse_args()
 
     if args.command is None:
+        # Double-clicked, not typed: open the app. The bundled exe IS the
+        # CLI, so a double-click used to print this help into a console that
+        # closed at once -- a flash and nothing, which is what anyone who
+        # unzipped the download saw. Only the installer's shortcuts (which
+        # pass `app`) ever opened a window.
+        if _launched_by_double_click():
+            _hide_own_console()
+            cmd_app(argparse.Namespace(debug=False, activation_url=None))
+            return
         parser.print_help()
         return
 
@@ -1716,6 +1725,45 @@ def cmd_practice(args):
 
     finally:
         db.close()
+
+
+def _launched_by_double_click() -> bool:
+    """True when Explorer (or a bare shortcut) started this exe, not a shell.
+
+    A console program started from Explorer gets a console of its own, and is
+    the only process attached to it. Started from cmd or PowerShell it shares
+    that shell's console, so there are at least two. That is the reliable
+    difference on Windows -- and it keeps `densa-deck` typed with no command
+    printing its help, as a CLI should.
+
+    Only for the frozen build: `python -m densa_deck` is always a terminal.
+    """
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    try:
+        import ctypes
+
+        attached = (ctypes.c_uint * 4)()
+        return ctypes.windll.kernel32.GetConsoleProcessList(attached, 4) == 1
+    except Exception:
+        return False
+
+
+def _hide_own_console() -> None:
+    """Hide the console window this double-click created; the app has its own.
+
+    Hidden rather than freed: the handles stay valid, so anything that still
+    prints (a traceback, a library warning) has somewhere to go instead of
+    raising.
+    """
+    try:
+        import ctypes
+
+        window = ctypes.windll.kernel32.GetConsoleWindow()
+        if window:
+            ctypes.windll.user32.ShowWindow(window, 0)   # SW_HIDE
+    except Exception:
+        pass
 
 
 def cmd_app(args):
