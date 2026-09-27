@@ -47,6 +47,7 @@ import type {
 import type { CollectionRow } from '../lib/store.ts';
 import { uuid } from '../lib/uuid.ts';
 import { AnalysisSheet } from './AnalysisSheet.tsx';
+import { useDeckAnalysis, type DeckInput } from './useDeckAnalysis.ts';
 import { reporting } from './report.ts';
 import { usePullToSync } from './usePullToSync.ts';
 
@@ -66,10 +67,10 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState<DesktopDeckDetail | null>(null);
-  // The PC's analysis as it arrived; AnalysisSheet shows it.
-  const [analysis, setAnalysis] = useState<unknown>(null);
+  // Analysis of whichever deck is open, cached per version of it.
+  const ana = useDeckAnalysis(state);
   const [showAnalysis, setShowAnalysis] = useState(false);
-  const [thinking, setThinking] = useState(false);
+  const thinking = ana.running;
 
   // Building from a shelf.
   const [shelves, setShelves] = useState<CollectionRow[]>([]);
@@ -104,30 +105,26 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
 
   const openDeck = useCallback(
     async (deck: DesktopDeck) => {
-      setAnalysis(null);
       setProblem('');
-      setOpen(await state.desktopDeck(deck.deck_id));
+      const detail = await state.desktopDeck(deck.deck_id);
+      setOpen(detail);
+      // Its cached analysis, if this version of it has one.
+      ana.show(pcDeckInput(detail));
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [state],
   );
 
-  /** Ask the PC to think about the deck it is already holding. */
+  /**
+   * Ask the PC to think about a deck. The sheet opens as soon as the first
+   * part lands and fills in as the rest do.
+   */
   const analyse = useCallback(
-    async (text: string, name: string) => {
-      setThinking(true);
-      setAnalysis(null);
-      try {
-        setAnalysis(await state.analyze(text, name));
-        setShowAnalysis(true);
-      } catch (err) {
-        setProblem(
-          `${(err as Error).message}. Analysis runs on your PC — it needs the ` +
-            'card database, so it only works when your PC is reachable.',
-        );
-      } finally {
-        setThinking(false);
-      }
+    async (deck: DeckInput) => {
+      setShowAnalysis(true);
+      await ana.run(deck);
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [state],
   );
 
@@ -307,7 +304,9 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
             <Pressable
               style={[styles.secondary, styles.grow]}
               onPress={() =>
-                void analyse(built.decklist_text, 'Built from your collection')
+                // Built, not saved: nothing to cache it under.
+                void analyse({ key: null, text: built.decklist_text,
+                               name: 'Built from your collection', format })
               }
             >
               <Text style={styles.secondaryText}>Analyse it</Text>
@@ -359,18 +358,16 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
             <Pressable
               style={[styles.secondary, styles.grow]}
               onPress={() =>
-                void analyse(
-                  open.decklist_text ||
-                    Object.entries(open.decklist ?? {})
-                      .map(([n, q]) => `${q} ${n}`)
-                      .join('\n'),
-                  open.name || 'Deck',
-                )
+                // Already analysed at this version: show it, ask nothing.
+                ana.analysis && !thinking
+                  ? setShowAnalysis(true)
+                  : void analyse(pcDeckInput(open))
               }
               disabled={thinking}
             >
               <Text style={styles.secondaryText}>
-                {thinking ? 'Thinking…' : 'Analyse on my PC'}
+                {thinking ? 'Thinking…'
+                  : ana.analysis ? 'View analysis' : 'Analyse on my PC'}
               </Text>
             </Pressable>
             <Pressable
@@ -382,20 +379,21 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
               <Text style={styles.secondaryText}>Copy to phone</Text>
             </Pressable>
           </View>
-          <Pressable onPress={() => setOpen(null)}>
+          <Pressable onPress={() => { setOpen(null); ana.show(null); }}>
             <Text style={styles.muted}>Close</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {thinking ? <ActivityIndicator color="#48bb78" /> : null}
-      {analysis ? (
-        <Pressable style={styles.secondary} onPress={() => setShowAnalysis(true)}>
-          <Text style={styles.secondaryText}>View analysis</Text>
-        </Pressable>
-      ) : null}
-      {analysis && showAnalysis ? (
-        <AnalysisSheet analysis={analysis} onClose={() => setShowAnalysis(false)} />
+      {thinking && !ana.analysis ? <ActivityIndicator color="#48bb78" /> : null}
+      {ana.problem ? <Text style={styles.problem}>{ana.problem}</Text> : null}
+      {ana.analysis && showAnalysis ? (
+        <AnalysisSheet
+          analysis={ana.analysis}
+          running={thinking}
+          onBracket={(t) => void ana.bracket(t)}
+          onClose={() => setShowAnalysis(false)}
+        />
       ) : null}
     </ScrollView>
   );
@@ -478,3 +476,14 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 });
+
+/** A PC deck as the analysis sees it: cached under its PC id. */
+function pcDeckInput(open: DesktopDeckDetail): DeckInput {
+  return {
+    key: `pc:${open.deck_id}`,
+    text: open.decklist_text ||
+      Object.entries(open.decklist ?? {}).map(([n, q]) => `${q} ${n}`).join('\n'),
+    name: open.name || 'Deck',
+    format: open.format || 'commander',
+  };
+}

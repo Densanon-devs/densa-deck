@@ -40,6 +40,8 @@ import { uuid } from '../lib/uuid.ts';
 import { CardBrowser } from './CardBrowser.tsx';
 import { ScanScreen } from './Scan.tsx';
 import { AnalysisSheet } from './AnalysisSheet.tsx';
+import { useDeckAnalysis, type DeckInput } from './useDeckAnalysis.ts';
+import { clearCached } from '../lib/deck-analysis.ts';
 import { reporting } from './report.ts';
 import { usePullToSync } from './usePullToSync.ts';
 import {
@@ -219,6 +221,7 @@ export function DeckListScreen({
   const remove = useCallback(
     async (deck: Deck) => {
       await state.removeDeck(deck.deck_id);
+      await clearCached(state, `local:${deck.deck_id}`);
       setActing(null);
       setConfirmingDelete(false);
       await load();
@@ -460,10 +463,12 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   const [deck, setDeck] = useState<Deck | null>(null);
   const [text, setText] = useState('');
   const [missing, setMissing] = useState<ShortfallRow[]>([]);
-  // The PC's analysis as it arrived; AnalysisSheet shows it.
-  const [analysis, setAnalysis] = useState<unknown>(null);
+  // The PC's analysis of this deck, cached per version of it: the saved
+  // decklist, not the text box, so typing does not throw the stats away
+  // until the edit is actually saved as a new version.
+  const ana = useDeckAnalysis(state);
   const [showAnalysis, setShowAnalysis] = useState(false);
-  const [thinking, setThinking] = useState(false);
+  const thinking = ana.running;
   // What the PC said when it took the deck. Kept on screen rather than as a
   // flash: "saved" that vanishes is indistinguishable from nothing happening.
   const [savedToPc, setSavedToPc] = useState('');
@@ -960,29 +965,29 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     }
   }, [deck, state]);
 
+  const deckInput: DeckInput | null = useMemo(() => (deck ? {
+    key: `local:${deck.deck_id}`,
+    text: formatDecklist(deck.decklist, deck.sideboard, deck.commander),
+    name: deck.name,
+    format: deck.format || 'commander',
+  } : null), [deck]);
+  // A deck opened, or saved as a new version: show that version's analysis
+  // if it has one. A new version has none, so the old stats go.
+  useEffect(() => { ana.show(deckInput); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [deckInput?.key, deckInput?.text, deckInput?.format]);
+
   const analyse = useCallback(async () => {
-    if (!deck) return;
-    setThinking(true);
-    setAnalysis(null);
-    try {
-      const result = await state.analyze(
-        formatDecklist(deck.decklist, deck.sideboard, deck.commander),
-        deck.name,
-      );
-      setAnalysis(result);
+    if (!deckInput) return;
+    // Already analysed at this version: show it, ask the PC nothing.
+    if (ana.analysis && !thinking) {
       setShowAnalysis(true);
-    } catch (err) {
-      // Said plainly rather than dressed up: the analysis genuinely cannot be
-      // done here, and pretending otherwise would be worse than saying so.
-      setAnalysis(null);
-      setProblem(
-        `${(err as Error).message}. Analysis runs on your PC — it needs the ` +
-          'card database, so it only works when your PC is reachable.',
-      );
-    } finally {
-      setThinking(false);
+      return;
     }
-  }, [deck, state]);
+    setShowAnalysis(true);
+    await ana.run(deckInput);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckInput, ana.analysis, thinking]);
 
   /** The half you are looking at, which is the half the tabs and +/- act on. */
   const showing: DeckEntry[] = (zone === 'side' ? deck?.sideboard : deck?.decklist) ?? [];
@@ -1644,17 +1649,19 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       >
         <Pressable style={styles.secondary} onPress={analyse} disabled={thinking}>
           <Text style={styles.secondaryText}>
-            {thinking ? 'Your PC is thinking…' : 'Analyse on my PC'}
+            {thinking ? 'Your PC is thinking…'
+              : ana.analysis ? 'View analysis' : 'Analyse on my PC'}
           </Text>
         </Pressable>
-        {thinking ? <ActivityIndicator color="#48bb78" /> : null}
-        {analysis ? (
-          <Pressable style={styles.secondary} onPress={() => setShowAnalysis(true)}>
-            <Text style={styles.secondaryText}>View analysis</Text>
-          </Pressable>
-        ) : null}
-        {analysis && showAnalysis ? (
-          <AnalysisSheet analysis={analysis} onClose={() => setShowAnalysis(false)} />
+        {thinking && !ana.analysis ? <ActivityIndicator color="#48bb78" /> : null}
+        {ana.problem ? <Text style={styles.problem}>{ana.problem}</Text> : null}
+        {ana.analysis && showAnalysis ? (
+          <AnalysisSheet
+            analysis={ana.analysis}
+            running={thinking}
+            onBracket={(t) => void ana.bracket(t)}
+            onClose={() => setShowAnalysis(false)}
+          />
         ) : null}
       </Folding>
       )}

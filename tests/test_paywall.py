@@ -13,8 +13,11 @@ Two real holes are covered here, because both were live:
   `save_deck_version`, which checked nothing. The gate and the way around it
   were two lines apart.
 * The phone bridge had no tier awareness whatsoever, so a free user with the
-  companion could reach `analyst/analyze` and `analyst/explain` — the whole
-  paywall, walked around by installing an app.
+  companion could reach `analyst/explain` and the simulations — the whole
+  paywall, walked around by installing an app. (`analyst/analyze` was on
+  that list too, wrongly: it is the rule engine's structural analysis,
+  free on the desktop, and gating it left a linked free phone with no
+  analysis at all. It is free here now, and tested as free below.)
 """
 
 from __future__ import annotations
@@ -362,16 +365,25 @@ class TestThePhoneIsNotAWayRound:
         all about whether the dispatcher consults it — and a gate the
         dispatcher skips is not a gate.
         """
-        for route in ("analyst/analyze", "analyst/explain"):
+        for route in ("analyst/explain", "analyst/goldfish", "analyst/gauntlet"):
             reply = bridge.handle_api(route, {"decklist_text": "1 Sol Ring"})
             assert reply.get("error_type") == "ProRequired", route
 
+    def test_the_structural_analysis_is_free(self, free, bridge):
+        """What every desktop tier sees in Analyze, the phone sees too."""
+        for route in ("analyst/analyze", "analyst/combos",
+                      "analyst/near-miss", "analyst/bracket"):
+            assert bridge._route_locked(route) is None, route
+            reply = bridge.handle_api(route, {"decklist_text": "1 Sol Ring"})
+            assert reply.get("error_type") != "ProRequired", (route, reply)
+
     def test_the_rule_itself_names_those_routes(self, free, bridge):
-        assert bridge._route_locked("analyst/analyze") is not None
         assert bridge._route_locked("analyst/explain") is not None
+        assert bridge._route_locked("analyst/goldfish") is not None
+        assert bridge._route_locked("analyst/gauntlet") is not None
 
     def test_the_refusal_says_why(self, free, bridge):
-        locked = bridge._route_locked("analyst/analyze")
+        locked = bridge._route_locked("analyst/goldfish")
         assert locked["error_type"] == "ProRequired"
         assert "Pro" in locked["error"]
 
@@ -380,8 +392,9 @@ class TestThePhoneIsNotAWayRound:
                       "sync/pull", "capture"):
             assert bridge._route_locked(route) is None, route
 
-    def test_pro_reaches_the_analyst(self, pro, bridge):
-        assert bridge._route_locked("analyst/analyze") is None
+    def test_pro_reaches_the_simulations(self, pro, bridge):
+        assert bridge._route_locked("analyst/goldfish") is None
+        assert bridge._route_locked("analyst/gauntlet") is None
 
     def test_the_phone_can_ask_what_it_may_do(self, free, bridge):
         snap = bridge.handle_api("tier", {})
@@ -414,7 +427,7 @@ class TestThePhoneIsNotAWayRound:
             raise OSError("licence unreadable")
 
         monkeypatch.setattr(tiers, "check_access", boom)
-        assert bridge._route_locked("analyst/analyze") is None
+        assert bridge._route_locked("analyst/goldfish") is None
 
 
 class TestTheCardPanelSplitsDownTheMiddle:
@@ -591,7 +604,7 @@ class TestEveryProRouteIsGatedOnThePhone:
     """
 
     PRO_ROUTES = {
-        "analyst/analyze", "analyst/explain",
+        "analyst/explain", "analyst/goldfish", "analyst/gauntlet",
         "group/build-deck", "group/export",
     }
 

@@ -1,0 +1,1674 @@
+{
+ "goldfish": {
+  "simulations": 1000,
+  "max_turns": 10,
+  "average_mulligans": 0.053,
+  "mulligan_distribution": {
+   "0": 0.952,
+   "1": 0.044,
+   "2": 0.003,
+   "3": 0.001
+  },
+  "average_damage_by_turn": {
+   "1": 0.0,
+   "2": 0.1,
+   "3": 0.5,
+   "4": 1.6,
+   "5": 3.8,
+   "6": 7.3,
+   "7": 12.3,
+   "8": 18.4,
+   "9": 25.2,
+   "10": 31.3
+  },
+  "average_kill_turn": 9.5,
+  "kill_rate": 0.358,
+  "kill_turn_distribution": {
+   "8": 0.024,
+   "9": 0.124,
+   "10": 0.21
+  },
+  "average_creatures_by_turn": {
+   "1": 0.1,
+   "2": 0.3,
+   "3": 0.9,
+   "4": 1.6,
+   "5": 2.2,
+   "6": 2.9,
+   "7": 3.5,
+   "8": 4.0,
+   "9": 4.4,
+   "10": 4.8
+  },
+  "average_lands_by_turn": {
+   "1": 1.0,
+   "2": 1.8,
+   "3": 2.6,
+   "4": 3.3,
+   "5": 3.9,
+   "6": 4.5,
+   "7": 5.0,
+   "8": 5.4,
+   "9": 5.8,
+   "10": 6.1
+  },
+  "average_mana_spent_by_turn": {
+   "1": 0.3,
+   "2": 1.2,
+   "3": 2.1,
+   "4": 2.9,
+   "5": 3.8,
+   "6": 4.3,
+   "7": 4.4,
+   "8": 4.0,
+   "9": 3.5,
+   "10": 3.2
+  },
+  "commander_cast_rate": 0.977,
+  "average_commander_turn": 4.0,
+  "average_spells_cast": 10.6,
+  "most_cast_spells": [
+   [
+    "Etrata, Deadly Fugitive",
+    977
+   ],
+   [
+    "Deadly Dispute",
+    191
+   ],
+   [
+    "Lazav, Wearer of Faces",
+    185
+   ],
+   [
+    "Unauthorized Exit",
+    183
+   ],
+   [
+    "Barrow-Blade",
+    178
+   ],
+   [
+    "Lazav, Familiar Stranger",
+    176
+   ],
+   [
+    "Bladebrand",
+    176
+   ],
+   [
+    "Undying Malice",
+    175
+   ],
+   [
+    "Lethal Exploit",
+    173
+   ],
+   [
+    "Silumgar Assassin",
+    173
+   ]
+  ],
+  "objective_pass_rates": {
+   "Commander cast by turn 3": 0.471,
+   "Ramp spell by turn 2": 0.123,
+   "3 lands by turn 3": 0.701,
+   "3+ creatures by turn 5": 0.353,
+   "10 damage by turn 6": 0.322,
+   "20 damage by turn 8": 0.445,
+   "Card draw by turn 4": 0.437
+  },
+  "combos_evaluated": 0,
+  "combo_win_rate": 0.0,
+  "average_combo_win_turn": 0.0,
+  "combo_win_turn_distribution": {},
+  "top_combo_lines": [],
+  "mana_reliability": {
+   "games_analyzed": 300,
+   "summary": "Short on Blue",
+   "over_extended": false,
+   "overall_on_curve_rate": 0.7541,
+   "color_screw_rate": 0.068,
+   "colors": [
+    {
+     "color": "B",
+     "name": "Black",
+     "sources_in_deck": 34,
+     "peak_requirement": 3,
+     "avg_sources_by_turn": {
+      "1": 0.81,
+      "2": 1.63,
+      "3": 2.3,
+      "4": 2.97,
+      "5": 3.55,
+      "6": 4.11,
+      "7": 4.53,
+      "8": 4.97,
+      "9": 5.28,
+      "10": 5.08
+     },
+     "on_curve_hit_rate": 0.76,
+     "verdict": "thin",
+     "recommendation": "add ~3 more black sources (deepest demand is 3 pips)"
+    },
+    {
+     "color": "U",
+     "name": "Blue",
+     "sources_in_deck": 26,
+     "peak_requirement": 2,
+     "avg_sources_by_turn": {
+      "1": 0.55,
+      "2": 1.09,
+      "3": 1.61,
+      "4": 2.15,
+      "5": 2.6,
+      "6": 3.05,
+      "7": 3.4,
+      "8": 3.69,
+      "9": 3.92,
+      "10": 3.8
+     },
+     "on_curve_hit_rate": 0.6663,
+     "verdict": "short",
+     "recommendation": "add ~5 more blue sources (deepest demand is 2 pips)"
+    }
+   ],
+   "curve": [
+    {
+     "turn": 1,
+     "cards_at_cost": 9,
+     "requirement": {
+      "U": 1,
+      "B": 1
+     },
+     "avg_sources": {
+      "U": 0.55,
+      "B": 0.81
+     },
+     "castable_rate": 0.8022,
+     "verdict": "thin"
+    },
+    {
+     "turn": 2,
+     "cards_at_cost": 22,
+     "requirement": {
+      "B": 2,
+      "U": 2
+     },
+     "avg_sources": {
+      "B": 1.63,
+      "U": 1.09
+     },
+     "castable_rate": 0.7961,
+     "verdict": "thin"
+    },
+    {
+     "turn": 3,
+     "cards_at_cost": 15,
+     "requirement": {
+      "U": 1,
+      "B": 2
+     },
+     "avg_sources": {
+      "U": 1.61,
+      "B": 2.3
+     },
+     "castable_rate": 0.7802,
+     "verdict": "thin"
+    },
+    {
+     "turn": 4,
+     "cards_at_cost": 10,
+     "requirement": {
+      "B": 2,
+      "U": 1
+     },
+     "avg_sources": {
+      "B": 2.97,
+      "U": 2.15
+     },
+     "castable_rate": 0.696,
+     "verdict": "short"
+    },
+    {
+     "turn": 5,
+     "cards_at_cost": 6,
+     "requirement": {
+      "B": 2,
+      "U": 1
+     },
+     "avg_sources": {
+      "B": 3.55,
+      "U": 2.6
+     },
+     "castable_rate": 0.6389,
+     "verdict": "short"
+    },
+    {
+     "turn": 6,
+     "cards_at_cost": 1,
+     "requirement": {
+      "U": 1,
+      "B": 1
+     },
+     "avg_sources": {
+      "U": 3.05,
+      "B": 4.11
+     },
+     "castable_rate": 0.5533,
+     "verdict": "short"
+    },
+    {
+     "turn": 7,
+     "cards_at_cost": 1,
+     "requirement": {
+      "B": 3
+     },
+     "avg_sources": {
+      "B": 4.53
+     },
+     "castable_rate": 0.4767,
+     "verdict": "short"
+    }
+   ],
+   "card_on_curve": [
+    [
+     "Lost in the Maze",
+     2,
+     0.41
+    ],
+    [
+     "Fated Return",
+     7,
+     0.4767
+    ],
+    [
+     "Curious Inquiry",
+     1,
+     0.5467
+    ],
+    [
+     "Callidus Assassin",
+     6,
+     0.5533
+    ],
+    [
+     "Coerced to Kill",
+     5,
+     0.6367
+    ],
+    [
+     "Extract from Darkness",
+     5,
+     0.6367
+    ],
+    [
+     "Briarblade Adept",
+     5,
+     0.64
+    ],
+    [
+     "Cairn Wanderer",
+     5,
+     0.64
+    ],
+    [
+     "Deadly Cover-Up",
+     5,
+     0.64
+    ],
+    [
+     "Edgar's Awakening",
+     5,
+     0.64
+    ],
+    [
+     "Aven Heartstabber",
+     2,
+     0.6833
+    ],
+    [
+     "Lazav, Wearer of Faces",
+     2,
+     0.6833
+    ],
+    [
+     "Lazav, the Multifarious",
+     2,
+     0.6833
+    ],
+    [
+     "Tyrant's Scorn",
+     2,
+     0.6833
+    ],
+    [
+     "Warped Physique",
+     2,
+     0.6833
+    ],
+    [
+     "Distant Melody",
+     4,
+     0.6867
+    ],
+    [
+     "Mirrorhall Mimic // Ghastly Mimicry",
+     4,
+     0.6867
+    ],
+    [
+     "Ramses, Assassin Lord",
+     4,
+     0.6867
+    ],
+    [
+     "Assassin's Ink",
+     4,
+     0.7
+    ],
+    [
+     "Illicit Masquerade",
+     4,
+     0.7
+    ],
+    [
+     "Lurking Deadeye",
+     4,
+     0.7
+    ],
+    [
+     "Macabre Reconstruction",
+     4,
+     0.7
+    ],
+    [
+     "Silence the Believers",
+     4,
+     0.7
+    ],
+    [
+     "Skulking Killer",
+     4,
+     0.7
+    ],
+    [
+     "Thorn of the Black Rose",
+     4,
+     0.7
+    ],
+    [
+     "Fae Flight",
+     2,
+     0.7067
+    ],
+    [
+     "Unauthorized Exit",
+     2,
+     0.7067
+    ],
+    [
+     "Outrageous Robbery",
+     2,
+     0.73
+    ],
+    [
+     "Etrata, Deadly Fugitive",
+     3,
+     0.7467
+    ],
+    [
+     "Cryptic Coat",
+     3,
+     0.7467
+    ],
+    [
+     "Lazav, Familiar Stranger",
+     3,
+     0.7467
+    ],
+    [
+     "Recoil",
+     3,
+     0.7467
+    ],
+    [
+     "Agent of the Fates",
+     3,
+     0.7733
+    ],
+    [
+     "Hero's Downfall",
+     3,
+     0.7733
+    ],
+    [
+     "Royal Assassin",
+     3,
+     0.7733
+    ],
+    [
+     "Witch's Vengeance",
+     3,
+     0.7733
+    ],
+    [
+     "Assassinate",
+     3,
+     0.8033
+    ],
+    [
+     "Chariot of Victory",
+     3,
+     0.8033
+    ],
+    [
+     "Commander's Sphere",
+     3,
+     0.8033
+    ],
+    [
+     "Eyeblight Assassin",
+     3,
+     0.8033
+    ],
+    [
+     "Midnight Assassin",
+     3,
+     0.8033
+    ],
+    [
+     "Orzhov Euthanist",
+     3,
+     0.8033
+    ],
+    [
+     "Vraska's Finisher",
+     3,
+     0.8033
+    ],
+    [
+     "Death Wind",
+     1,
+     0.8133
+    ],
+    [
+     "Gruesome Deformity",
+     1,
+     0.8133
+    ],
+    [
+     "Hired Poisoner",
+     1,
+     0.8133
+    ],
+    [
+     "Ruthless Ripper",
+     1,
+     0.8133
+    ],
+    [
+     "Slice from the Shadows",
+     1,
+     0.8133
+    ],
+    [
+     "Supernatural Stamina",
+     1,
+     0.8133
+    ],
+    [
+     "Undying Malice",
+     1,
+     0.8133
+    ],
+    [
+     "Abnormal Endurance",
+     2,
+     0.8867
+    ],
+    [
+     "Bladebrand",
+     2,
+     0.8867
+    ],
+    [
+     "Case of the Stashed Skeleton",
+     2,
+     0.8867
+    ],
+    [
+     "Cast Down",
+     2,
+     0.8867
+    ],
+    [
+     "Deadly Dispute",
+     2,
+     0.8867
+    ],
+    [
+     "Extract a Confession",
+     2,
+     0.8867
+    ],
+    [
+     "Go for the Throat",
+     2,
+     0.8867
+    ],
+    [
+     "Guildsworn Prowler",
+     2,
+     0.8867
+    ],
+    [
+     "Lethal Exploit",
+     2,
+     0.8867
+    ],
+    [
+     "Sheoldred's Edict",
+     2,
+     0.8867
+    ],
+    [
+     "Silumgar Assassin",
+     2,
+     0.8867
+    ],
+    [
+     "Thrill-Kill Assassin",
+     2,
+     0.8867
+    ],
+    [
+     "Arcane Signet",
+     2,
+     0.9033
+    ],
+    [
+     "Barrow-Blade",
+     1,
+     0.98
+    ]
+   ],
+   "unreliable_cards": [
+    [
+     "Lost in the Maze",
+     2,
+     0.41
+    ],
+    [
+     "Fated Return",
+     7,
+     0.4767
+    ],
+    [
+     "Curious Inquiry",
+     1,
+     0.5467
+    ],
+    [
+     "Callidus Assassin",
+     6,
+     0.5533
+    ],
+    [
+     "Coerced to Kill",
+     5,
+     0.6367
+    ],
+    [
+     "Extract from Darkness",
+     5,
+     0.6367
+    ],
+    [
+     "Briarblade Adept",
+     5,
+     0.64
+    ],
+    [
+     "Cairn Wanderer",
+     5,
+     0.64
+    ],
+    [
+     "Deadly Cover-Up",
+     5,
+     0.64
+    ],
+    [
+     "Edgar's Awakening",
+     5,
+     0.64
+    ],
+    [
+     "Aven Heartstabber",
+     2,
+     0.6833
+    ],
+    [
+     "Lazav, Wearer of Faces",
+     2,
+     0.6833
+    ],
+    [
+     "Lazav, the Multifarious",
+     2,
+     0.6833
+    ],
+    [
+     "Tyrant's Scorn",
+     2,
+     0.6833
+    ],
+    [
+     "Warped Physique",
+     2,
+     0.6833
+    ],
+    [
+     "Distant Melody",
+     4,
+     0.6867
+    ],
+    [
+     "Mirrorhall Mimic // Ghastly Mimicry",
+     4,
+     0.6867
+    ],
+    [
+     "Ramses, Assassin Lord",
+     4,
+     0.6867
+    ],
+    [
+     "Assassin's Ink",
+     4,
+     0.7
+    ],
+    [
+     "Illicit Masquerade",
+     4,
+     0.7
+    ],
+    [
+     "Lurking Deadeye",
+     4,
+     0.7
+    ],
+    [
+     "Macabre Reconstruction",
+     4,
+     0.7
+    ],
+    [
+     "Silence the Believers",
+     4,
+     0.7
+    ],
+    [
+     "Skulking Killer",
+     4,
+     0.7
+    ],
+    [
+     "Thorn of the Black Rose",
+     4,
+     0.7
+    ],
+    [
+     "Fae Flight",
+     2,
+     0.7067
+    ],
+    [
+     "Unauthorized Exit",
+     2,
+     0.7067
+    ],
+    [
+     "Outrageous Robbery",
+     2,
+     0.73
+    ],
+    [
+     "Etrata, Deadly Fugitive",
+     3,
+     0.7467
+    ],
+    [
+     "Cryptic Coat",
+     3,
+     0.7467
+    ],
+    [
+     "Lazav, Familiar Stranger",
+     3,
+     0.7467
+    ],
+    [
+     "Recoil",
+     3,
+     0.7467
+    ]
+   ]
+  }
+ },
+ "gauntlet": {
+  "mana_reliability": {
+   "games_analyzed": 200,
+   "summary": "Short on Black, Blue",
+   "over_extended": false,
+   "overall_on_curve_rate": 0.7436,
+   "color_screw_rate": 0.0653,
+   "colors": [
+    {
+     "color": "B",
+     "name": "Black",
+     "sources_in_deck": 34,
+     "peak_requirement": 3,
+     "avg_sources_by_turn": {
+      "1": 0.81,
+      "2": 1.6,
+      "3": 2.27,
+      "4": 2.94,
+      "5": 3.5,
+      "6": 4.08,
+      "7": 4.52,
+      "8": 4.95,
+      "9": 5.24,
+      "10": 5.05,
+      "11": 3.94,
+      "12": 2.87
+     },
+     "on_curve_hit_rate": 0.7474,
+     "verdict": "short",
+     "recommendation": "add ~3 more black sources (deepest demand is 3 pips)"
+    },
+    {
+     "color": "U",
+     "name": "Blue",
+     "sources_in_deck": 26,
+     "peak_requirement": 2,
+     "avg_sources_by_turn": {
+      "1": 0.57,
+      "2": 1.14,
+      "3": 1.66,
+      "4": 2.15,
+      "5": 2.58,
+      "6": 3.06,
+      "7": 3.4,
+      "8": 3.69,
+      "9": 3.92,
+      "10": 3.83,
+      "11": 2.9,
+      "12": 2.08
+     },
+     "on_curve_hit_rate": 0.6642,
+     "verdict": "short",
+     "recommendation": "add ~5 more blue sources (deepest demand is 2 pips)"
+    }
+   ],
+   "curve": [
+    {
+     "turn": 1,
+     "cards_at_cost": 9,
+     "requirement": {
+      "U": 1,
+      "B": 1
+     },
+     "avg_sources": {
+      "U": 0.57,
+      "B": 0.81
+     },
+     "castable_rate": 0.7983,
+     "verdict": "thin"
+    },
+    {
+     "turn": 2,
+     "cards_at_cost": 22,
+     "requirement": {
+      "B": 2,
+      "U": 2
+     },
+     "avg_sources": {
+      "B": 1.6,
+      "U": 1.14
+     },
+     "castable_rate": 0.7843,
+     "verdict": "thin"
+    },
+    {
+     "turn": 3,
+     "cards_at_cost": 15,
+     "requirement": {
+      "U": 1,
+      "B": 2
+     },
+     "avg_sources": {
+      "U": 1.66,
+      "B": 2.27
+     },
+     "castable_rate": 0.7737,
+     "verdict": "thin"
+    },
+    {
+     "turn": 4,
+     "cards_at_cost": 10,
+     "requirement": {
+      "B": 2,
+      "U": 1
+     },
+     "avg_sources": {
+      "B": 2.94,
+      "U": 2.15
+     },
+     "castable_rate": 0.6805,
+     "verdict": "short"
+    },
+    {
+     "turn": 5,
+     "cards_at_cost": 6,
+     "requirement": {
+      "B": 2,
+      "U": 1
+     },
+     "avg_sources": {
+      "B": 3.5,
+      "U": 2.58
+     },
+     "castable_rate": 0.6233,
+     "verdict": "short"
+    },
+    {
+     "turn": 6,
+     "cards_at_cost": 1,
+     "requirement": {
+      "U": 1,
+      "B": 1
+     },
+     "avg_sources": {
+      "U": 3.06,
+      "B": 4.08
+     },
+     "castable_rate": 0.545,
+     "verdict": "short"
+    },
+    {
+     "turn": 7,
+     "cards_at_cost": 1,
+     "requirement": {
+      "B": 3
+     },
+     "avg_sources": {
+      "B": 4.52
+     },
+     "castable_rate": 0.455,
+     "verdict": "short"
+    }
+   ],
+   "card_on_curve": [
+    [
+     "Fated Return",
+     7,
+     0.455
+    ],
+    [
+     "Lost in the Maze",
+     2,
+     0.46
+    ],
+    [
+     "Callidus Assassin",
+     6,
+     0.545
+    ],
+    [
+     "Curious Inquiry",
+     1,
+     0.575
+    ],
+    [
+     "Coerced to Kill",
+     5,
+     0.62
+    ],
+    [
+     "Extract from Darkness",
+     5,
+     0.62
+    ],
+    [
+     "Briarblade Adept",
+     5,
+     0.625
+    ],
+    [
+     "Cairn Wanderer",
+     5,
+     0.625
+    ],
+    [
+     "Deadly Cover-Up",
+     5,
+     0.625
+    ],
+    [
+     "Edgar's Awakening",
+     5,
+     0.625
+    ],
+    [
+     "Distant Melody",
+     4,
+     0.67
+    ],
+    [
+     "Mirrorhall Mimic // Ghastly Mimicry",
+     4,
+     0.67
+    ],
+    [
+     "Ramses, Assassin Lord",
+     4,
+     0.67
+    ],
+    [
+     "Aven Heartstabber",
+     2,
+     0.68
+    ],
+    [
+     "Lazav, Wearer of Faces",
+     2,
+     0.68
+    ],
+    [
+     "Lazav, the Multifarious",
+     2,
+     0.68
+    ],
+    [
+     "Tyrant's Scorn",
+     2,
+     0.68
+    ],
+    [
+     "Warped Physique",
+     2,
+     0.68
+    ],
+    [
+     "Assassin's Ink",
+     4,
+     0.685
+    ],
+    [
+     "Illicit Masquerade",
+     4,
+     0.685
+    ],
+    [
+     "Lurking Deadeye",
+     4,
+     0.685
+    ],
+    [
+     "Macabre Reconstruction",
+     4,
+     0.685
+    ],
+    [
+     "Silence the Believers",
+     4,
+     0.685
+    ],
+    [
+     "Skulking Killer",
+     4,
+     0.685
+    ],
+    [
+     "Thorn of the Black Rose",
+     4,
+     0.685
+    ],
+    [
+     "Fae Flight",
+     2,
+     0.705
+    ],
+    [
+     "Unauthorized Exit",
+     2,
+     0.705
+    ],
+    [
+     "Outrageous Robbery",
+     2,
+     0.72
+    ],
+    [
+     "Etrata, Deadly Fugitive",
+     3,
+     0.745
+    ],
+    [
+     "Cryptic Coat",
+     3,
+     0.745
+    ],
+    [
+     "Lazav, Familiar Stranger",
+     3,
+     0.745
+    ],
+    [
+     "Recoil",
+     3,
+     0.745
+    ],
+    [
+     "Agent of the Fates",
+     3,
+     0.765
+    ],
+    [
+     "Hero's Downfall",
+     3,
+     0.765
+    ],
+    [
+     "Royal Assassin",
+     3,
+     0.765
+    ],
+    [
+     "Witch's Vengeance",
+     3,
+     0.765
+    ],
+    [
+     "Assassinate",
+     3,
+     0.795
+    ],
+    [
+     "Chariot of Victory",
+     3,
+     0.795
+    ],
+    [
+     "Commander's Sphere",
+     3,
+     0.795
+    ],
+    [
+     "Eyeblight Assassin",
+     3,
+     0.795
+    ],
+    [
+     "Midnight Assassin",
+     3,
+     0.795
+    ],
+    [
+     "Orzhov Euthanist",
+     3,
+     0.795
+    ],
+    [
+     "Vraska's Finisher",
+     3,
+     0.795
+    ],
+    [
+     "Death Wind",
+     1,
+     0.805
+    ],
+    [
+     "Gruesome Deformity",
+     1,
+     0.805
+    ],
+    [
+     "Hired Poisoner",
+     1,
+     0.805
+    ],
+    [
+     "Ruthless Ripper",
+     1,
+     0.805
+    ],
+    [
+     "Slice from the Shadows",
+     1,
+     0.805
+    ],
+    [
+     "Supernatural Stamina",
+     1,
+     0.805
+    ],
+    [
+     "Undying Malice",
+     1,
+     0.805
+    ],
+    [
+     "Abnormal Endurance",
+     2,
+     0.865
+    ],
+    [
+     "Bladebrand",
+     2,
+     0.865
+    ],
+    [
+     "Case of the Stashed Skeleton",
+     2,
+     0.865
+    ],
+    [
+     "Cast Down",
+     2,
+     0.865
+    ],
+    [
+     "Deadly Dispute",
+     2,
+     0.865
+    ],
+    [
+     "Extract a Confession",
+     2,
+     0.865
+    ],
+    [
+     "Go for the Throat",
+     2,
+     0.865
+    ],
+    [
+     "Guildsworn Prowler",
+     2,
+     0.865
+    ],
+    [
+     "Lethal Exploit",
+     2,
+     0.865
+    ],
+    [
+     "Sheoldred's Edict",
+     2,
+     0.865
+    ],
+    [
+     "Silumgar Assassin",
+     2,
+     0.865
+    ],
+    [
+     "Thrill-Kill Assassin",
+     2,
+     0.865
+    ],
+    [
+     "Arcane Signet",
+     2,
+     0.885
+    ],
+    [
+     "Barrow-Blade",
+     1,
+     0.975
+    ]
+   ],
+   "unreliable_cards": [
+    [
+     "Fated Return",
+     7,
+     0.455
+    ],
+    [
+     "Lost in the Maze",
+     2,
+     0.46
+    ],
+    [
+     "Callidus Assassin",
+     6,
+     0.545
+    ],
+    [
+     "Curious Inquiry",
+     1,
+     0.575
+    ],
+    [
+     "Coerced to Kill",
+     5,
+     0.62
+    ],
+    [
+     "Extract from Darkness",
+     5,
+     0.62
+    ],
+    [
+     "Briarblade Adept",
+     5,
+     0.625
+    ],
+    [
+     "Cairn Wanderer",
+     5,
+     0.625
+    ],
+    [
+     "Deadly Cover-Up",
+     5,
+     0.625
+    ],
+    [
+     "Edgar's Awakening",
+     5,
+     0.625
+    ],
+    [
+     "Distant Melody",
+     4,
+     0.67
+    ],
+    [
+     "Mirrorhall Mimic // Ghastly Mimicry",
+     4,
+     0.67
+    ],
+    [
+     "Ramses, Assassin Lord",
+     4,
+     0.67
+    ],
+    [
+     "Aven Heartstabber",
+     2,
+     0.68
+    ],
+    [
+     "Lazav, Wearer of Faces",
+     2,
+     0.68
+    ],
+    [
+     "Lazav, the Multifarious",
+     2,
+     0.68
+    ],
+    [
+     "Tyrant's Scorn",
+     2,
+     0.68
+    ],
+    [
+     "Warped Physique",
+     2,
+     0.68
+    ],
+    [
+     "Assassin's Ink",
+     4,
+     0.685
+    ],
+    [
+     "Illicit Masquerade",
+     4,
+     0.685
+    ],
+    [
+     "Lurking Deadeye",
+     4,
+     0.685
+    ],
+    [
+     "Macabre Reconstruction",
+     4,
+     0.685
+    ],
+    [
+     "Silence the Believers",
+     4,
+     0.685
+    ],
+    [
+     "Skulking Killer",
+     4,
+     0.685
+    ],
+    [
+     "Thorn of the Black Rose",
+     4,
+     0.685
+    ],
+    [
+     "Fae Flight",
+     2,
+     0.705
+    ],
+    [
+     "Unauthorized Exit",
+     2,
+     0.705
+    ],
+    [
+     "Outrageous Robbery",
+     2,
+     0.72
+    ],
+    [
+     "Etrata, Deadly Fugitive",
+     3,
+     0.745
+    ],
+    [
+     "Cryptic Coat",
+     3,
+     0.745
+    ],
+    [
+     "Lazav, Familiar Stranger",
+     3,
+     0.745
+    ],
+    [
+     "Recoil",
+     3,
+     0.745
+    ]
+   ]
+  },
+  "simulations_per_matchup": 200,
+  "total_games": 2200,
+  "overall_win_rate": 0.3663636363636364,
+  "weighted_win_rate": 0.35041666666666665,
+  "best_matchup": "Group Hug / Pillowfort",
+  "best_win_rate": 0.985,
+  "worst_matchup": "Combo",
+  "worst_win_rate": 0.0,
+  "speed_score": 25.5,
+  "resilience_score": 46.2,
+  "interaction_score": 12.0,
+  "consistency_score": 66.0,
+  "combos_evaluated": 0,
+  "combo_win_rate_overall": 0.0,
+  "avg_combo_win_turn_overall": 0.0,
+  "top_combo_lines_overall": [],
+  "matchups": [
+   {
+    "archetype": "Aggro",
+    "wins": 45,
+    "losses": 155,
+    "simulations": 200,
+    "win_rate": 0.225,
+    "avg_turns": 9.4,
+    "wins_by_damage": 45,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Midrange",
+    "wins": 75,
+    "losses": 125,
+    "simulations": 200,
+    "win_rate": 0.375,
+    "avg_turns": 11.7,
+    "wins_by_damage": 65,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Control",
+    "wins": 99,
+    "losses": 101,
+    "simulations": 200,
+    "win_rate": 0.495,
+    "avg_turns": 11.9,
+    "wins_by_damage": 30,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Combo",
+    "wins": 0,
+    "losses": 200,
+    "simulations": 200,
+    "win_rate": 0.0,
+    "avg_turns": 7.0,
+    "wins_by_damage": 0,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Stax",
+    "wins": 137,
+    "losses": 63,
+    "simulations": 200,
+    "win_rate": 0.685,
+    "avg_turns": 11.9,
+    "wins_by_damage": 39,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Aristocrats",
+    "wins": 123,
+    "losses": 77,
+    "simulations": 200,
+    "win_rate": 0.615,
+    "avg_turns": 11.4,
+    "wins_by_damage": 83,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Spellslinger",
+    "wins": 41,
+    "losses": 159,
+    "simulations": 200,
+    "win_rate": 0.205,
+    "avg_turns": 11.7,
+    "wins_by_damage": 41,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Tokens / Go-Wide",
+    "wins": 62,
+    "losses": 138,
+    "simulations": 200,
+    "win_rate": 0.31,
+    "avg_turns": 10.1,
+    "wins_by_damage": 62,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Voltron",
+    "wins": 27,
+    "losses": 173,
+    "simulations": 200,
+    "win_rate": 0.135,
+    "avg_turns": 9.1,
+    "wins_by_damage": 27,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Group Hug / Pillowfort",
+    "wins": 197,
+    "losses": 3,
+    "simulations": 200,
+    "win_rate": 0.985,
+    "avg_turns": 11.4,
+    "wins_by_damage": 74,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   },
+   {
+    "archetype": "Turbo / cEDH",
+    "wins": 0,
+    "losses": 200,
+    "simulations": 200,
+    "win_rate": 0.0,
+    "avg_turns": 4.0,
+    "wins_by_damage": 0,
+    "wins_by_combo": 0,
+    "combos_evaluated": 0,
+    "combo_win_rate": 0.0,
+    "avg_combo_win_turn": 0.0
+   }
+  ]
+ },
+ "combos": {
+  "deck_name": "Deck",
+  "match_count": 0,
+  "color_identity": [
+   "B",
+   "U"
+  ],
+  "combos": []
+ },
+ "nearMiss": {
+  "deck_name": "Deck",
+  "match_count": 3,
+  "max_missing": 1,
+  "color_identity": [
+   "B",
+   "U"
+  ],
+  "near_combos": [
+   {
+    "combo_id": "1142-2084",
+    "cards": [
+     "Lazav, the Multifarious",
+     "Mirror-Mad Phantasm"
+    ],
+    "templates": [],
+    "produces": [
+     "Infinite self-mill"
+    ],
+    "color_identity": "UB",
+    "bracket_tag": "P",
+    "description": "Activate Lazav by paying {5}, causing it to become a copy of Mirror-Mad Phantasm until end of turn.\nActivate Lazav using Mirror-Mad Phantasm's ability by paying {1}{U}, shuffling Lazav into your library and milling your library due to not having a card named Mirror-Mad Phantasm in it.",
+    "popularity": 628,
+    "spellbook_url": "https://commanderspellbook.com/combo/1142-2084/",
+    "short_label": "Lazav, the Multifarious + Mirror-Mad Phantasm → Infinite self-mill",
+    "in_deck_cards": [
+     "Lazav, the Multifarious"
+    ],
+    "missing_cards": [
+     "Mirror-Mad Phantasm"
+    ],
+    "missing_count": 1,
+    "unsatisfied_templates": 0
+   },
+   {
+    "combo_id": "745-1061",
+    "cards": [
+     "Timestream Navigator",
+     "Mirrorhall Mimic // Ghastly Mimicry"
+    ],
+    "templates": [],
+    "produces": [
+     "Infinite turns",
+     "Lock"
+    ],
+    "color_identity": "U",
+    "bracket_tag": "R",
+    "description": "During your upkeep, Mirrorhall Mimic // Ghastly Mimicry triggers, creating a token copy of Timestream Navigator.\nDuring your next upkeep, Mirrorhall Mimic // Ghastly Mimicry triggers, creating a token copy of Timestream Navigator.\nActivate the ability of a Timestream Navigator token that did not enter the battlefield this turn by paying {2}{U}{U}, tapping it, and putting it on the bottom of your library, taking an extra turn.\nRepeat from 2.",
+    "popularity": 215,
+    "spellbook_url": "https://commanderspellbook.com/combo/745-1061/",
+    "short_label": "Timestream Navigator + Mirrorhall Mimic // Ghastly Mimicry → Infinite turns",
+    "in_deck_cards": [
+     "Mirrorhall Mimic // Ghastly Mimicry"
+    ],
+    "missing_cards": [
+     "Timestream Navigator"
+    ],
+    "missing_count": 1,
+    "unsatisfied_templates": 0
+   },
+   {
+    "combo_id": "745-2084",
+    "cards": [
+     "Mirror-Mad Phantasm",
+     "Mirrorhall Mimic // Ghastly Mimicry"
+    ],
+    "templates": [],
+    "produces": [
+     "Infinite self-mill"
+    ],
+    "color_identity": "U",
+    "bracket_tag": "S",
+    "description": "Activate Mirrorhall Mimic // Ghastly Mimicry by paying {1}{U}, shuffling Mirrorhall Mimic // Ghastly Mimicry into your library and milling your entire library due to it not having a card named Mirror-Mad Phantasm in it.",
+    "popularity": 197,
+    "spellbook_url": "https://commanderspellbook.com/combo/745-2084/",
+    "short_label": "Mirror-Mad Phantasm + Mirrorhall Mimic // Ghastly Mimicry → Infinite self-mill",
+    "in_deck_cards": [
+     "Mirrorhall Mimic // Ghastly Mimicry"
+    ],
+    "missing_cards": [
+     "Mirror-Mad Phantasm"
+    ],
+    "missing_count": 1,
+    "unsatisfied_templates": 0
+   }
+  ]
+ },
+ "bracket": {
+  "detected_label": "3-optimized",
+  "detected_name": "Optimized",
+  "target_label": "3-optimized",
+  "target_name": "Optimized",
+  "verdict": "under-delivers",
+  "headline": "This deck reads BELOW bracket 3-optimized — the table will out-pace it unless you add speed/interaction.",
+  "delta": 0,
+  "over_signals": [],
+  "under_signals": [
+   "only 4 ramp pieces — bracket 3-optimized floor is 10"
+  ],
+  "recommendations": [
+   "Add 6 ramp piece(s) so the curve actually casts."
+  ],
+  "power_overall": 5.7,
+  "combo_count": 0
+ }
+}

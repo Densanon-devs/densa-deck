@@ -228,9 +228,10 @@ class TestAnalyst:
     """The PC does the thinking; the phone shows the answer."""
 
     def test_analyzing_a_deck(self, paired, monkeypatch):
-        # Pro, said explicitly. This used to pass only because it read the
-        # developer's own licence out of the real home directory.
-        monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
+        # FREE, said explicitly: the structural analysis is free on the
+        # desktop and must be on a linked free phone too. (It once passed
+        # only by reading the developer's own licence from the real home.)
+        monkeypatch.setenv("MTG_ENGINE_TIER", "free")
         _api, bridge = paired
         reply = call(bridge, "analyst/analyze",
                      {"decklist_text": DECKLIST, "name": "Shop brew"})
@@ -241,6 +242,30 @@ class TestAnalyst:
         _api, bridge = paired
         reply = call(bridge, "analyst/combos", {"decklist_text": DECKLIST})
         assert reply is not None
+
+    def test_near_misses_are_free_too(self, paired, monkeypatch):
+        monkeypatch.setenv("MTG_ENGINE_TIER", "free")
+        _api, bridge = paired
+        reply = call(bridge, "analyst/near-miss", {"decklist_text": DECKLIST})
+        assert reply.get("error_type") != "ProRequired"
+
+    @pytest.mark.parametrize("route,field", [
+        ("analyst/goldfish", "kill_rate"),
+        ("analyst/gauntlet", "matchups"),
+    ])
+    def test_pro_gets_the_simulations(self, paired, monkeypatch, route, field):
+        monkeypatch.setenv("MTG_ENGINE_TIER", "pro")
+        _api, bridge = paired
+        reply = call(bridge, route, {"decklist_text": DECKLIST, "name": "Shop brew"})
+        assert reply.get("ok") is not False, reply
+        assert field in reply
+
+    @pytest.mark.parametrize("route", ["analyst/goldfish", "analyst/gauntlet"])
+    def test_free_is_told_the_simulations_are_pro(self, paired, monkeypatch, route):
+        monkeypatch.setenv("MTG_ENGINE_TIER", "free")
+        _api, bridge = paired
+        reply = call(bridge, route, {"decklist_text": DECKLIST})
+        assert reply["error_type"] == "ProRequired"
 
     def test_rule_zero_worksheet(self, paired):
         _api, bridge = paired

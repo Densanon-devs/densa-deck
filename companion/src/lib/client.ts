@@ -27,6 +27,20 @@ export class Unreachable extends Error {
   }
 }
 
+/**
+ * The desktop refused because the feature is Pro and this tier is not.
+ *
+ * Its own class so a screen can show "Pro" where the thing would be, rather
+ * than an error: a paywall is not a fault.
+ */
+export class ProRequired extends Error {
+  readonly proRequired = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProRequired';
+  }
+}
+
 export class Unpaired extends Error {
   constructor(message = 'This phone is no longer paired with the desktop.') {
     super(message);
@@ -116,7 +130,12 @@ export class DesktopClient {
     }
 
     const data = (await response.json()) as T | ApiError;
-    if (isApiError(data)) throw new Error(data.error);
+    if (isApiError(data)) {
+      if ((data as { error_type?: string }).error_type === 'ProRequired') {
+        throw new ProRequired(data.error);
+      }
+      throw new Error(data.error);
+    }
     return data as T;
   }
 

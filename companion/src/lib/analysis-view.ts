@@ -269,3 +269,134 @@ export function analysisView(raw: unknown): AnalysisView {
       typeof u === 'string' ? u : str(obj(u).name)).filter(Boolean),
   };
 }
+
+// ---------------------------------------------------------------- the rest
+// What the desktop's Analyze view adds beyond the structural analysis.
+// Same rules: every field optional and coerced, a missing block is null.
+
+const pct = (v: unknown) => `${Math.round(num(v) * 100)}%`;
+
+export interface GoldfishView {
+  tiles: Array<{ label: string; value: string }>;
+  killTurns: Bar[];
+  mana: { summary: string; onCurve: string; screw: string } | null;
+  combo: { rate: string; turn: string } | null;
+}
+
+export function goldfishView(raw: unknown): GoldfishView | null {
+  const g = obj(raw);
+  if (!Object.keys(g).length) return null;
+  const tiles: GoldfishView['tiles'] = [];
+  if (g.average_kill_turn !== undefined && num(g.kill_rate) > 0) {
+    tiles.push({ label: 'Average kill turn', value: num(g.average_kill_turn).toFixed(1) });
+  }
+  if (g.kill_rate !== undefined) tiles.push({ label: 'Games won by turn ' + str(g.max_turns || 10), value: pct(g.kill_rate) });
+  if (g.commander_cast_rate !== undefined) tiles.push({ label: 'Commander cast', value: pct(g.commander_cast_rate) });
+  if (num(g.average_commander_turn) > 0) tiles.push({ label: 'Commander on turn', value: num(g.average_commander_turn).toFixed(1) });
+  if (g.average_mulligans !== undefined) tiles.push({ label: 'Mulligans per game', value: num(g.average_mulligans).toFixed(2) });
+  if (g.average_spells_cast !== undefined) tiles.push({ label: 'Spells cast', value: num(g.average_spells_cast).toFixed(1) });
+
+  const dist = Object.entries(obj(g.kill_turn_distribution))
+    .map(([turn, share]) => ({ turn: Math.floor(num(turn)), share: num(share) }))
+    .filter((d) => d.share > 0)
+    .sort((a, b) => a.turn - b.turn);
+  const top = Math.max(0.0001, ...dist.map((d) => d.share));
+  const killTurns = dist.map((d) => ({
+    label: `Turn ${d.turn}`, value: d.share, max: top, tone: 'ok' as Tone, display: pct(d.share),
+  }));
+
+  const m = obj(g.mana_reliability);
+  const mana = Object.keys(m).length
+    ? { summary: str(m.summary), onCurve: pct(m.overall_on_curve_rate), screw: pct(m.color_screw_rate) }
+    : null;
+  const combo = num(g.combos_evaluated) > 0
+    ? { rate: pct(g.combo_win_rate), turn: num(g.average_combo_win_turn).toFixed(1) }
+    : null;
+  return { tiles, killTurns, mana, combo };
+}
+
+export interface GauntletView {
+  overall: string;
+  weighted: string;
+  best: string;
+  worst: string;
+  scores: Bar[];
+  matchups: Bar[];
+}
+
+export function gauntletView(raw: unknown): GauntletView | null {
+  const g = obj(raw);
+  const rows = list<Json>(g.matchups);
+  if (!rows.length && g.overall_win_rate === undefined) return null;
+  const score = (k: string, label: string) => ({
+    label, value: num(g[k]), max: 100, tone: tone(num(g[k]) / 100),
+    display: String(Math.round(num(g[k]))),
+  });
+  return {
+    overall: pct(g.overall_win_rate),
+    weighted: pct(g.weighted_win_rate),
+    best: g.best_matchup ? `${str(g.best_matchup)} (${pct(g.best_win_rate)})` : '',
+    worst: g.worst_matchup ? `${str(g.worst_matchup)} (${pct(g.worst_win_rate)})` : '',
+    scores: ([
+      ['speed_score', 'Speed'], ['resilience_score', 'Resilience'],
+      ['interaction_score', 'Interaction'], ['consistency_score', 'Consistency'],
+    ] as Array<[string, string]>).filter(([k]) => g[k] !== undefined).map(([k, l]) => score(k, l)),
+    matchups: rows
+      .map((r) => ({
+        label: str(r.archetype),
+        value: num(r.win_rate),
+        max: 1,
+        tone: tone(num(r.win_rate) / 0.6),   // 60%+ in a 4-player-ish pod is strong
+        display: pct(r.win_rate),
+      }))
+      .sort((a, b) => b.value - a.value),
+  };
+}
+
+export interface ComboLine {
+  cards: string[];
+  missing: string[];
+  produces: string;
+  bracket: string;
+}
+
+export function comboLines(raw: unknown, key: 'combos' | 'near_combos'): ComboLine[] {
+  return list<Json>(obj(raw)[key]).map((c) => ({
+    cards: list<string>(c.cards).map(str),
+    missing: list<string>(c.missing_cards).map(str),
+    produces: list<string>(c.produces).map(str).join(', '),
+    bracket: str(c.bracket_tag),
+  }));
+}
+
+export const BRACKETS: Array<{ label: string; name: string }> = [
+  { label: '1-precon', name: 'Precon' },
+  { label: '2-upgraded', name: 'Upgraded' },
+  { label: '3-optimized', name: 'Optimized' },
+  { label: '4-high-power', name: 'High power' },
+  { label: '5-cedh', name: 'cEDH' },
+];
+
+export interface BracketView {
+  verdict: string;
+  tone: Tone;
+  headline: string;
+  reads: string;
+  signals: string[];
+  recommendations: string[];
+}
+
+export function bracketView(raw: unknown): BracketView | null {
+  const b = obj(raw);
+  if (!b.verdict && !b.headline) return null;
+  const verdict = str(b.verdict);
+  return {
+    verdict: sentence(verdict.replace(/-/g, ' ')),
+    tone: verdict === 'fits' || verdict === 'on-target' ? 'good'
+      : verdict.startsWith('under') || verdict.startsWith('over') ? 'weak' : 'ok',
+    headline: str(b.headline),
+    reads: str(b.detected_name) ? `Reads as ${str(b.detected_name)}` : '',
+    signals: [...list<string>(b.over_signals), ...list<string>(b.under_signals)].map(str).filter(Boolean),
+    recommendations: list<string>(b.recommendations).map(str).filter(Boolean),
+  };
+}

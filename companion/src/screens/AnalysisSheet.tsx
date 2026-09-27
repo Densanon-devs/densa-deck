@@ -7,10 +7,16 @@
  */
 
 import React, { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { analysisView, type Bar, type Tone } from '../lib/analysis-view.ts';
+import {
+  analysisView, bracketView, BRACKETS, comboLines, gauntletView, goldfishView,
+  type Bar, type ComboLine, type Tone,
+} from '../lib/analysis-view.ts';
+import type { DeckAnalysis, Part } from '../lib/deck-analysis.ts';
 
 const TONE: Record<Tone, string> = { good: '#48bb78', ok: '#ecc94b', weak: '#e53e3e' };
 const MANA: Record<string, string> = {
@@ -19,13 +25,29 @@ const MANA: Record<string, string> = {
 const SHOWN = 6;
 
 interface Props {
-  analysis: unknown;
+  analysis: DeckAnalysis;
+  /** Parts still on their way from the PC. */
+  running: boolean;
+  onBracket: (target: string) => void;
   onClose: () => void;
 }
 
-export function AnalysisSheet({ analysis, onClose }: Props) {
+export function AnalysisSheet({ analysis, running, onBracket, onClose }: Props) {
   const insets = useSafeAreaInsets();
-  const v = analysisView(analysis);
+  const r = analysis.results;
+  const v = analysisView(r.basic);
+  const fish = goldfishView(r.goldfish);
+  const gauntlet = gauntletView(r.gauntlet);
+  const combos = comboLines(r.combos, 'combos');
+  const near = comboLines(r.nearMiss, 'near_combos');
+  const [target, setTarget] = useState('');
+  const fit = target ? bracketView(analysis.brackets[target]) : null;
+  const status = (part: Part) => ({
+    locked: analysis.locked.includes(part),
+    error: analysis.errors[part] ?? '',
+    waiting: running && !(part in r) && !analysis.locked.includes(part)
+      && analysis.errors[part] === undefined,
+  });
 
   return (
     <Modal visible animationType="slide" onRequestClose={onClose} statusBarTranslucent>
@@ -115,6 +137,110 @@ export function AnalysisSheet({ analysis, onClose }: Props) {
             </Section>
           ) : null}
 
+          {/* ---- what the desktop's Analyze view adds ---- */}
+          <PartSection title="Goldfish — the deck alone, 1,000 games" {...status('goldfish')}>
+            {fish ? (
+              <>
+                <View style={styles.tiles}>
+                  {fish.tiles.map((t) => (
+                    <View key={t.label} style={styles.tile}>
+                      <Text style={styles.tileValue}>{t.value}</Text>
+                      <Text style={styles.tileLabel}>{t.label}</Text>
+                    </View>
+                  ))}
+                </View>
+                {fish.killTurns.length ? (
+                  <Text style={[styles.small, { marginTop: 4 }]}>When it wins</Text>
+                ) : null}
+                {fish.killTurns.map((b) => <BarRow key={b.label} bar={b} neutral />)}
+                {fish.combo ? (
+                  <Text style={styles.text}>
+                    Wins by combo in {fish.combo.rate} of games, around turn {fish.combo.turn}.
+                  </Text>
+                ) : null}
+                {fish.mana ? (
+                  <Text style={styles.small}>
+                    {fish.mana.summary ? `${fish.mana.summary}. ` : ''}
+                    Spells castable on curve {fish.mana.onCurve}; colour-screwed in {fish.mana.screw} of games.
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+          </PartSection>
+
+          <PartSection title="Matchups — 200 games against each archetype" {...status('gauntlet')}>
+            {gauntlet ? (
+              <>
+                <View style={styles.tiles}>
+                  <View style={styles.tile}>
+                    <Text style={styles.tileValue}>{gauntlet.overall}</Text>
+                    <Text style={styles.tileLabel}>Win rate</Text>
+                  </View>
+                  <View style={styles.tile}>
+                    <Text style={styles.tileValue}>{gauntlet.weighted}</Text>
+                    <Text style={styles.tileLabel}>Weighted by meta</Text>
+                  </View>
+                </View>
+                {gauntlet.best ? <Text style={styles.small}>Best: {gauntlet.best}</Text> : null}
+                {gauntlet.worst ? <Text style={styles.small}>Worst: {gauntlet.worst}</Text> : null}
+                {gauntlet.matchups.map((b) => <BarRow key={b.label} bar={b} />)}
+                {gauntlet.scores.length ? (
+                  <Text style={[styles.small, { marginTop: 4 }]}>How it plays</Text>
+                ) : null}
+                {gauntlet.scores.map((b) => <BarRow key={b.label} bar={b} />)}
+              </>
+            ) : null}
+          </PartSection>
+
+          <PartSection title="Combos in the deck" {...status('combos')}>
+            {'combos' in r ? (
+              combos.length ? (
+                <More items={combos} render={(c) => <ComboRow key={c.cards.join('+')} line={c} />} />
+              ) : <Text style={styles.small}>No complete combo lines.</Text>
+            ) : null}
+          </PartSection>
+
+          <PartSection title="One card away" {...status('nearMiss')}>
+            {'nearMiss' in r ? (
+              near.length ? (
+                <More items={near} render={(c) => <ComboRow key={c.cards.join('+')} line={c} />} />
+              ) : <Text style={styles.small}>Nothing is one card from a combo.</Text>
+            ) : null}
+          </PartSection>
+
+          {'basic' in r ? (
+            <Section title="Bracket fit">
+              <Text style={styles.small}>Which table is it for?</Text>
+              <View style={styles.chips}>
+                {BRACKETS.map((b) => {
+                  const on = target === b.label;
+                  return (
+                    <Pressable
+                      key={b.label}
+                      style={[styles.chip, on && styles.chipOn]}
+                      onPress={() => {
+                        setTarget(b.label);
+                        if (!analysis.brackets[b.label]) onBracket(b.label);
+                      }}
+                    >
+                      <Text style={[styles.chipText, on && styles.chipTextOn]}>{b.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {target && !analysis.brackets[target] ? <ActivityIndicator color="#48bb78" /> : null}
+              {fit ? (
+                <>
+                  <Text style={[styles.grade, { color: TONE[fit.tone] }]}>{fit.verdict}</Text>
+                  {fit.reads ? <Text style={styles.small}>{fit.reads}</Text> : null}
+                  {fit.headline ? <Text style={styles.text}>{fit.headline}</Text> : null}
+                  {fit.signals.map((t) => <Bullet key={t} mark="•" colour="#8a8f9c" text={t} />)}
+                  {fit.recommendations.map((t) => <Bullet key={t} mark="→" colour={TONE.good} text={t} />)}
+                </>
+              ) : null}
+            </Section>
+          ) : null}
+
           {v.types.length ? (
             <Section title="Card types">
               {v.types.map((b) => <BarRow key={b.label} bar={b} neutral />)}
@@ -188,6 +314,10 @@ export function AnalysisSheet({ analysis, onClose }: Props) {
               <Text style={styles.small}>{v.unresolved.join(', ')}</Text>
             </Section>
           ) : null}
+          <Text style={styles.footer}>
+            {running ? 'Still working on some of it…'
+              : `Analysed ${new Date(analysis.at).toLocaleString()}. Kept until the deck changes.`}
+          </Text>
         </ScrollView>
       </View>
     </Modal>
@@ -199,6 +329,60 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
       {children}
+    </View>
+  );
+}
+
+/**
+ * A section that comes from its own request: shown when it lands, "Pro"
+ * when the tier does not include it, its error when it failed, a spinner
+ * while it is on its way -- and nothing at all otherwise.
+ */
+function PartSection({ title, locked, error, waiting, children }: {
+  title: string; locked: boolean; error: string; waiting: boolean;
+  children: React.ReactNode;
+}) {
+  if (locked) {
+    return (
+      <Section title={title}>
+        <Text style={styles.small}>
+          Part of Densa Deck Pro. Activate Pro on your PC and it appears here.
+        </Text>
+      </Section>
+    );
+  }
+  if (error) {
+    return (
+      <Section title={title}>
+        <Text style={styles.problem}>{error}</Text>
+      </Section>
+    );
+  }
+  if (waiting) {
+    return (
+      <Section title={title}>
+        <ActivityIndicator color="#48bb78" />
+      </Section>
+    );
+  }
+  if (!children) return null;
+  return <Section title={title}>{children}</Section>;
+}
+
+function ComboRow({ line }: { line: ComboLine }) {
+  return (
+    <View style={styles.cardRow}>
+      <Text style={styles.text}>
+        {line.cards.map((c, i) => (
+          <Text key={c} style={line.missing.includes(c) ? styles.missing : undefined}>
+            {i ? ' + ' : ''}{c}
+          </Text>
+        ))}
+      </Text>
+      {line.missing.length ? (
+        <Text style={[styles.small, { color: TONE.ok }]}>Missing: {line.missing.join(', ')}</Text>
+      ) : null}
+      {line.produces ? <Text style={styles.small}>{line.produces}</Text> : null}
     </View>
   );
 }
@@ -303,4 +487,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 1, overflow: 'hidden',
   },
   more: { color: '#4a90e2', fontWeight: '600', marginTop: 4 },
+  problem: { color: '#ecc94b', lineHeight: 20 },
+  missing: { color: '#ecc94b', fontWeight: '700' },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    borderColor: '#2d3142', borderWidth: 1, borderRadius: 16,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  chipOn: { borderColor: '#48bb78', backgroundColor: '#1f3a2b' },
+  chipText: { color: '#c9ced9', fontSize: 13 },
+  chipTextOn: { color: '#e4e6eb', fontWeight: '700' },
+  footer: { color: '#8a8f9c', fontSize: 12, textAlign: 'center', marginTop: 4 },
 });

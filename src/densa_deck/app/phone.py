@@ -461,10 +461,19 @@ class PhoneBridge:
     # it is already answered correctly for both tiers without a second gate
     # here that could disagree with the first.
     _PRO_ROUTES: dict[str, tuple[str, str]] = {
-        "analyst/analyze": (
-            "analyst",
-            "Deck analysis is written by the model on your PC, which is a "
-            "Densa Deck Pro feature.",
+        # NOT analyst/analyze. That is the rule engine's structural analysis
+        # -- free on the desktop, where every tier sees the whole Analyze
+        # view -- and it was gated here under a message claiming a model
+        # wrote it, so a linked free phone got no analysis at all.
+        "analyst/goldfish": (
+            "goldfish_simulation",
+            "Goldfish simulation is a Densa Deck Pro feature. The rest of "
+            "the analysis is free.",
+        ),
+        "analyst/gauntlet": (
+            "matchup_gauntlet",
+            "The matchup gauntlet is a Densa Deck Pro feature. The rest of "
+            "the analysis is free.",
         ),
         "analyst/explain": (
             "explain_card",
@@ -757,6 +766,20 @@ class PhoneBridge:
         if route == "analyst/combos":
             return _unwrap(api.detect_combos_for_deck(
                 payload.get("decklist_text", "")))
+        if route == "analyst/near-miss":
+            return _unwrap(api.detect_near_miss_combos_for_deck(
+                payload.get("decklist_text", "")))
+        # The desktop's own defaults (1,000 games; 200 per archetype): both
+        # finish in about a second on a real deck, so the phone need not
+        # settle for less than the PC shows.
+        if route == "analyst/goldfish":
+            return _unwrap(api.run_goldfish(
+                payload.get("decklist_text", ""), payload.get("format"),
+                payload.get("name", "Deck"), sims=1000))
+        if route == "analyst/gauntlet":
+            return _unwrap(api.run_gauntlet(
+                payload.get("decklist_text", ""), payload.get("format"),
+                payload.get("name", "Deck"), sims=200))
         if route == "analyst/bracket":
             return _unwrap(api.assess_bracket_fit(
                 payload.get("decklist_text", ""),

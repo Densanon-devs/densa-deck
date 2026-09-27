@@ -2338,6 +2338,36 @@ ${more}`;
     return this.client.call('analyst/rule0', { decklist_text: decklistText });
   }
 
+  // The rest of the analysis the desktop's Analyze view shows. Near-misses
+  // and bracket fit are free there and free here; the two simulations are
+  // Pro, and the bridge refuses them on a free tier with ProRequired.
+  async nearMissCombos(decklistText: string) {
+    return this.client.call('analyst/near-miss', { decklist_text: decklistText });
+  }
+
+  async bracketFit(decklistText: string, target: string) {
+    return this.client.call('analyst/bracket', {
+      decklist_text: decklistText, target_bracket: target,
+    });
+  }
+
+  async goldfish(decklistText: string, name = 'Deck') {
+    return this.client.call('analyst/goldfish', { decklist_text: decklistText, name });
+  }
+
+  async gauntlet(decklistText: string, name = 'Deck') {
+    return this.client.call('analyst/gauntlet', { decklist_text: decklistText, name });
+  }
+
+  /** A cached analysis, stored on the phone -- see lib/analysis-cache.ts. */
+  async readAnalysisCache(key: string): Promise<string | undefined> {
+    return this.store.getMeta(key);
+  }
+
+  async writeAnalysisCache(key: string, value: string): Promise<void> {
+    await this.store.setMeta(key, value);
+  }
+
   /**
    * What your decks want that you do not own.
    *
