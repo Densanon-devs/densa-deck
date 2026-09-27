@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   Modal,
   Pressable,
   RefreshControl,
@@ -27,6 +28,8 @@ import type { AppState } from '../lib/app-state.ts';
 import { entryKey, printingLabel } from '../lib/decks.ts';
 import type { DeckStore, WishlistRow } from '../lib/decks.ts';
 import type { CatalogueCard, CataloguePrinting } from '../lib/protocol.ts';
+import { artSource } from '../lib/images.ts';
+import { orderForWish } from '../lib/wish-art.ts';
 import { reporting } from './report.ts';
 
 interface Props {
@@ -70,6 +73,26 @@ export function WishlistScreen({ state, decks }: Props) {
     }
   }, [search, state]);
 
+
+  /**
+   * The printings to show for each row, the one to buy first. From the
+   * phone's own index, so the pictures are there in a shop with no signal.
+   */
+  type Shown = { printing_id: string; set_code: string; collector_number: string };
+  const [art, setArt] = useState<Record<string, Shown[]>>({});
+  const [viewing, setViewing] = useState<WishlistRow | null>(null);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const next: Record<string, Shown[]> = {};
+      for (const row of rows) {
+        const all = await state.printingsOf(row.card_name).catch(() => []);
+        next[entryKey(row)] = orderForWish(all, row);
+      }
+      if (live) setArt(next);
+    })();
+    return () => { live = false; };
+  }, [rows, state]);
 
   const load = useCallback(async () => {
     // Two sources, one list: what your decks imply, and what you added by
@@ -203,7 +226,24 @@ export function WishlistScreen({ state, decks }: Props) {
   );
 
 
+  /**
+   * Stop wanting a card you added by hand. Works offline and reaches the PC
+   * on the next sync. A row your DECKS put here has no remove: it is there
+   * because a deck needs the card, and the way off the list is to own it or
+   * take it out of the deck.
+   */
+  const remove = useCallback(
+    async (row: WishlistRow) => {
+      setProblem('');
+      await state.removeFromWishlist(row.card_name);
+      setViewing(null);
+      await load();
+    },
+    [state, load],
+  );
+
   const total = rows.reduce((sum, r) => sum + r.quantity, 0);
+  const fromDecks = rows.filter((r) => r.wantedBy.length).length;
 
   return (
     <View style={styles.screen}>
@@ -211,8 +251,10 @@ export function WishlistScreen({ state, decks }: Props) {
       <Text style={styles.title}>Wishlist</Text>
       <Text style={styles.muted}>
         {rows.length
-          ? `${total} card${total === 1 ? '' : 's'} your decks need that you ` +
-            'don’t own. These aren’t part of your collection.'
+          ? `${total} card${total === 1 ? '' : 's'} wanted` +
+            (fromDecks && fromDecks < rows.length ? ' — some your decks need, some you added'
+              : fromDecks ? ' by your decks' : ', added by you') +
+            '. These aren’t part of your collection. Tap one to see it.'
           : ''}
       </Text>
 
@@ -296,8 +338,17 @@ export function WishlistScreen({ state, decks }: Props) {
           </Text>
         }
         renderItem={({ item }) => (
-          <View style={styles.row}>
+          <Pressable style={styles.row} onPress={() => setViewing(item)}>
             <Text style={styles.need}>{item.quantity}</Text>
+            {art[entryKey(item)]?.[0] ? (
+              <Image
+                source={artSource(art[entryKey(item)]?.[0]?.printing_id ?? '', 'small')}
+                style={styles.thumb}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={[styles.thumb, styles.thumbEmpty]} />
+            )}
             <View style={styles.grow}>
               <Text style={styles.name}>{item.card_name}</Text>
               {/* Which printing to buy, when the deck asked for one. Without
@@ -307,6 +358,7 @@ export function WishlistScreen({ state, decks }: Props) {
                 <Text style={styles.printing}>{printingLabel(item)}</Text>
               ) : null}
               <Text style={styles.muted}>
+                {item.wantedBy.length ? '' : 'Added by you'}
                 {item.wantedBy.map((w) => w.deck_name).join(', ')}
                 {item.wantedBy.length > 1 &&
                 item.quantityAcrossDecks > item.quantity
@@ -328,9 +380,85 @@ export function WishlistScreen({ state, decks }: Props) {
                 {buying === item.card_name ? 'Filing…' : 'Got it'}
               </Text>
             </Pressable>
-          </View>
+            {item.wantedBy.length ? null : (
+              <Pressable
+                style={styles.removeBtn}
+                hitSlop={8}
+                accessibilityLabel={`Remove ${item.card_name} from the wishlist`}
+                onPress={() => void remove(item).catch(reporting('removing it', setProblem))}
+              >
+                <Text style={styles.removeText}>{'✕'}</Text>
+              </Pressable>
+            )}
+          </Pressable>
         )}
       />
+
+      {/*
+        The card itself. The list was names only, so standing in a shop you
+        could not see what you were looking for. The printing to buy comes
+        first; a want by name alone can be swiped through every printing.
+      */}
+      <Modal
+        visible={viewing != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewing(null)}
+        statusBarTranslucent
+      >
+        {viewing ? (
+          <View style={styles.viewBack}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setViewing(null)} />
+            <View style={styles.viewCard}>
+              <Text style={styles.sheetTitle}>{viewing.card_name}</Text>
+              {(art[entryKey(viewing)] ?? []).length ? (
+                <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+                            style={styles.viewPager}>
+                  {(art[entryKey(viewing)] ?? []).slice(0, 30).map((p) => (
+                    <View key={p.printing_id} style={styles.viewPage}>
+                      <Image source={artSource(p.printing_id, 'large')}
+                             style={styles.viewArt} resizeMode="contain" />
+                      <Text style={styles.muted}>
+                        {p.set_code.toUpperCase()} #{p.collector_number}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : (
+                <Text style={styles.muted}>
+                  No picture yet — this card isn’t in the phone’s card index.
+                </Text>
+              )}
+              {(art[entryKey(viewing)] ?? []).length > 1 && !viewing.collector_number ? (
+                <Text style={styles.hint}>Swipe for other printings</Text>
+              ) : null}
+              {printingLabel(viewing) ? (
+                <Text style={styles.printing}>Wanted: {printingLabel(viewing)}</Text>
+              ) : null}
+              <Text style={styles.muted}>
+                {viewing.wantedBy.length
+                  ? `Needed by ${viewing.wantedBy.map((w) => w.deck_name).join(', ')}`
+                  : 'Added by you'}
+              </Text>
+              <View style={styles.viewActions}>
+                <Pressable style={[styles.bought, styles.grow]}
+                           onPress={() => { const r = viewing; setViewing(null); void bought(r); }}>
+                  <Text style={[styles.boughtText, { textAlign: 'center' }]}>Got it</Text>
+                </Pressable>
+                {viewing.wantedBy.length ? null : (
+                  <Pressable style={[styles.removeWide, styles.grow]}
+                             onPress={() => void remove(viewing).catch(reporting('removing it', setProblem))}>
+                    <Text style={styles.removeWideText}>Remove</Text>
+                  </Pressable>
+                )}
+              </View>
+              <Pressable style={styles.sheetClose} onPress={() => setViewing(null)}>
+                <Text style={styles.muted}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+      </Modal>
 
       {/*
         Which printing, when it matters.
@@ -488,4 +616,19 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   add: { color: '#e53e3e', fontSize: 13, fontWeight: '700' },
+  thumb: { width: 44, height: 61, borderRadius: 4, backgroundColor: '#1a1d27' },
+  thumbEmpty: { borderColor: '#2d3142', borderWidth: 1 },
+  removeBtn: { paddingHorizontal: 6, paddingVertical: 4 },
+  removeText: { color: '#8a8f9c', fontSize: 18 },
+  viewBack: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', padding: 16 },
+  viewCard: { backgroundColor: '#161923', borderRadius: 14, padding: 16, gap: 8 },
+  viewPager: { flexGrow: 0 },
+  viewPage: { width: 320, alignItems: 'center', gap: 6 },
+  viewArt: { width: 300, height: 418, borderRadius: 12 },
+  viewActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  removeWide: {
+    borderColor: '#e53e3e', borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 8, alignItems: 'center',
+  },
+  removeWideText: { color: '#fc8181', fontSize: 13, fontWeight: '600' },
 });
