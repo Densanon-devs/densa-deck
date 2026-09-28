@@ -1607,7 +1607,13 @@ class AppApi:
         return {"default_history_limit": value, "effective": value}
 
     @_safe
-    def check_for_updates(self, url: str = "https://toolkit.densanon.com/densa-deck-version.json") -> dict:
+    def check_for_updates_now(self) -> dict:
+        """Settings -> "Check now": checks even when launch checks are off."""
+        return self.check_for_updates(force=True)
+
+    @_safe
+    def check_for_updates(self, url: str = "https://toolkit.densanon.com/densa-deck-version.json",
+                          force: bool = False) -> dict:
         """Check the version JSON on the toolkit site. Mirrors the D-Brief pattern.
 
         Returns `{current, latest, update_available, changelog, download_url}`.
@@ -1618,6 +1624,11 @@ class AppApi:
         import urllib.request
 
         from densa_deck import __version__ as current
+        # Settings -> Updates. Off means no request is made at all (not
+        # "made and ignored"); an explicit "Check now" passes force=True.
+        if not force and not bool(_load_user_prefs().get("check_app_updates", True)):
+            return {"current": current, "latest": None,
+                    "update_available": False, "disabled": True}
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -1716,6 +1727,10 @@ class AppApi:
             "tier": prefs.get("tier", "free"),
             "auto_check_card_db": bool(prefs.get("auto_check_card_db", False)),
             "auto_download_card_db": bool(prefs.get("auto_download_card_db", False)),
+            # ON by default, as in Table of War: one anonymous GET of a
+            # static JSON on launch, a banner, a manual download. Off means
+            # no request at all.
+            "check_app_updates": bool(prefs.get("check_app_updates", True)),
         }
 
     @_safe
@@ -1736,7 +1751,8 @@ class AppApi:
         # Merge the effective new state so the constraint check sees the
         # final values, not just the delta.
         merged = dict(current)
-        allowed_keys = {"auto_check_card_db", "auto_download_card_db"}
+        allowed_keys = {"auto_check_card_db", "auto_download_card_db",
+                        "check_app_updates"}
         for key in allowed_keys:
             if key in prefs:
                 merged[key] = bool(prefs[key])
@@ -1753,6 +1769,7 @@ class AppApi:
             "tier": merged.get("tier", "free"),
             "auto_check_card_db": bool(merged.get("auto_check_card_db", False)),
             "auto_download_card_db": bool(merged.get("auto_download_card_db", False)),
+            "check_app_updates": bool(merged.get("check_app_updates", True)),
         }
 
     @_safe
@@ -4495,11 +4512,11 @@ class AppApi:
 
                 elif key == "combos":
                     from densa_deck.combos import refresh_combo_snapshot
-                    from densa_deck.combos.data import PartialComboRefresh
+                    from densa_deck.combos.data import USER_AGENT_DEFAULT, PartialComboRefresh
                     try:
                         refresh_combo_snapshot(
                             store=self._get_combo_store(),
-                            user_agent="DensaDeck/0.6.0 (combo-fetch)",
+                            user_agent=USER_AGENT_DEFAULT,
                             progress_cb=lambda p, c, note=None: report(
                                 min(0.95, p / 130.0),
                                 note or f"{c:,} combos across {p} pages"),
@@ -6060,7 +6077,7 @@ class AppApi:
         """
         try:
             from densa_deck.combos import refresh_combo_snapshot
-            from densa_deck.combos.data import PartialComboRefresh
+            from densa_deck.combos.data import USER_AGENT_DEFAULT, PartialComboRefresh
             store = self._get_combo_store()
 
             def _on_page(pages: int, combos_seen: int, note: str | None = None):
@@ -6080,7 +6097,7 @@ class AppApi:
 
             written = refresh_combo_snapshot(
                 store=store,
-                user_agent="DensaDeck/0.6.0 (combo-fetch)",
+                user_agent=USER_AGENT_DEFAULT,
                 progress_cb=_on_page,
             )
             self._update_progress(

@@ -24,8 +24,12 @@ Push-Location $RepoRoot
 try {
     # Step 1: PyInstaller — folder mode (faster startup than single-file)
     Write-Host "[1/2] Running PyInstaller..." -ForegroundColor Cyan
-    pyinstaller densa-deck.spec --clean --noconfirm
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed (exit $LASTEXITCODE)" }
+    # Through build_desktop.py, never bare pyinstaller: it refuses to build
+    # without the bundled extras (qrcode, mcp, winrt OCR) and smoke-tests the
+    # frozen exe. A bare pyinstaller on whatever Python is on PATH is how a
+    # build shipped with no MCP server and no pairing QR code.
+    py -3.13 scripts/build_desktop.py
+    if ($LASTEXITCODE -ne 0) { throw "build_desktop.py failed (exit $LASTEXITCODE)" }
 
     # Step 2: Inno Setup
     # Probe the three install paths Inno Setup 6 lands at: 32-bit Program

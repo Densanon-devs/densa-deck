@@ -846,6 +846,22 @@ Mainboard:
         </div>
 
         <div class="settings-row">
+          <h3>App updates</h3>
+          <!-- As in Table of War: one anonymous request for a small version
+               file on launch, a banner, a manual download. Nothing installs
+               itself. Off means the request is not made at all. -->
+          <label class="checkbox-row">
+            <input type="checkbox" id="pref-app-updates" checked>
+            <span>Check for new versions of Densa Deck on launch</span>
+          </label>
+          <div class="setup-action-row">
+            <button id="app-update-check-btn" class="btn btn-outline btn-slim">Check now</button>
+            <span id="app-update-status" class="status-text"></span>
+          </div>
+          <p class="panel-hint subtle">Updates are never installed for you — you choose when to download one.</p>
+        </div>
+
+        <div class="settings-row">
           <h3>Your playgroup</h3>
           <p class="panel-hint">Who you actually sit down with. Recording the
             commanders your pod plays lets Rule 0 worksheets and bracket

@@ -32,6 +32,7 @@ import { lastCheckedInWords } from '../lib/index-freshness.ts';
 import { fractionDone, progressLine }
   from '../lib/index-progress.ts';
 import { describeStage } from '../lib/index-source.ts';
+import { VERSION } from '../lib/version.ts';
 import { pricedInWords } from '../lib/price-refresh.ts';
 import { reporting } from './report.ts';
 
@@ -159,6 +160,31 @@ export function ConnectionScreen({
   const [checking, setChecking] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [autoCheck, setAutoCheckState] = useState(false);
+  // Settings -> App updates. On by default, like the desktop and Table of War.
+  const [appUpdates, setAppUpdates] = useState(true);
+  const [appCheck, setAppCheck] = useState('');
+  const [appUrl, setAppUrl] = useState('');
+  useEffect(() => {
+    let live = true;
+    void state.appUpdatesEnabled().then((on) => { if (live) setAppUpdates(on); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [state]);
+  const checkAppNow = useCallback(async () => {
+    setAppCheck('Checking\u2026');
+    setAppUrl('');
+    try {
+      const found = await state.checkAppUpdate(true);
+      if (found) {
+        setAppCheck(`Densa Deck ${found.latest} is available.`);
+        setAppUrl(found.url);
+      } else {
+        setAppCheck(`You're up to date (${VERSION}).`);
+      }
+    } catch (err) {
+      setAppCheck(`Couldn't check: ${(err as Error)?.message ?? String(err)}`);
+    }
+  }, [state]);
   const [lastLook, setLastLook] = useState(0);
   /*
     Prices, and when they were last made current.
@@ -501,6 +527,42 @@ export function ConnectionScreen({
           once a quarter otherwise. It never downloads anything without
           asking.
         </Text>
+      </View>
+
+      {/* The app itself. Nothing is installed for you: the banner and the
+          button open the download, and you install it. */}
+      <View style={styles.pcOffer}>
+        <Text style={styles.pcTitle}>App updates</Text>
+        <Text style={styles.muted}>This phone has Densa Deck {VERSION}.</Text>
+        <Pressable
+          style={styles.optRow}
+          onPress={() => {
+            const next = !appUpdates;
+            setAppUpdates(next);
+            void state.setAppUpdatesEnabled(next).catch(() => setAppUpdates(!next));
+          }}
+        >
+          <View style={[styles.checkbox, appUpdates && styles.checkboxOn]}>
+            {appUpdates ? <Text style={styles.tick}>{'\u2713'}</Text> : null}
+          </View>
+          <Text style={styles.optLabel}>Tell me when a new version is out</Text>
+        </Pressable>
+        <Pressable
+          style={styles.pcButton}
+          onPress={() => void (appUrl
+            ? Linking.openURL(appUrl).catch(() => undefined)
+            : checkAppNow())}
+        >
+          <Text style={styles.pcButtonText}>
+            {appUrl ? 'Download it' : 'Check now'}
+          </Text>
+        </Pressable>
+        {appUrl ? (
+          <Pressable onPress={() => void Linking.openURL(appUrl).catch(() => undefined)}>
+            <Text style={styles.muted}>Opens the download in your browser.</Text>
+          </Pressable>
+        ) : null}
+        {appCheck ? <Text style={styles.muted}>{appCheck}</Text> : null}
       </View>
 
       {/*

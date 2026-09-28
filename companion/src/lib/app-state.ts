@@ -84,6 +84,8 @@ import {
   scanNeedsYou, scanToSend,
 } from './store.ts';
 import { SyncEngine } from './sync.ts';
+import { MOBILE_FEED_URL, updateFrom, type AppUpdate } from './app-update.ts';
+import { VERSION } from './version.ts';
 
 export type Connection = 'connected' | 'offline' | 'unpaired' | 'unknown';
 
@@ -1023,6 +1025,42 @@ ${more}`;
    * quarterly floor still applies -- a failed lookup must not silently
    * turn the feature off.
    */
+  /** Settings -> App updates. On unless the user switched it off. */
+  async appUpdatesEnabled(): Promise<boolean> {
+    return (await this.store.getMeta(APP_UPDATES_KEY)) !== 'off';
+  }
+
+  async setAppUpdatesEnabled(on: boolean): Promise<void> {
+    await this.store.setMeta(APP_UPDATES_KEY, on ? '' : 'off');
+  }
+
+  /**
+   * A newer Densa Deck for this phone, or null. See lib/app-update.ts.
+   *
+   * Straight to the toolkit site over plain network, not through the PC --
+   * a phone with no PC still needs to hear about updates. Off means no
+   * request is made; `force` is Settings' "Check now". Throws only when
+   * forced, so the on-open check stays silent on a bad connection.
+   */
+  async checkAppUpdate(force = false): Promise<AppUpdate | null> {
+    if (!force && !(await this.appUpdatesEnabled())) return null;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 8000);
+    try {
+      const reply = await this.plainFetch(MOBILE_FEED_URL, {
+        signal: abort.signal,
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      if (!reply.ok) throw new Error(`update check answered ${reply.status}`);
+      return updateFrom(await reply.json(), VERSION);
+    } catch (err) {
+      if (force) throw err;
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async autoCheck(now = Date.now()): Promise<
     { stale: boolean; reason: CheckReason } | null
   > {
@@ -2557,6 +2595,9 @@ function asMoney(value: unknown): number | null {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? n : null;
 }
+
+/** The meta key for Settings -> App updates ('off' when switched off). */
+const APP_UPDATES_KEY = 'app.updates';
 
 export function buildAppState(
   store: LocalStore,

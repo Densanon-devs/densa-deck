@@ -516,6 +516,7 @@ async function bootstrap() {
     });
   }
   watchRemoteChanges();
+  wireAppUpdateSettings();
 }
 
 // ------------------------------ Changes made on the phone ------------------------------
@@ -618,11 +619,52 @@ async function maybePromptStaleCombos() {
   }
 }
 
+// Settings -> App updates. Wired once from bootstrap.
+function wireAppUpdateSettings() {
+  const box = document.getElementById("pref-app-updates");
+  if (box) box.addEventListener("change", async () => {
+    try {
+      await callApi("set_user_preferences", { check_app_updates: !!box.checked });
+    } catch (e) {
+      toast("Saving preference failed: " + e.message, "error");
+    }
+  });
+  const btn = document.getElementById("app-update-check-btn");
+  const status = document.getElementById("app-update-status");
+  if (btn) btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    if (status) status.textContent = "Checking…";
+    try {
+      const r = await callApi("check_for_updates_now");
+      if (r.error) {
+        if (status) status.textContent = "Couldn't check: " + r.error;
+      } else if (r.update_available) {
+        if (status) status.textContent = `v${r.latest} is available — see the banner at the top.`;
+        showAppUpdateBanner(r);
+      } else if (status) {
+        status.textContent = `You're up to date (v${r.current}).`;
+      }
+    } catch (e) {
+      if (status) status.textContent = "Couldn't check: " + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
 async function checkForUpdates() {
   try {
     const r = await callApi("check_for_updates");
+    showAppUpdateBanner(r);
+  } catch (e) {
+    // Silent failure — no update check, no error. User may be offline.
+  }
+}
+
+function showAppUpdateBanner(r) {
+  try {
     if (r && r.update_available && r.latest) {
-      const url = r.download_url || "https://toolkit.densanon.com/mtg-engine.html";
+      const url = r.download_url || "https://toolkit.densanon.com/densa-deck.html";
       els.update_banner_body.innerHTML = `
         <strong>Update available:</strong> v${escape(r.latest)} (you have v${escape(r.current)})
         &nbsp;&middot;&nbsp; <a href="#" id="update-link" class="external-link" data-url="${escape(url)}">Download</a>
@@ -1043,6 +1085,8 @@ async function loadUserPrefsIntoSettings() {
   if (!els.pref_auto_check) return;
   try {
     const prefs = await callApi("get_user_preferences");
+    const appUpdates = document.getElementById("pref-app-updates");
+    if (appUpdates) appUpdates.checked = prefs.check_app_updates !== false;
     els.pref_auto_check.checked = !!prefs.auto_check_card_db;
     els.pref_auto_download.checked = !!prefs.auto_download_card_db;
     els.pref_auto_download.disabled = !prefs.auto_check_card_db;

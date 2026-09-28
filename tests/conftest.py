@@ -18,6 +18,12 @@ def _keep_tests_out_of_the_real_home(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("home")
     for var in ("USERPROFILE", "HOME"):
         monkeypatch.setenv(var, str(home))
+    # tiers._CONFIG_PATH is computed from the home directory at IMPORT, so the
+    # env redirect above never reaches it -- and set_user_preferences writes
+    # through it. A test that switched update checks off turned them off in
+    # the developer's real config.json. Point it at this test's home.
+    import densa_deck.tiers as tiers
+    monkeypatch.setattr(tiers, "_CONFIG_PATH", home / ".densa-deck" / "config.json")
 
 
 @pytest.fixture(autouse=True)

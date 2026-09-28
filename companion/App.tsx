@@ -15,6 +15,7 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import {
   AppState as ForegroundState,
+  Linking,
   Pressable,
   StatusBar,
   StyleSheet,
@@ -158,6 +159,10 @@ function Shell() {
   const [indexed, setIndexed] = useState<boolean | null>(null);
   // Set only by the scheduled check, and only when it found something.
   const [newCards, setNewCards] = useState(false);
+  // A newer Densa Deck for this phone, from the on-open check. Dismissing it
+  // hides it until the next launch; switching the check off in Settings
+  // stops the request entirely.
+  const [appUpdate, setAppUpdate] = useState<{ latest: string; url: string } | null>(null);
 
   /**
    * Nothing in the app is usable until the index is confirmed complete.
@@ -274,6 +279,15 @@ function Shell() {
     unable to reach Scryfall is not news, and an app that cannot open
     because a background check failed would be a poor trade for it.
   */
+  useEffect(() => {
+    if (phase.kind !== 'ready') return;
+    let live = true;
+    void phase.state.checkAppUpdate()
+      .then((found) => { if (live && found) setAppUpdate(found); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [phase]);
+
   useEffect(() => {
     if (phase.kind !== 'ready') return;
     let live = true;
@@ -400,6 +414,22 @@ function Shell() {
             {showConnection ? 'Close' : 'Settings'}
           </Text>
         </Pressable>
+      ) : null}
+
+      {phase.kind === 'ready' && appUpdate ? (
+        <View style={styles.updateBar}>
+          <Pressable
+            style={styles.updateMain}
+            onPress={() => void Linking.openURL(appUpdate.url).catch(() => undefined)}
+          >
+            <Text style={styles.updateText}>
+              Densa Deck {appUpdate.latest} is out {'\u2014'} tap to download
+            </Text>
+          </Pressable>
+          <Pressable onPress={() => setAppUpdate(null)} hitSlop={10}>
+            <Text style={styles.bannerHint}>{'\u2715'}</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {/*
@@ -657,6 +687,13 @@ const styles = StyleSheet.create({
   text_bad: { color: '#fc8181' },
   text_idle: { color: '#8a8f9c' },
   bannerHint: { color: '#8a8f9c', fontSize: 11 },
+  updateBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#1f2f45', paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: '#2d3142',
+  },
+  updateMain: { flex: 1 },
+  updateText: { color: '#9cc9ef', fontSize: 13, fontWeight: '600' },
   tabs: {
     flexDirection: 'row',
     borderTopWidth: 1,
