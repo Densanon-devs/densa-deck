@@ -27,6 +27,10 @@ export function useDeckAnalysis(state: AppState) {
   const [analysis, setAnalysis] = useState<DeckAnalysis | null>(null);
   const [running, setRunning] = useState(false);
   const [problem, setProblem] = useState('');
+  // Per target bracket: a failed fit must reach the SHEET, which is where the
+  // spinner is. `problem` is drawn on the screen behind the modal, so a
+  // failure there left the spinner turning for as long as the sheet was open.
+  const [bracketErrors, setBracketErrors] = useState<Record<string, string>>({});
   const deckRef = useRef<DeckInput | null>(null);
   // Which deck-version the latest request was for: a slow answer for a deck
   // the screen has since moved off must not land on the one now shown.
@@ -38,6 +42,7 @@ export function useDeckAnalysis(state: AppState) {
     deckRef.current = deck;
     setAnalysis(null);
     setProblem('');
+    setBracketErrors({});
     if (!deck?.key || !deck.text.trim()) return;
     const id = identity(deck);
     const signature = deckSignature(deck.text, deck.format);
@@ -47,7 +52,7 @@ export function useDeckAnalysis(state: AppState) {
       setAnalysis(cached);
       if (state.soloForever) return;
       const filled = await refreshMissing(state, deck.text, deck.name, cached,
-        (a) => { if (isCurrent(id)) setAnalysis(a); })
+        (a) => { if (isCurrent(id)) setAnalysis(a); }, deck.format)
         .catch(() => cached);
       if (filled !== cached) await writeCached(state, deck.key as string, filled);
     })();
@@ -63,7 +68,7 @@ export function useDeckAnalysis(state: AppState) {
     try {
       const done = await runAnalysis(state, deck.text, deck.name,
         deckSignature(deck.text, deck.format),
-        (a) => { if (isCurrent(id)) setAnalysis(a); });
+        (a) => { if (isCurrent(id)) setAnalysis(a); }, deck.format);
       if (!done.results.basic) {
         if (isCurrent(id)) {
           setAnalysis(null);
@@ -84,16 +89,17 @@ export function useDeckAnalysis(state: AppState) {
   const bracket = useCallback(async (target: string) => {
     const deck = deckRef.current;
     if (!deck || !analysis) return;
+    setBracketErrors((e) => { const next = { ...e }; delete next[target]; return next; });
     try {
       const next = await addBracket(state, deck.text, analysis, target);
       if (identity(deckRef.current) !== identity(deck)) return;
       setAnalysis(next);
       if (deck.key) await writeCached(state, deck.key, next);
     } catch (err) {
-      setProblem((err as Error).message);
+      setBracketErrors((e) => ({ ...e, [target]: (err as Error)?.message || String(err) }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, analysis]);
 
-  return { analysis, running, problem, show, run, bracket };
+  return { analysis, running, problem, bracketErrors, show, run, bracket };
 }

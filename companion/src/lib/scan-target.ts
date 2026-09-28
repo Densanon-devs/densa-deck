@@ -114,3 +114,28 @@ export function notOwnedLine(name: string, held: Held): string {
   }
   return `${name} is not in your collection yet.`;
 }
+
+/**
+ * Whether a photo the PC could not be reached for may be kept for later.
+ *
+ * The queue can do exactly one thing when it drains: add a copy to a
+ * collection. That is the right thing only for a plain add. Queued in
+ * tag mode it filed a NEW copy of a card the person said they already
+ * own -- the one thing tag mode promises never to do -- and queued from
+ * inside a deck it filed the card into the collection and never put it
+ * in the deck at all. Neither intent survives the queue, so in those
+ * modes the photo is not kept and the screen says why.
+ */
+export function canQueue(plan: ScanPlan): boolean {
+  return plan.file && !plan.deck && !plan.tag;
+}
+
+/** What to say when a photo could not be kept, by what the scan was for. */
+export function notQueuedLine(plan: ScanPlan): string {
+  if (plan.tag) {
+    return "Couldn't reach your PC, and tagging needs a match now \u2014 "
+      + 'nothing was changed. Try again in range, or get the card index.';
+  }
+  return "Couldn't place that card and your PC isn't reachable, so it "
+    + "wasn't added to the deck. Try again, or type the name.";
+}

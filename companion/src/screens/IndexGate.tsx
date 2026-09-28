@@ -102,7 +102,11 @@ export function IndexGate({
   }, [state, onReady]);
 
   // Asked once we are on the question it affects, and not before — it is a
-  // round trip to a machine that is usually off.
+  // round trip to a machine that is usually off. `asks` is bumped by "Try
+  // my PC again": without it in the deps, the retry cleared the answer to
+  // null and nothing ever asked again, leaving the "Checking whether your
+  // PC is awake…" spinner on screen for good.
+  const [asks, setAsks] = useState(0);
   useEffect(() => {
     if (step !== 'index' || standalone) {
       setPcAnswers(standalone ? false : null);
@@ -113,7 +117,7 @@ export function IndexGate({
       .then((yes) => { if (live) setPcAnswers(yes); })
       .catch(() => { if (live) setPcAnswers(false); });
     return () => { live = false; };
-  }, [state, step, standalone]);
+  }, [state, step, standalone, asks]);
 
   const fetchIt = useCallback(async (prefer?: IndexSource) => {
     setProblem('');
@@ -242,7 +246,10 @@ export function IndexGate({
             Your PC is not answering, so it cannot hand the index over right
             now.
           </Text>
-          <Pressable style={styles.go} onPress={() => setPcAnswers(null)}>
+          <Pressable
+            style={styles.go}
+            onPress={() => { setPcAnswers(null); setAsks((n) => n + 1); }}
+          >
             <Text style={styles.goText}>Try my PC again</Text>
           </Pressable>
           <Text style={styles.under}>

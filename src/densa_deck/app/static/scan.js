@@ -82,8 +82,13 @@
       note.textContent = "Typing works fine — " + missing.join("; ") + ".";
       if (camBtn) {
         camBtn.disabled = true;
-        camBtn.title = (cam.install_hint || "") + " " +
-          ((caps.ocr_backends || []).map(b => b.install_hint).filter(Boolean)[0] || "");
+        // The install hints are pip commands, which only a source install
+        // can follow; the packaged app has no pip. There, say what is true.
+        camBtn.title = (!cam.available && caps.can_auto_install === false)
+          ? "Photo scanning isn't available in this build — type the card's " +
+            "name or its bottom-left code, or scan with the phone app."
+          : (cam.install_hint || "") + " " +
+            ((caps.ocr_backends || []).map(b => b.install_hint).filter(Boolean)[0] || "");
       }
     }
   }

@@ -93,65 +93,65 @@
   }
 
   function renderStatus(s) {
+    // Wi-Fi first, Tailscale optional (0.7.0). This card used to stop at
+    // "Tailscale isn't installed" in red and say nothing else, on a machine
+    // whose phone could already pair over Wi-Fi -- the panel's own blurb
+    // said so two lines above.
     const ts = s.tailscale || {};
+    const bridge = s.bridge || {};
     const card = e("phone-status-card");
     const rows = [];
+    const tailnet = !!(ts.installed && ts.running);
 
-    if (!ts.installed) {
-      card.className = "card missing";
-      card.innerHTML =
-        "<strong>Tailscale isn't installed.</strong>" +
-        "<p class=\"panel-hint\">It's what lets your phone reach this machine " +
-        "securely from anywhere, without opening anything to the internet. " +
-        "<a href=\"#\" id=\"phone-ts-link\">tailscale.com/download</a></p>";
-      const link = e("phone-ts-link");
-      if (link) link.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        callApi("open_external", "https://tailscale.com/download").catch(() => {});
-      });
-      return;
-    }
-
-    if (!ts.running) {
-      card.className = "card warning";
-      card.innerHTML = "<strong>Tailscale is installed but not connected.</strong>" +
-        "<p class=\"panel-hint\">Sign in to Tailscale, then come back. " +
-        (ts.backend_state ? "State: " + escape(ts.backend_state) : "") + "</p>";
-      return;
-    }
-
-    rows.push("<strong>This machine:</strong> " + escape(ts.dns_name || "(unknown)"));
-
-    const phones = ts.phones_online || [];
-    if (phones.length) {
-      rows.push("<strong>Phone online:</strong> " +
-                phones.map(p => escape(p.name)).join(", "));
+    if (bridge.lan_host) {
+      rows.push("<strong>On your Wi-Fi as:</strong> " + escape(bridge.lan_host));
     } else {
-      rows.push("<span class=\"subtle\">No phone currently on your tailnet — " +
-                "open the Tailscale app on your phone.</span>");
+      rows.push("<strong>Over Wi-Fi:</strong> <span class=\"subtle\">keep your " +
+                "phone on the same network as this computer.</span>");
+    }
+
+    if (tailnet) {
+      rows.push("<strong>Tailscale:</strong> " + escape(ts.dns_name || "(connected)") +
+                " <span class=\"subtle\">— also works away from home.</span>");
+      const phones = ts.phones_online || [];
+      if (phones.length) {
+        rows.push("<strong>Phone on your tailnet:</strong> " +
+                  phones.map(p => escape(p.name)).join(", "));
+      }
+    } else {
+      rows.push("<span class=\"subtle\">Tailscale: not in use. Optional — it " +
+                "lets your phone reach this computer away from home. " +
+                "<a href=\"#\" id=\"phone-ts-link\">tailscale.com/download</a></span>");
     }
 
     const serve = s.serve || {};
-    const reachable = s.bridge && s.bridge.reachable_from_phone;
-    if (!reachable && s.bridge && s.bridge.running) {
-      // No tailnet address bound means the link would hang, not fail.
+    const reachable = bridge.reachable_from_phone;
+    if (!reachable && bridge.running) {
+      // Neither a LAN nor a tailnet address is bound: nothing a phone could
+      // open, and the link would hang rather than fail.
       rows.push("<span style=\"color:var(--color-warning,#ecc94b)\">" +
-                "No tailnet address on this machine, so your phone can't " +
-                "reach it. Is Tailscale connected?</span>");
+                "No network address on this computer, so your phone can't " +
+                "reach it. Is it connected to your Wi-Fi?</span>");
       card.className = "card warning";
-    } else if (serve.configured) {
+    } else if (serve.configured && tailnet) {
       rows.push("<span style=\"color:var(--color-accent-green,#48bb78)\">" +
                 "Ready over HTTPS — the live camera will work too.</span>");
       card.className = "card ready";
     } else {
       rows.push("<span style=\"color:var(--color-accent-green,#48bb78)\">" +
-                "Ready — your phone connects straight over Tailscale.</span>");
+                "Ready — your phone connects over your Wi-Fi" +
+                (tailnet ? ", or Tailscale when you're out." : ".") + "</span>");
       rows.push("<span class=\"subtle\">Type a card, or use your phone's " +
                 "normal camera app. A live viewfinder would need HTTPS, " +
                 "which isn't set up (and doesn't need to be).</span>");
       card.className = "card ready";
     }
     card.innerHTML = rows.map(r => "<div>" + r + "</div>").join("");
+    const link = e("phone-ts-link");
+    if (link) link.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      callApi("open_external", "https://tailscale.com/download").catch(() => {});
+    });
   }
 
   function renderShare(s) {

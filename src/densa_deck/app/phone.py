@@ -656,10 +656,8 @@ class PhoneBridge:
             return _unwrap(api.collection_remove_from(
                 int(payload.get("item_id", 0) or 0),
                 payload.get("collection_uid", "")))
-        if route == "collection/move":
-            return _unwrap(api.collection_move(
-                int(payload.get("item_id", 0) or 0),
-                payload.get("collection_uid", "")))
+        # (A second "collection/move" branch, by collection_uid, sat here.
+        # The one above always matched first, so it could never run.)
         if route == "overlaps":
             return _unwrap(api.get_overlaps(
                 int(payload.get("min_collections", 2) or 2)))
@@ -732,12 +730,16 @@ class PhoneBridge:
             # bridge is a JSON object, so a typed client can model one
             # envelope shape instead of asking, per route, whether it is
             # about to receive a list.
-            return {"decks": _unwrap(api.list_saved_decks())}
+            #
+            # An error is returned AS an error, not wrapped: inside {"decks":
+            # ...} it slipped past the phone's top-level error check and was
+            # handed to the deck list as if it were one.
+            return _wrap_or_error("decks", api.list_saved_decks())
         if route == "decks/get":
             return _unwrap(api.get_deck_latest(payload.get("deck_id", "")))
         if route == "decks/history":
-            return {"versions": _unwrap(api.get_deck_history(
-                payload.get("deck_id", "")))}
+            return _wrap_or_error("versions", api.get_deck_history(
+                payload.get("deck_id", "")))
         if route == "decks/save":
             # Argument order is (deck_id, name, decklist_text) — getting it
             # wrong saves a deck whose name is its decklist, which the test
@@ -929,17 +931,18 @@ class PhoneBridge:
 
         if not opencv_available():
             return {"ok": False,
-                    "error": "Photo scanning needs OpenCV on the desktop "
-                             "(pip install opencv-python-headless). Typing the "
-                             "card's corner text works without it.",
+                    # Read on the PHONE, where a pip command means nothing.
+                    "error": "Your PC can't read card photos (its photo "
+                             "scanning isn't set up). The phone can identify "
+                             "the card itself, or type the card's corner text.",
                     "error_type": "OpenCvMissing"}
 
         backend = best_ocr_backend()
         if backend.name == "manual":
             return {"ok": False,
-                    "error": "Photo scanning needs an OCR engine on the desktop "
-                             "(pip install winrt-Windows.Media.Ocr). Typing the "
-                             "card's corner text works without it.",
+                    "error": "Your PC has no text-reading engine for card "
+                             "photos. The phone can identify the card itself, "
+                             "or type the card's corner text.",
                     "error_type": "OcrMissing"}
 
         import cv2
@@ -1038,6 +1041,19 @@ def _save_debug_frame(frame, reason: str) -> None:
         save_image(frame, out / f"miss-{stamp}-{safe}.png")
     except Exception:
         pass
+
+
+def _wrap_or_error(key: str, envelope):
+    """`{key: payload}` for a success; the error itself, unwrapped, otherwise.
+
+    For routes that name their payload rather than returning it bare. The
+    phone's client raises only on a TOP-LEVEL `ok: false`, so an error folded
+    inside the named key reached the screen as data.
+    """
+    data = _unwrap(envelope)
+    if isinstance(data, dict) and data.get("ok") is False:
+        return data
+    return {key: data}
 
 
 def _unwrap(envelope):
@@ -1222,7 +1238,6 @@ _CHANGES_AREA = {
     "group/untag-item": "collection",
     "group/from-deck": "collection",
     "new-collection": "collection",
-    "capture": "collection",
     "wishlist/add": "wishlist",
     "wishlist/remove": "wishlist",
     "wishlist/acquire": "wishlist",

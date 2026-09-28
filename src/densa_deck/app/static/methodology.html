@@ -133,11 +133,11 @@ weights:
     <p>After averaging, the score maps to a human-readable tier so Rule 0 conversations don't have to quote decimals:</p>
     <ul>
       <li><strong>jank</strong> &mdash; below 3.0</li>
-      <li><strong>casual</strong> &mdash; 3.0-5.0</li>
-      <li><strong>focused</strong> &mdash; 5.0-7.0</li>
-      <li><strong>optimized</strong> &mdash; 7.0-8.5</li>
-      <li><strong>competitive</strong> &mdash; 8.5-9.5</li>
-      <li><strong>cEDH</strong> &mdash; 9.5+</li>
+      <li><strong>casual</strong> &mdash; 3.0-4.5</li>
+      <li><strong>focused</strong> &mdash; 4.5-6.0</li>
+      <li><strong>optimized</strong> &mdash; 6.0-7.5</li>
+      <li><strong>competitive</strong> &mdash; 7.5-9.0</li>
+      <li><strong>cEDH</strong> &mdash; 9.0+</li>
     </ul>
 
     <h3>Sub-scores</h3>
@@ -163,10 +163,15 @@ weights:
 
     <h2 id="category_scores">Category scores</h2>
     <p class="module-ref"><code>densa_deck.analysis.static</code> score computation.</p>
-    <p>Each category (ramp, card draw, removal, wipes, curve) gets a 0-100 score based on how close the deck is to format-appropriate targets:</p>
-    <div class="formula">if actual is in [target_lo, target_hi]:     score = 100
-if actual &lt; target_lo: score = max(0, 85 - (target_lo - actual) * 10)
-if actual &gt; target_hi: score = max(0, 85 - (actual - target_hi) * 5)</div>
+    <p>Each category (mana base, ramp, card draw, interaction, curve, threats) gets a 0-100 score based on how close the deck is to format-appropriate targets. Hitting the target range scores well but not 100 &mdash; the top of the scale is left for the power estimate to speak to:</p>
+    <div class="formula">ramp, interaction:
+  in [target_lo, target_hi]  score = 85
+  below target_lo            score = max(0, 85 - (target_lo - actual) * 10)
+  above target_hi            score = max(0, 85 - (actual - target_hi) * 5)   (interaction: * 3)
+card draw:    as ramp below target; above target stays 85 (more draw is rarely bad)
+mana base:    in range 90; per land short -8, per land over -5
+curve (avg MV): in range 90; below -20 per point, above -15 per point
+threats:      8+ = 85, 5-7 = 70, fewer = 50 + 5 per threat</div>
     <p>Targets are format-specific. Commander wants 10-15 ramp, 8-12 draw, 8-12 removal, 2-4 wipes, avg CMC 2.5-3.5. Modern wants 0-4 ramp, 4-8 draw, 6-10 removal, 0-3 wipes, avg CMC 2.0-3.0. Penalties for being over-target are gentler than being under-target because "too much ramp" is rarely as bad as "not enough removal".</p>
 
     <h2 id="power_signals">Power-level signals</h2>
@@ -178,7 +183,7 @@ if actual &gt; target_hi: score = max(0, 85 - (actual - target_hi) * 5)</div>
     <div class="formula">P(X &ge; k) = 1 - sum(i=0..k-1) [ C(K,i) * C(D-K, N-i) / C(D, N) ]
 
 where C(n, r) is the binomial coefficient "n choose r".</div>
-    <p>This is exact, not simulated. A 7-card opening hand from a 99-card Commander deck with 38 lands has P(&ge; 3 lands) = ~84%.</p>
+    <p>This is exact, not simulated. A 7-card opening hand from a 99-card Commander deck with 38 lands has P(&ge; 3 lands) &asymp; 55%, and P(2 to 5 lands) &asymp; 82%.</p>
 
     <h2 id="goldfish">Goldfish simulation</h2>
     <p class="module-ref"><code>densa_deck.goldfish.runner.run_goldfish_batch</code>.</p>
@@ -186,9 +191,9 @@ where C(n, r) is the binomial coefficient "n choose r".</div>
     <ol>
       <li><strong>Mulligan phase</strong> &mdash; opening hand is kept if it has 2-5 lands AND at least one relevant non-land. Otherwise we mulligan to 6 and repeat, London-style, down to 4.</li>
       <li><strong>Turn loop</strong> &mdash; play a land if possible, cast the highest-impact spell that fits available mana, attack with everything that can swing. No blocker exists (it's a goldfish).</li>
-      <li><strong>Objective check</strong> &mdash; Commander goldfishes aim for 40 damage total; 60-card formats aim for 20. We record the turn the deck crosses the threshold, or mark the game a "timeout" if it doesn't by turn 12.</li>
+      <li><strong>Objective check</strong> &mdash; Commander goldfishes aim for 40 damage total; 60-card formats aim for 20. We record the turn the deck crosses the threshold, or mark the game a "timeout" if it doesn't by turn 10.</li>
     </ol>
-    <p>Aggregated outputs: average kill turn (including timeouts as turn 13+ so bad decks' slow games are visible in the mean), objective pass rate, mulligan-down-to-N distribution, and key-card access curves (P(turn T saw ramp/draw/wincon)).</p>
+    <p>Aggregated outputs: average kill turn (over the games that got there &mdash; read it beside the kill rate, which counts the games that didn't), kill rate by turn 10, objective pass rate, mulligan-down-to-N distribution, and key-card access curves (P(turn T saw ramp/draw/wincon)).</p>
 
     <h2 id="gauntlet">Matchup gauntlet</h2>
     <p class="module-ref"><code>densa_deck.matchup.gauntlet.run_gauntlet</code> + <code>densa_deck.matchup.simulator.simulate_matchup</code>.</p>

@@ -79,7 +79,10 @@ import type {
 import { DeckStore, entryKey, resolveSlots, wishlistFromDecks } from './decks.ts';
 import type { Deck, DeckEntry, SlotFacts, WishlistRow } from './decks.ts';
 import type { Via } from './reach.ts';
-import { DEFAULT_COLLECTION_UID, LocalStore } from './store.ts';
+import {
+  DEFAULT_COLLECTION_UID, LocalStore, SCAN_UNDECIDED, SCAN_UNREADABLE,
+  scanNeedsYou, scanToSend,
+} from './store.ts';
 import { SyncEngine } from './sync.ts';
 
 export type Connection = 'connected' | 'offline' | 'unpaired' | 'unknown';
@@ -1127,6 +1130,21 @@ ${more}`;
   }
 
   /**
+   * The queue in its two halves: photos the PC has not seen yet, and
+   * photos it has answered that need a person.
+   *
+   * One number for both is what made the queue look stuck: "3 cards
+   * waiting for your PC" never went down for the ones the PC had already
+   * looked at and could not decide, because they were not waiting for the
+   * PC at all -- they were waiting for you, with no button to answer.
+   */
+  async scanQueueCounts(): Promise<{ waiting: number; stuck: number }> {
+    const rows = await this.store.pendingScans();
+    const stuck = rows.filter(scanNeedsYou).length;
+    return { waiting: rows.length - stuck, stuck };
+  }
+
+  /**
    * Work through the queue now that the PC is there.
    *
    * Files only what the PC is CERTAIN of. Anything less waits for a human,
@@ -1160,7 +1178,12 @@ ${more}`;
      * of a card somebody actually scanned four times.
      */
     const guard = new RepeatGuard();
-    for (const scan of await this.store.pendingScans()) {
+    // Only photos the PC has not answered yet. One it already could not
+    // decide, or could not read, will get the same answer again -- the
+    // picture has not changed -- so sending it on every press re-uploaded
+    // the stuck ones for ever while the count never moved. Those wait for
+    // a person now: see reviewNextScan.
+    for (const scan of (await this.store.pendingScans()).filter(scanToSend)) {
       let reply: ScanResult;
       try {
         reply = await identifyPhoto(this.scanClient, scan.image);
@@ -1191,26 +1214,42 @@ ${more}`;
         await this.store.dropScan(scan.scan_uid);
         filed += 1;
       } else if (reply.candidates?.length) {
-        await this.store.markScanTried(scan.scan_uid, 'Needs a decision');
+        await this.store.markScanTried(scan.scan_uid, SCAN_UNDECIDED);
         undecided += 1;
       } else {
-        await this.store.markScanTried(
-          scan.scan_uid,
-          'Could not read this one',
-        );
+        await this.store.markScanTried(scan.scan_uid, SCAN_UNREADABLE);
         failed += 1;
       }
     }
     return { filed, undecided, failed, repeats };
   }
 
-  /** The oldest queued photo the PC could not decide, ready to be shown. */
-  async reviewNextScan(): Promise<
-    { scanUid: string; reply: ScanResult } | null
-  > {
-    const [scan] = await this.store.pendingScans();
+  /**
+   * The next queued photo that needs a person, ready to be shown.
+   *
+   * Stuck ones first -- the PC has answered and could not decide, or could
+   * not read the picture -- since those are the ones only a person can
+   * clear; then the oldest of the rest. The picture comes back with it, so
+   * the screen can show WHICH card this was: by the time the queue is
+   * reviewed the card has long since gone back in the box.
+   *
+   * An unreadable one is not sent again (the answer would not change), so
+   * it can be looked at and discarded with no PC in range. `reply` is null
+   * for those.
+   */
+  async reviewNextScan(): Promise<{
+    scanUid: string;
+    image: string;
+    note: string;
+    reply: ScanResult | null;
+  } | null> {
+    const rows = await this.store.pendingScans();
+    const scan = rows.find(scanNeedsYou) ?? rows[0];
     if (!scan) return null;
-    return { scanUid: scan.scan_uid, reply: await identifyPhoto(this.scanClient, scan.image) };
+    const reply = scan.note === SCAN_UNREADABLE
+      ? null
+      : await identifyPhoto(this.scanClient, scan.image);
+    return { scanUid: scan.scan_uid, image: scan.image, note: scan.note, reply };
   }
 
   /** A human decided. File it and let the photo go. */
@@ -1763,6 +1802,24 @@ ${more}`;
   }
 
   /**
+   * Every set in this phone's own card index, newest first where the
+   * release year is known. No card counts -- that is the PC's number --
+   * but it answers with no PC and no signal, which `sets()` cannot: the
+   * browser's Sets filter used to sit on "Reading the set list..." for
+   * ever on a phone with no PC.
+   */
+  async localSets(): Promise<CatalogueSet[]> {
+    const codes = [...await this.store.catalogueSets()].filter(Boolean);
+    const directory = await this.setDirectory().catch(
+      () => ({} as Record<string, { year: number }>));
+    return codes
+      .map((code) => ({ set_code: code, cards: 0,
+                        year: directory[code.toLowerCase()]?.year ?? 0 }))
+      .sort((a, b) => b.year - a.year || a.set_code.localeCompare(b.set_code))
+      .map(({ set_code, cards }) => ({ set_code, cards }));
+  }
+
+  /**
    * Every printing of one card.
    *
    * The desktop first, because its catalogue is the complete one and
@@ -2168,10 +2225,14 @@ ${more}`;
    * needs the card catalogue and the combo database, neither of which belongs
    * on a phone. Failing honestly is better than a stale cached verdict.
    */
-  async analyze(decklistText: string, name = 'Deck') {
+  // The format goes with every analysis. Without it the PC defaulted to
+  // Commander, so a Modern or Standard deck analysed on the phone was judged
+  // for Commander legality, size and goldfish rules.
+  async analyze(decklistText: string, name = 'Deck', format?: string) {
     return this.client.call('analyst/analyze', {
       decklist_text: decklistText,
       name,
+      ...(format ? { format } : {}),
     });
   }
 
@@ -2351,12 +2412,16 @@ ${more}`;
     });
   }
 
-  async goldfish(decklistText: string, name = 'Deck') {
-    return this.client.call('analyst/goldfish', { decklist_text: decklistText, name });
+  async goldfish(decklistText: string, name = 'Deck', format?: string) {
+    return this.client.call('analyst/goldfish', {
+      decklist_text: decklistText, name, ...(format ? { format } : {}),
+    });
   }
 
-  async gauntlet(decklistText: string, name = 'Deck') {
-    return this.client.call('analyst/gauntlet', { decklist_text: decklistText, name });
+  async gauntlet(decklistText: string, name = 'Deck', format?: string) {
+    return this.client.call('analyst/gauntlet', {
+      decklist_text: decklistText, name, ...(format ? { format } : {}),
+    });
   }
 
   /** A cached analysis, stored on the phone -- see lib/analysis-cache.ts. */

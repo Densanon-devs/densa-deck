@@ -156,9 +156,11 @@ COMMAND_FEATURES: dict[str, str] = {
     "probability": "probability",
     "goldfish": "goldfish_simulation",
     "gauntlet": "matchup_gauntlet",
-    "save": "deck_version_history",
-    "compare": "deck_version_history",
-    "history": "deck_version_history",
+    # FREE, as on the desktop: the limit is how many decks, not whether a
+    # deck gets history (see deck_record above). cmd_save enforces the count.
+    "save": "deck_record",
+    "compare": "deck_record",
+    "history": "deck_record",
     "diff": "deck_diff",
     "practice": "mulligan_practice",
     "analyst": "analyst",  # model-management subcommand — Pro-only
@@ -183,9 +185,13 @@ _CONFIG_PATH = Path.home() / ".densa-deck" / "config.json"
 
 _PRO_UPGRADE_MSG = (
     "[bold yellow]This feature requires Densa Deck Pro.[/bold yellow]\n"
-    "Free tier includes: card search, deck import, static analysis, mana curve, "
-    "basic recommendations, and the hypergeometric calculator (calc).\n"
-    "[dim]To unlock: set MTG_ENGINE_TIER=pro or update ~/.densa-deck/config.json[/dim]"
+    "Free includes: search, analysis, calc, combos, bracket, Rule 0, deck exports "
+    "(MTGA/MTGO/Moxfield), "
+    "your collection and phone scanning, and a few saved decks with history.\n"
+    # It used to say "set MTG_ENGINE_TIER=pro" -- the developer override,
+    # printed to every free user as the way to unlock Pro.
+    "[dim]To unlock: densa-deck license activate YOUR-KEY  "
+    "(https://toolkit.densanon.com/densa-deck.html)[/dim]"
 )
 
 

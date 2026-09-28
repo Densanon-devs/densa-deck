@@ -29,10 +29,14 @@ interface Props {
   /** Parts still on their way from the PC. */
   running: boolean;
   onBracket: (target: string) => void;
+  /** A bracket fit that failed, by target -- shown instead of a spinner. */
+  bracketErrors?: Record<string, string>;
   onClose: () => void;
 }
 
-export function AnalysisSheet({ analysis, running, onBracket, onClose }: Props) {
+export function AnalysisSheet({
+  analysis, running, onBracket, bracketErrors = {}, onClose,
+}: Props) {
   const insets = useSafeAreaInsets();
   const r = analysis.results;
   const v = analysisView(r.basic);
@@ -220,6 +224,7 @@ export function AnalysisSheet({ analysis, running, onBracket, onClose }: Props) 
                       style={[styles.chip, on && styles.chipOn]}
                       onPress={() => {
                         setTarget(b.label);
+                        // Asked again after a failure: tapping it is the retry.
                         if (!analysis.brackets[b.label]) onBracket(b.label);
                       }}
                     >
@@ -228,7 +233,13 @@ export function AnalysisSheet({ analysis, running, onBracket, onClose }: Props) 
                   );
                 })}
               </View>
-              {target && !analysis.brackets[target] ? <ActivityIndicator color="#48bb78" /> : null}
+              {target && !analysis.brackets[target] && bracketErrors[target] ? (
+                <Text style={styles.problem}>
+                  {bracketErrors[target]} — tap the bracket to try again.
+                </Text>
+              ) : target && !analysis.brackets[target] ? (
+                <ActivityIndicator color="#48bb78" />
+              ) : null}
               {fit ? (
                 <>
                   <Text style={[styles.grade, { color: TONE[fit.tone] }]}>{fit.verdict}</Text>

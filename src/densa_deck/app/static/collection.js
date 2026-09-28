@@ -1273,9 +1273,42 @@
     searchTimer = setTimeout(() => { state.query.offset = 0; loadItems(false); }, 180);
   }
 
+  /** Make a new collection from the Group picker, then select it. */
+  async function createGroup() {
+    const input = e("group-new-name");
+    const name = (input?.value || "").trim();
+    if (!name) { toast("Give the collection a name first.", "warn"); return; }
+    let r;
+    try {
+      r = await callApi("create_collection", name);
+    } catch (err) {
+      // Free has a collection limit; the backend says which, in words.
+      toast(err.message, "warn");
+      return;
+    }
+    if (input) input.value = "";
+    await loadGroups();
+    const picker = e("collection-filter-group");
+    const made = (state.collections || []).find(c =>
+      (c.name || "").trim().toLowerCase() === name.toLowerCase());
+    if (picker && made) {
+      picker.value = String(made.collection_id);
+      picker.dispatchEvent(new Event("change"));
+    }
+    toast(`Collection "${name}" is ready. Your phone gets it on its next sync.`, "success");
+    return r;
+  }
+
   function wireOnce() {
     if (state.wired) return;
     state.wired = true;
+
+    const newGroupBtn = e("group-new-btn");
+    if (newGroupBtn) newGroupBtn.addEventListener("click", () => void createGroup());
+    const newGroupName = e("group-new-name");
+    if (newGroupName) newGroupName.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") void createGroup();
+    });
 
     const sync = e("collection-sync-btn");
     const listsClose = e("lists-close-btn");

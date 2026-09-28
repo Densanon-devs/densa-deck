@@ -120,7 +120,7 @@ export function PairScreen({ onPaired, onStandalone, reason }: Props) {
       <Text style={styles.or}>or paste the link</Text>
       <TextInput
         style={styles.input}
-        placeholder="https://100.x.y.z:8791/scan?t=…"
+        placeholder="http://192.168.x.x:8791/scan?t=…"
         placeholderTextColor="#8a8f9c"
         value={typed}
         onChangeText={setTyped}
@@ -137,8 +137,9 @@ export function PairScreen({ onPaired, onStandalone, reason }: Props) {
       </Pressable>
 
       <Text style={styles.note}>
-        Your phone needs to be on the same Tailscale network as your PC. Nothing
-        is sent anywhere else — this talks to your computer directly.
+        Put your phone on the same Wi-Fi as your PC. If both have Tailscale,
+        it works away from home too. Nothing is sent anywhere else — this
+        talks to your computer directly.
       </Text>
 
       {/*
@@ -153,7 +154,11 @@ export function PairScreen({ onPaired, onStandalone, reason }: Props) {
           <Pressable
             style={styles.alone}
             onPress={() => {
-              void onStandalone();
+              // Caught and shown, like Connect: App's handler throws on
+              // purpose ("The local collection is not open yet…") so the
+              // user learns why, and uncaught that message went nowhere.
+              void Promise.resolve(onStandalone()).catch((err) =>
+                setProblem(recordCrash(err, 'going standalone', false).message));
             }}
           >
             <Text style={styles.aloneText}>Use without a PC</Text>

@@ -40,7 +40,7 @@
     },
     {
       id: "save",
-      title: "Save decks for later (Pro)",
+      title: "Save decks for later",
       body: "Click <strong>Save a version</strong> to track your deck over time. Edit the deck later, save again, and <strong>My Decks</strong> shows a full diff history — score deltas, added/removed cards, per-version notes.",
       tab: "analyze",
       target: "#save-btn",
@@ -62,7 +62,7 @@
     {
       id: "done",
       title: "You're all set",
-      body: "Your purchase + license activation flow is in <strong>Settings</strong>. Free tier works forever; Pro unlocks save, goldfish, gauntlet, coach, and export. Have fun deckbuilding.",
+      body: "Your purchase + license activation flow is in <strong>Settings</strong>. Free works forever and keeps a few decks; Pro keeps every deck and unlocks goldfish, gauntlet and the coach. Have fun deckbuilding.",
       // Centered modal, no target
     },
   ];

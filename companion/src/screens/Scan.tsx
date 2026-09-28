@@ -51,9 +51,11 @@ import { finishToFile } from '../lib/finishes.ts';
 import type { DeckEntry } from '../lib/decks.ts';
 import {
   askBeforeDeck,
+  canQueue,
   flashVerb,
   needsCollection,
   notOwnedLine,
+  notQueuedLine,
   planFor,
 } from '../lib/scan-target.ts';
 import type { Held } from '../lib/scan-target.ts';
@@ -241,6 +243,28 @@ export function ScanScreen({ state, deck, onClose }: Props) {
   const [alsoTag, setAlsoTag] = useState<string[]>([]);
   /** How many photographed cards are waiting for the PC. */
   const [queued, setQueued] = useState(0);
+  /**
+   * How many the PC has answered and could not settle -- waiting for YOU.
+   * Counted apart from `queued`, which is what made the old bar a number
+   * that never went down: these were never waiting for the PC at all.
+   */
+  const [stuck, setStuck] = useState(0);
+  /** The queued photo being decided by hand, with its picture. */
+  const [reviewing, setReviewing] = useState<
+    { scanUid: string; image: string; note: string } | null>(null);
+  /**
+   * The reply the review put on screen. The camera and typing keep working
+   * during a review, so the candidates showing may be a LIVE card's; only
+   * when they are this photo's own may a tap file against the photo.
+   * Otherwise a live card was filed into the photo's collection and the
+   * photo, never decided, was deleted.
+   */
+  const reviewReply = useRef<unknown>(null);
+  const refreshQueue = useCallback(async () => {
+    const counts = await state.scanQueueCounts();
+    setQueued(counts.waiting);
+    setStuck(counts.stuck);
+  }, [state]);
   /**
    * Whether this phone holds the card index yet.
    *
@@ -548,9 +572,14 @@ export function ScanScreen({ state, deck, onClose }: Props) {
     [deck, state],
   );
 
+  /**
+   * Put a scanned card in the deck. Resolves true when it went in, false
+   * when it stopped to ask first ("you don't own this") -- the caller must
+   * not flash "added" for a card that is still a question.
+   */
   const intoDeck = useCallback(
-    async (candidate: ScanCandidate, finish: string, added: number) => {
-      if (!deck) return;
+    async (candidate: ScanCandidate, finish: string, added: number): Promise<boolean> => {
+      if (!deck) return false;
       if (!plan.file) {
         // Ask before adding a card the collection does not have.
         const counts = await state.ownedCountsOf(candidate.name);
@@ -563,7 +592,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
         if (askBeforeDeck(plan, held)) {
           setPending({ candidate, finish, qty: added, held });
           setResult(null);
-          return;
+          return false;
         }
       }
       if (plan.file) {
@@ -587,15 +616,32 @@ export function ScanScreen({ state, deck, onClose }: Props) {
       // saved looks like and what keeps the key stable.
       if (finish && finish !== 'nonfoil') slot.finish = finish;
       await deck.onCard(slot, added);
+      return true;
     },
     [deck, plan.file, state, target, alsoTag],
   );
 
+  /**
+   * Do what this scan is for, and say which of those things happened.
+   *
+   *   'added'   a copy went into the collection (or the deck)
+   *   'tagged'  an owned card went into the group
+   *   'asking'  it stopped for a question -- which copy, or "you don't
+   *             own this" -- and the screen is showing it
+   *   'nothing' tag mode, card not owned: nothing to do, and said so
+   *
+   * Every identification path goes through here -- the PC's, the picker's,
+   * and the phone's own -- so none of them can quietly skip the mode. The
+   * phone's own path used to add a copy even in tag mode.
+   */
   const file = useCallback(
     async (candidate: ScanCandidate, finish: string, copy = 1,
-           added = 1) => {
+           added = 1): Promise<'added' | 'tagged' | 'asking' | 'nothing'> => {
       if (deck) {
-        await intoDeck(candidate, finish, added);
+        // The Undo row files and unfiles COLLECTION copies; inside a deck
+        // it would be undoing the wrong thing, so it goes.
+        setLastAdded(null);
+        if (!(await intoDeck(candidate, finish, added))) return 'asking';
         setFlash({
           name: candidate.name,
           copy,
@@ -609,9 +655,12 @@ export function ScanScreen({ state, deck, onClose }: Props) {
         });
         setResult(null);
         setTimeout(() => setFlash(null), 950);
-        return;
+        return 'added';
       }
       if (mode === 'tag') {
+        // Undo is for a card that was ADDED. Left up from an earlier add,
+        // pressing it would take that older card back out.
+        setLastAdded(null);
         const out = await state.tagIntoGroup(
           candidate.printing_id, target, finish,
         );
@@ -621,7 +670,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
           setChoosing(out.candidates);
           setResult(null);
           setStatus('You own this one more than one way — which copy?');
-          return;
+          return 'asking';
         }
         if (!out.owned) {
           // NOT an error, and NOT a reason to add it. "This card is not in
@@ -629,7 +678,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
           // bundle out of a pile.
           setResult(null);
           setStatus(`${candidate.name} isn't in your collection — nothing tagged.`);
-          return;
+          return 'nothing';
         }
         setFlash({
           name: candidate.name,
@@ -645,7 +694,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
           : null);
         setResult(null);
         setTimeout(() => setFlash(null), 950);
-        return;
+        return 'tagged';
       }
       await state.addCard({
         printing_id: candidate.printing_id,
@@ -670,8 +719,9 @@ export function ScanScreen({ state, deck, onClose }: Props) {
       setLastAdded({ candidate, finish, copies: added });
       setResult(null);
       setTimeout(() => setFlash(null), 950);
+      return 'added';
     },
-    [state, target, mode, alsoTag, deck, intoDeck],
+    [state, target, mode, alsoTag, deck, intoDeck, plan],
   );
 
   /** Answer "you own this two ways" by naming the stack. */
@@ -844,34 +894,16 @@ export function ScanScreen({ state, deck, onClose }: Props) {
             const chosen = finishToFile(
               (local.printing as { finishes?: string }).finishes,
               foil || local.foilHint);
-            if (deck) {
-              // Auto scan has to land in the same place the button
-              // does. Two paths to one destination is how one of them
-              // quietly stops matching the other.
-              await intoDeck(
-                { ...(local.printing as unknown as ScanCandidate) },
-                chosen, 1);
-            } else {
-              await state.addCard({
-                printing_id: local.printing.printing_id,
-                card_name: local.printing.name,
-                finish: chosen,
-                collection_uid: target,
-                also_collection_uids: alsoTag,
-              });
-            }
-            setFlash({
-              name: local.printing.name,
-              copy: decision.copy,
-              printingId: local.printing.printing_id,
-              foil: chosen !== 'nonfoil',
-              verb: flashVerb(plan),
-              setCode: local.printing.set_code,
-              number: local.printing.collector_number,
-              rarity: (local.printing as { rarity?: string }).rarity,
-            });
-            setTimeout(() => setFlash(null), 950);
-            setStatus('Added — next card');
+            // Through file(), like every other path. This branch used to
+            // add the card itself: in TAG mode it filed a new copy of a
+            // card the person said they already own, it never set the
+            // Undo row, and inside a deck it flashed "added" while the
+            // "you don't own this" question was still open.
+            const outcome = await file(
+              { ...(local.printing as unknown as ScanCandidate) },
+              chosen, decision.copy);
+            if (outcome === 'added') setStatus('Added — next card');
+            else if (outcome === 'tagged') setStatus('Tagged — next card');
             return;
           }
         } catch (err) {
@@ -894,8 +926,12 @@ export function ScanScreen({ state, deck, onClose }: Props) {
             buzz({ kind: 'card', name: top.name });
             const decision = guard.current.consider(top.name, Date.now());
             if (decision.file) {
-              await file(top, defaultFinish(top, reply), decision.copy);
-              setStatus('Added — next card');
+              const outcome = await file(top, defaultFinish(top, reply), decision.copy);
+              // Only when something happened: tag mode's "isn't in your
+              // collection" and the which-copy question set their own line,
+              // which this used to overwrite with "Added".
+              if (outcome === 'added') setStatus('Added — next card');
+              else if (outcome === 'tagged') setStatus('Tagged — next card');
             } else {
               setStatus('Same card still in frame');
             }
@@ -983,11 +1019,18 @@ export function ScanScreen({ state, deck, onClose }: Props) {
           // these in a row means the desktop has stopped answering and
           // hammering it once a second helps nobody.
           scanner.current.failed();
+          // The queue can only ADD a copy when it drains. In tag mode, or
+          // scanning into a deck, that is not what was asked for -- so the
+          // photo is not kept, and the screen says so. See canQueue.
+          if (!canQueue(plan)) {
+            setStatus(notQueuedLine(plan));
+            return;
+          }
           try {
             // Shrunk before storing, never before sending: the live path
             // hands the PC everything it could have had.
             await state.queueScan(await shrinkForQueue(base64), target, alsoTag);
-            setQueued(await state.queuedScans());
+            await refreshQueue();
             setFlash({ name: 'Saved for later', copy: 1, verb: 'QUEUED' });
             setTimeout(() => setFlash(null), 950);
             setStatus('No PC — kept the picture. It files itself when you are '
@@ -1004,7 +1047,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
     // it has resolved — so every failure reported "no card index on this
     // phone" on a phone holding all 105,000 cards. A stale closure that
     // says the opposite of the truth.
-    [state, file, target, alsoTag, index, promo, foil],
+    [state, file, target, alsoTag, index, promo, foil, plan, refreshQueue],
   );
 
   /**
@@ -1019,7 +1062,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
     setDraining(true);
     try {
       const out = await state.drainScans();
-      setQueued(await state.queuedScans());
+      await refreshQueue();
       if (out.filed || out.undecided || out.failed) {
         const parts = [];
         if (out.filed) parts.push(`filed ${out.filed}`);
@@ -1032,7 +1075,79 @@ export function ScanScreen({ state, deck, onClose }: Props) {
     } finally {
       setDraining(false);
     }
-  }, [state, draining]);
+  }, [state, draining, refreshQueue]);
+
+  /**
+   * Open the next photo that needs a person.
+   *
+   * These existed in app-state -- reviewNextScan, fileQueuedScan,
+   * discardQueuedScan -- with nothing on screen calling them, so a photo
+   * the PC could not decide had no way out on a paired phone at all.
+   */
+  const startReview = useCallback(async () => {
+    setProblem('');
+    try {
+      const next = await state.reviewNextScan();
+      // Every step changes the counts on the bar: refresh them each time,
+      // not only when the queue runs out.
+      await refreshQueue();
+      if (!next) {
+        setReviewing(null);
+        reviewReply.current = null;
+        setResult(null);
+        return;
+      }
+      setReviewing({ scanUid: next.scanUid, image: next.image, note: next.note });
+      reviewReply.current = next.reply ?? null;
+      if (next.reply?.candidates?.length) {
+        setResult(next.reply);
+        setStatus('Which printing was this one?');
+      } else {
+        setResult(null);
+        setStatus("This photo couldn't be read. Discard it and scan the card again.");
+      }
+    } catch (err) {
+      setProblem(recordCrash(err, 'opening the photo', false).message);
+    }
+  }, [state, refreshQueue]);
+
+  /** Decided: file it where it was scanned into, then the next one. */
+  const fileReviewed = useCallback(
+    async (candidate: ScanCandidate, finish: string) => {
+      if (!reviewing) return;
+      await state.fileQueuedScan(reviewing.scanUid, candidate, finish);
+      setFlash({
+        name: candidate.name,
+        copy: 1,
+        verb: 'FILED',
+        printingId: candidate.printing_id,
+        setCode: candidate.set_code,
+        number: candidate.collector_number,
+        rarity: candidate.rarity,
+      });
+      setTimeout(() => setFlash(null), 950);
+      await startReview();
+    },
+    [state, reviewing, startReview],
+  );
+
+  const discardReviewed = useCallback(async () => {
+    if (!reviewing) return;
+    try {
+      await state.discardQueuedScan(reviewing.scanUid);
+      await startReview();
+    } catch (err) {
+      setProblem(recordCrash(err, 'discarding the photo', false).message);
+    }
+  }, [state, reviewing, startReview]);
+
+  const stopReview = useCallback(() => {
+    setReviewing(null);
+    reviewReply.current = null;
+    setResult(null);
+    setStatus('Point at a card');
+    void refreshQueue().catch(() => undefined);
+  }, [refreshQueue]);
 
   const capture = useCallback(async () => {
     const shot = await camera.current?.takePictureAsync({
@@ -1162,7 +1277,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
 
   // What is already waiting, on the way in.
   useEffect(() => {
-    void state.queuedScans().then(setQueued).catch(() => {});
+    void refreshQueue().catch(() => {});
     void state.setDirectory().then(setSets).catch(() => {});
     void state.catalogueReady().then(setIndex).catch(() => {});
   }, [state]);
@@ -1535,8 +1650,9 @@ export function ScanScreen({ state, deck, onClose }: Props) {
             // to do with them is let them go.
             if (state.soloForever) {
               void state.discardQueuedScans()
-                .then(() => state.queuedScans().then(setQueued))
-                .catch(() => {});
+                .then(() => refreshQueue())
+                .catch((err) => setProblem(
+                  recordCrash(err, 'discarding the photos', false).message));
               return;
             }
             void drain();
@@ -1558,6 +1674,51 @@ export function ScanScreen({ state, deck, onClose }: Props) {
                 : offline ? 'Out of range' : 'File them now'}
           </Text>
         </Pressable>
+      ) : null}
+
+      {/*
+        Photos the PC answered and could not settle. Waiting for a person,
+        not for the PC, so they get their own bar and their own button --
+        the old combined count never went down and had nothing to press.
+        Not on a phone with no PC: its whole queue goes via the bar above.
+      */}
+      {stuck > 0 && !state.soloForever && !reviewing ? (
+        <Pressable
+          style={styles.queueBar}
+          disabled={offline}
+          onPress={() => void startReview()}
+        >
+          <Text style={styles.queueText}>
+            {`${stuck} photo${stuck === 1 ? '' : 's'} your PC couldn't settle`}
+          </Text>
+          <Text style={styles.queueAction}>{offline ? 'Out of range' : 'Review'}</Text>
+        </Pressable>
+      ) : null}
+
+      {reviewing ? (
+        <View style={styles.tagPicker}>
+          <Text style={styles.tagPickerTitle}>
+            {reviewing.note || 'A photo from before'}
+          </Text>
+          <Image
+            source={{ uri: reviewing.image.startsWith('data:')
+              ? reviewing.image
+              : `data:image/jpeg;base64,${reviewing.image}` }}
+            style={styles.reviewPhoto}
+            resizeMode="contain"
+          />
+          <Text style={styles.modeHint}>
+            {result?.candidates?.length
+              ? 'Tap the printing below to file it where it was scanned into.'
+              : 'Nothing to choose from in this one.'}
+          </Text>
+          <Pressable style={styles.tagPickerRow} onPress={() => void discardReviewed()}>
+            <Text style={styles.tagPickerText}>Discard this photo</Text>
+          </Pressable>
+          <Pressable style={styles.tagPickerRow} onPress={stopReview}>
+            <Text style={styles.modeHint}>Done for now</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
@@ -1962,13 +2123,17 @@ export function ScanScreen({ state, deck, onClose }: Props) {
               key={`${candidate.printing_id}-${index}`}
               style={styles.candidate}
               onPress={() => {
-                void file(candidate,
-                          foil
-                            ? finishToFile(
-                              (candidate as { finishes?: string[] })
-                                .finishes?.join(','), true)
-                            : defaultFinish(candidate, result),
-                          howMany).catch(
+                const finish = foil
+                  ? finishToFile(
+                    (candidate as { finishes?: string[] })
+                      .finishes?.join(','), true)
+                  : defaultFinish(candidate, result);
+                // A queued photo being decided files where IT was scanned
+                // into, not into whatever is selected now.
+                const act = reviewing && result === reviewReply.current
+                  ? fileReviewed(candidate, finish)
+                  : file(candidate, finish, howMany);
+                void act.catch(
                   (err) => setStatus(recordCrash(err, 'filing', false).message),
                 );
               }}
@@ -2051,6 +2216,7 @@ export function ScanScreen({ state, deck, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
+  reviewPhoto: { width: '100%', height: 220, borderRadius: 8, backgroundColor: '#11151d' },
   screen: { flex: 1, backgroundColor: '#0f1117' },
   scroll: { flex: 1 },
   content: { padding: 14, gap: 10, paddingBottom: 40 },

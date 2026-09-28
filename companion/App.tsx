@@ -52,6 +52,7 @@ import { uuid } from './src/lib/uuid.ts';
 import { LocalStore } from './src/lib/store.ts';
 import { ErrorBoundary, CrashScreen } from './src/screens/Boundary.tsx';
 import { CardScreen } from './src/screens/Card.tsx';
+import { useBackClose } from './src/screens/useBackClose.ts';
 import { CollectionScreen } from './src/screens/Collection.tsx';
 import { OverlapsScreen } from './src/screens/Overlaps.tsx';
 import { ConnectionScreen } from './src/screens/Connection.tsx';
@@ -133,6 +134,10 @@ export default function App() {
 function Shell() {
   const insets = useSafeAreaInsets();
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' });
+  // Bumped to run startup again. Dismissing a startup crash used to clear
+  // the crash and leave "Opening your collection…" on screen for good:
+  // the startup effect had already run and nothing asked it to again.
+  const [startupTries, setStartupTries] = useState(0);
   const [store, setStore] = useState<LocalStore | null>(null);
   // Opens on Scan, for the same reason it is first.
   const [tab, setTab] = useState<Tab>('scan');
@@ -164,6 +169,10 @@ function Shell() {
    */
   const locked = phase.kind === 'ready' && indexed !== true;
   const [openCard, setOpenCard] = useState<StackRow | null>(null);
+  // Back closes whichever panel is open (see useBackClose).
+  useBackClose(showConnection, () => setShowConnection(false));
+  useBackClose(tab === 'collection' && !!openCard, () => setOpenCard(null));
+  useBackClose(tab === 'decks' && !!openDeck, () => setOpenDeck(null));
 
   useEffect(
     () => onCrash((crash) => crash.fatal && setFatal(crash)),
@@ -324,7 +333,7 @@ function Shell() {
     return () => {
       live = false;
     };
-  }, [connect]);
+  }, [connect, startupTries]);
 
   // A floor under each inset: the bars are hidden, so the system reports
   // nothing for them, but a punch-hole camera still occupies the top of the
@@ -344,7 +353,14 @@ function Shell() {
     return (
       <View style={[styles.app, frame]}>
         <StatusBar hidden />
-        <CrashScreen crash={fatal} onDismiss={() => setFatal(null)} />
+        <CrashScreen
+          crash={fatal}
+          onDismiss={() => {
+            setFatal(null);
+            // A crash while starting leaves nothing to go back to: try again.
+            if (phase.kind === 'starting') setStartupTries((n) => n + 1);
+          }}
+        />
       </View>
     );
   }
@@ -467,6 +483,7 @@ function Shell() {
               setPhase({ kind: 'pairing' });
             }}
             onClose={() => setShowConnection(false)}
+            onIndexUpdated={() => setNewCards(false)}
           />
         ) : null}
 

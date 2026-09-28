@@ -253,8 +253,8 @@ Mainboard:
               <span id="build-deck-validity" class="status-text"></span>
             </div>
             <div class="build-deck-actions">
-              <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a new deck (Pro)">Save deck (Pro)</button>
-              <button id="build-suggest-btn" class="btn btn-outline" title="Pro: suggest 8 high-leverage adds based on role gaps + combo near-misses">Suggest adds (Pro)</button>
+              <button id="build-save-btn" class="btn btn-primary" title="Save the current draft as a deck (free keeps a few; Pro keeps them all)">Save deck</button>
+              <button id="build-suggest-btn" class="btn btn-outline" title="Suggest high-leverage adds from role gaps and combo near-misses (free shows the top few; Pro shows the full list)">Suggest adds</button>
               <button id="build-iterate-btn" class="btn btn-outline" title="Propose cut+add changes and preview their structural impact before applying">Iterate</button>
               <button id="build-export-btn" class="btn btn-outline" title="Export this draft as MTGO .dek / MTGA paste / Moxfield text">Export &rarr;</button>
               <button id="build-clear-btn" class="btn btn-outline btn-slim" title="Clear all cards from the current draft">Clear</button>
@@ -429,6 +429,12 @@ Mainboard:
               <select id="collection-filter-group">
                 <option value="">(everything I own)</option>
               </select>
+              <!-- Making one. The Scan tab has always said "make one in the
+                   Collection tab", and there was no way to. -->
+              <div class="group-new">
+                <input type="text" id="group-new-name" placeholder="New collection name" maxlength="80">
+                <button id="group-new-btn" class="btn btn-outline btn-slim">Add</button>
+              </div>
               <p id="group-summary" class="panel-hint subtle"></p>
               <!-- What this pile is made of. Follows the Group picker, so it
                    describes a shelf as readily as the whole collection —
@@ -763,7 +769,7 @@ Mainboard:
 
         <div class="coach-chat">
           <div id="coach-empty" class="editor-empty">
-            <p>Save a deck on the My Decks tab, then start a coach session here. The coach knows your deck's structure, power level, and card list — ask it anything about deckbuilding.</p>
+            <p>Save a deck (from the Analyze or Build tab), then start a coach session here. The coach knows your deck's structure, power level, and card list — ask it anything about deckbuilding.</p>
           </div>
 
           <div id="coach-active" class="coach-active hidden">
@@ -1027,8 +1033,9 @@ Mainboard:
               <div id="phone-qr" class="phone-qr"></div>
               <div class="phone-share-detail">
                 <p class="panel-hint" style="margin-top:0">
-                  Scan this with your phone's camera, or open the link below on
-                  a device signed in to your tailnet.
+                  Scan this with the Densa Deck app (Connect a PC) or your
+                  phone's camera, or paste the link below. Your phone needs to
+                  be on the same Wi-Fi, or on your tailnet if you use Tailscale.
                 </p>
                 <input type="text" id="phone-url" readonly>
                 <div class="setup-action-row" style="margin-top:6px;">
@@ -1196,12 +1203,16 @@ Mainboard:
              modal ends up describing a rule that changed. -->
         <p id="pro-gate-reason" class="pro-gate-reason"></p>
         <p>Your draft is preserved — no work is lost.</p>
-        <p><strong>Free</strong> keeps one deck, with its full version history
-          and win/loss record, plus combo detection, bracket and Rule 0
-          worksheets, and your whole collection.</p>
-        <p><strong>Pro</strong> adds every deck after the first, the complete
+        <!-- No numbers here: the reason line above is filled from the
+             endpoint that refused and states the current limit. This text
+             once said "one deck" while free kept three. -->
+        <p><strong>Free</strong> keeps a few decks, each with its full version
+          history and win/loss record, plus the full analysis, combo detection,
+          bracket and Rule 0 worksheets, duels, exports and your whole
+          collection.</p>
+        <p><strong>Pro</strong> keeps every deck you build, the complete
           suggestion lists, set-completion tracking, bundle pricing, goldfish
-          simulation, matchup gauntlets, duels and the AI coach.</p>
+          simulation, matchup gauntlets and the AI coach.</p>
         <p>Pro is a one-time <strong>$49.99</strong> purchase.
           Activate your key on the Settings tab after purchase.</p>
       </div>

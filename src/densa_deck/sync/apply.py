@@ -59,6 +59,138 @@ def wishlist_event(*, card_name: str, quantity: int, deck_id: str = "",
     }
 
 
+# --------------------------------------------------------------- deck payloads
+#
+# A deck crosses the wire in TWO shapes at once, and each side reads the one
+# it can use best:
+#
+#   desktop shape  `decklist` {name: total across every zone}, `zones`
+#                  {zone: [names]}, `printings` [{card_name, set_code,
+#                  collector_number, printing_id?, quantity, zone}]
+#   phone shape    `commander`, `entries` (the main deck) and `sideboard`,
+#                  each [{name, qty, printing_id?, set_code?, collector_number?}]
+#
+# Before this each side wrote one shape and read the other's badly: the
+# phone's map left the sideboard out and it sent no `printings`, so the PC
+# lost the sideboard and a phone edit wiped the PC deck's chosen printings;
+# the PC sent no arrays, so the phone put sideboard, companion and
+# maybeboard cards in the main deck and dropped every printing.
+#
+# The phone keeps three zones. The desktop's companion and maybeboard are
+# not part of the deck, so they travel in the phone's sideboard rather than
+# its ninety-nine. That relabels them if the phone later edits the deck --
+# a known, visible compromise; cards in the main deck they were not was the
+# alternative.
+
+_PHONE_ZONES = {"commander": "commander", "mainboard": "entries",
+                "sideboard": "sideboard"}
+_ZONE_ORDER = ["commander", "companion", "mainboard", "sideboard", "maybeboard"]
+
+
+def _phone_zone(zone: str) -> str:
+    if zone in ("commander",):
+        return "commander"
+    if zone in ("sideboard", "companion", "maybeboard"):
+        return "sideboard"
+    return "entries"
+
+
+def phone_arrays(decklist: dict, zones: dict, printings: list) -> dict:
+    """The phone shape of a desktop deck: slots per zone, printings kept.
+
+    Counts per zone come from the printing rows first (each is one exact
+    slot with its own quantity), then whatever of a card's total no row
+    accounted for goes to the first zone that lists it -- the same rule
+    `_snapshot_to_text` uses to rebuild the editor text.
+    """
+    out: dict[str, list[dict]] = {"commander": [], "entries": [], "sideboard": []}
+    emitted: dict[str, int] = {}
+    ordered = [z for z in _ZONE_ORDER if z in (zones or {})] + [
+        z for z in (zones or {}) if z not in _ZONE_ORDER]
+    by_zone: dict[str, list[dict]] = {}
+    for row in printings or []:
+        by_zone.setdefault(str(row.get("zone", "") or "mainboard"), []).append(row)
+    for zone in ordered + [z for z in by_zone if z not in ordered]:
+        target = out[_phone_zone(zone)]
+        for row in by_zone.get(zone, []):
+            name = str(row.get("card_name") or row.get("name") or "")
+            qty = int(row.get("quantity", 0) or 0)
+            if not name or qty <= 0:
+                continue
+            slot = {"name": name, "qty": qty}
+            for key in ("printing_id", "set_code", "collector_number"):
+                if row.get(key):
+                    slot[key] = str(row[key])
+            target.append(slot)
+            emitted[name] = emitted.get(name, 0) + qty
+        for name in dict.fromkeys((zones or {}).get(zone, [])):
+            remaining = int((decklist or {}).get(name, 0) or 0) - emitted.get(name, 0)
+            if remaining > 0:
+                target.append({"name": name, "qty": remaining})
+                emitted[name] = emitted.get(name, 0) + remaining
+    # Cards the map has that no zone lists: the main deck, as before zones.
+    for name, qty in (decklist or {}).items():
+        remaining = int(qty or 0) - emitted.get(name, 0)
+        if remaining > 0:
+            out["entries"].append({"name": name, "qty": remaining})
+    return out
+
+
+def desktop_shape(p: dict) -> tuple[dict, dict, list]:
+    """(decklist, zones, printings) from a deck payload in either shape.
+
+    The phone's arrays win when present: they say exactly which zone and
+    which printing each slot is. That also recovers events already in logs
+    from phones that sent a map without the sideboard -- their arrays always
+    had it.
+    """
+    arrays = {z: p.get(z) for z in ("commander", "entries", "sideboard")}
+    if any(isinstance(v, list) and v for v in arrays.values()):
+        decklist: dict[str, int] = {}
+        zones: dict[str, list[str]] = {}
+        printings: list[dict] = []
+        for zone, key in _PHONE_ZONES.items():
+            for slot in arrays.get(key) or []:
+                if not isinstance(slot, dict):
+                    continue
+                name = str(slot.get("name") or "").strip()
+                qty = int(slot.get("qty", 0) or 0)
+                if not name or qty <= 0:
+                    continue
+                decklist[name] = decklist.get(name, 0) + qty
+                if name not in zones.setdefault(zone, []):
+                    zones[zone].append(name)
+                if slot.get("set_code") or slot.get("printing_id"):
+                    row = {"card_name": name, "quantity": qty, "zone": zone,
+                           "set_code": str(slot.get("set_code") or ""),
+                           "collector_number": str(slot.get("collector_number") or "")}
+                    if slot.get("printing_id"):
+                        row["printing_id"] = str(slot["printing_id"])
+                    printings.append(row)
+        return decklist, zones, printings
+    return (dict(p.get("decklist") or {}), dict(p.get("zones") or {}),
+            list(p.get("printings") or []))
+
+
+def deck_payload(deck: dict) -> dict:
+    """A deck ready for the wire, in both shapes (see above)."""
+    decklist = deck.get("decklist", {}) or {}
+    zones = deck.get("zones", {}) or {}
+    printings = deck.get("printings", []) or []
+    return {
+        "deck_id": deck.get("deck_id", ""),
+        "name": deck.get("name", ""),
+        "format": deck.get("format", ""),
+        "notes": deck.get("notes", ""),
+        "decklist": decklist,
+        "zones": zones,
+        "printings": printings,
+        **phone_arrays(decklist, zones, printings),
+        # When the DECK changed, which is not when this was sent.
+        "updated_at": deck.get("updated_at", ""),
+    }
+
+
 def membership_event(*, printing_id: str, collection_uid: str, member: bool,
                      finish: str = "nonfoil", condition: str = "NM",
                      language: str = "en", location: str = "",
@@ -337,12 +469,14 @@ class SyncApplier:
         # A deck is a document: last write wins, because a half-merged
         # decklist is worse than a lost edit. The store does the comparing —
         # it is the only side that knows what it already has.
+        # Either shape: the phone's per-zone arrays when it sent them (they
+        # carry the sideboard and the printings), the desktop's map otherwise.
+        decklist, zones, printings = desktop_shape(p)
         result = self.deck_store.upsert_from_sync(
             deck_id=deck_id, name=p.get("name", "Untitled"),
-            format_=p.get("format", ""), decklist=p.get("decklist", {}),
+            format_=p.get("format", ""), decklist=decklist,
             updated_at=updated_at, notes=p.get("notes", ""),
-            zones=p.get("zones") or {},
-            printings=p.get("printings") or [])
+            zones=zones, printings=printings)
         return {"kind": event.kind, **result}
 
     def _apply_deck_game(self, event: SyncEvent) -> dict:
@@ -434,17 +568,7 @@ class SyncApplier:
         printing gone. Additive, so an older peer that reads only `decklist`
         still understands the event.
         """
-        return self.log.record(KIND_DECK_UPSERT, {
-            "deck_id": deck.get("deck_id", ""),
-            "name": deck.get("name", ""),
-            "format": deck.get("format", ""),
-            "notes": deck.get("notes", ""),
-            "decklist": deck.get("decklist", {}),
-            "zones": deck.get("zones", {}),
-            "printings": deck.get("printings", []),
-            # When the DECK changed, which is not when this was sent.
-            "updated_at": deck.get("updated_at", ""),
-        })
+        return self.log.record(KIND_DECK_UPSERT, deck_payload(deck))
 
     def record_deck_delete(self, deck_id: str) -> SyncEvent:
         return self.log.record(KIND_DECK_DELETE, {"deck_id": deck_id})

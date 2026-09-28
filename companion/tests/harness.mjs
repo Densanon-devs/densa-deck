@@ -88,11 +88,32 @@ export class MemoryDatabase {
           // Only the columns the statement names in its DO UPDATE clause.
           const setters = text.match(/DO UPDATE SET (.+)$/is);
           if (setters) {
-            for (const part of setters[1].split(',')) {
-              const [target, source] = part.split('=').map((x) => x.trim());
-              const col = target.replace(/^\w+\./, '');
-              const from = source.replace('excluded.', '');
-              if (from in row) existing[col] = row[from];
+            // SQL comments out, then split on TOP-LEVEL commas only: a
+            // `COALESCE(excluded.x, t.x)` has a comma of its own.
+            const body = setters[1].replace(/--[^\n]*/g, '');
+            const parts = [];
+            let depth = 0, cur = '';
+            for (const ch of body) {
+              if (ch === '(') depth++;
+              if (ch === ')') depth--;
+              if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; } else cur += ch;
+            }
+            if (cur.trim()) parts.push(cur);
+            for (const part of parts) {
+              const eq = part.indexOf('=');
+              if (eq < 0) continue;
+              const col = part.slice(0, eq).trim().replace(/^\w+\./, '');
+              const source = part.slice(eq + 1).trim();
+              const from = (source.match(/excluded\.(\w+)/i) || [])[1];
+              if (!from || !(from in row)) continue;
+              // COALESCE(NULLIF(excluded.x, ''), t.x) / COALESCE(excluded.x,
+              // t.x): the incoming value unless it is missing.
+              const keepIfMissing = /^COALESCE\s*\(/i.test(source);
+              const incoming = row[from];
+              if (keepIfMissing && (incoming === null || incoming === undefined || incoming === '')) {
+                continue;
+              }
+              existing[col] = incoming;
             }
           }
           continue;

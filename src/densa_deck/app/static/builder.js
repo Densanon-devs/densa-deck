@@ -360,6 +360,9 @@
    */
   window.__builderLoadDraft = function (draft) {
     if (!draft || typeof draft !== "object") return;
+    // An explicitly opened deck wins over the autosaved draft: without this,
+    // opening the tab afterwards loaded the draft from disk on top of it.
+    builderState._draftLoaded = true;
     builderState.deck.name = draft.name || "";
     builderState.deck.format = draft.format || "commander";
     builderState.deck.mainboard = draft.mainboard || {};
@@ -1921,26 +1924,11 @@
     }
   }
 
-  // Hook into the existing switchView() in app.js — it calls `refresh*`
-  // functions for known views. We monkey-patch by wrapping.
-  const origSwitchView = window.__tourSwitchView;
-  window.__tourSwitchView = function (view) {
-    if (origSwitchView) origSwitchView(view);
-    if (view === "build") onBuildViewActivated();
-  };
-
-  // Also hook the click handler — if the user clicks the Build tab
-  // button directly (not through tour.js), app.js calls switchView()
-  // which doesn't exist on window. Fall back to a DOM listener.
-  window.addEventListener("DOMContentLoaded", () => {
-    document.querySelectorAll('.tab-btn[data-view="build"]').forEach(btn => {
-      btn.addEventListener("click", () => {
-        // Debounce the activation so it runs AFTER app.js's switchView
-        // has had a chance to flip the view active class.
-        setTimeout(onBuildViewActivated, 0);
-      });
-    });
-  });
+  // app.js's switchView() calls this for every way into the tab: the tab
+  // button, Ctrl+2, the tour, and "Open in builder" from My Decks. It used
+  // to be wired only to the first and third, so Ctrl+2 or Open in builder
+  // before any click showed a Build tab with no handler on anything.
+  window.__builderActivate = onBuildViewActivated;
 
   // Autosave on page unload — best-effort. Modern browsers often cancel
   // async work during unload, but pywebview routes through window.close

@@ -36,11 +36,11 @@ export interface DeckAnalysis {
 }
 
 export interface AnalysisApi {
-  analyze(text: string, name: string): Promise<unknown>;
+  analyze(text: string, name: string, format?: string): Promise<unknown>;
   combos(text: string): Promise<unknown>;
   nearMissCombos(text: string): Promise<unknown>;
-  goldfish(text: string, name: string): Promise<unknown>;
-  gauntlet(text: string, name: string): Promise<unknown>;
+  goldfish(text: string, name: string, format?: string): Promise<unknown>;
+  gauntlet(text: string, name: string, format?: string): Promise<unknown>;
   bracketFit(text: string, target: string): Promise<unknown>;
 }
 
@@ -138,6 +138,7 @@ export async function runAnalysis(
   name: string,
   signature: string,
   onUpdate: (a: DeckAnalysis) => void,
+  format?: string,
 ): Promise<DeckAnalysis> {
   const a = emptyAnalysis(signature);
   const publish = () => onUpdate({ ...a, results: { ...a.results },
@@ -156,14 +157,14 @@ export async function runAnalysis(
     publish();
   };
 
-  await run('basic', () => api.analyze(text, name));
+  await run('basic', () => api.analyze(text, name, format));
   if (!a.results.basic) return a;   // nothing else is worth asking
 
   await Promise.all([
     run('combos', () => api.combos(text)),
     run('nearMiss', () => api.nearMissCombos(text)),
-    run('goldfish', () => api.goldfish(text, name)),
-    run('gauntlet', () => api.gauntlet(text, name)),
+    run('goldfish', () => api.goldfish(text, name, format)),
+    run('gauntlet', () => api.gauntlet(text, name, format)),
   ]);
   a.at = new Date().toISOString();
   return a;
@@ -191,6 +192,7 @@ export async function refreshMissing(
   name: string,
   cached: DeckAnalysis,
   onUpdate: (a: DeckAnalysis) => void,
+  format?: string,
 ): Promise<DeckAnalysis> {
   const wanted = PARTS.filter((p) => p !== 'basic' &&
     (cached.locked.includes(p) || cached.errors[p] !== undefined || !(p in cached.results)));
@@ -203,8 +205,8 @@ export async function refreshMissing(
   const calls: Record<Exclude<Part, 'basic'>, () => Promise<unknown>> = {
     combos: () => api.combos(text),
     nearMiss: () => api.nearMissCombos(text),
-    goldfish: () => api.goldfish(text, name),
-    gauntlet: () => api.gauntlet(text, name),
+    goldfish: () => api.goldfish(text, name, format),
+    gauntlet: () => api.gauntlet(text, name, format),
   };
   await Promise.all(wanted.map(async (p) => {
     try {

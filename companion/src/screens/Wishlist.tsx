@@ -210,10 +210,10 @@ export function WishlistScreen({ state, decks }: Props) {
         await state.acquireFromWishlist(printingId, row.card_name, 1);
         await refresh();
       } catch (err) {
-        setProblem(
-          `${(err as Error).message}. Filing a card you bought happens on ` +
-            'your PC, so it needs your PC to be reachable.',
-        );
+        // Filing it is local (acquireFromWishlist writes here and queues the
+        // PC), so the old "needs your PC to be reachable" was wrong -- and
+        // shown even to phones with no PC.
+        reporting('filing it', setProblem)(err);
       } finally {
         setBuying('');
       }
@@ -487,8 +487,8 @@ export function WishlistScreen({ state, decks }: Props) {
               <ActivityIndicator color="#8a8f9c" style={styles.sheetSpinner} />
             ) : variants.length === 0 ? (
               <Text style={styles.muted}>
-                No printings came back. Your PC has to be reachable for this —
-                the phone only knows the printings you own.
+                No printings came back. This card isn’t in the phone’s card
+                index — check the name, or refresh the index in Settings.
               </Text>
             ) : (
               <ScrollView style={styles.sheetList}>

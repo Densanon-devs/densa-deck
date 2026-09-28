@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 
 import { checkCollectionName } from '../lib/collections.ts';
+import { DEFAULT_COLLECTION_UID } from '../lib/store.ts';
 import type { CollectionRow } from '../lib/store.ts';
 
 interface Props {
@@ -36,6 +37,8 @@ interface Props {
   showCounts?: boolean;
   /** Offered only where deleting makes sense. The scanner does not. */
   onDelete?: (uid: string, name: string) => Promise<void>;
+  /** Offered where deleting is. Renaming existed in the app with no button. */
+  onRename?: (uid: string, name: string) => Promise<void>;
 }
 
 export function CollectionBar({
@@ -46,6 +49,7 @@ export function CollectionBar({
   includeEverything = false,
   showCounts = true,
   onDelete,
+  onRename,
 }: Props) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -55,6 +59,29 @@ export function CollectionBar({
   // collection from a list of chips is one mis-tap away otherwise, and the
   // undo is "make it again and re-file everything".
   const [confirming, setConfirming] = useState('');
+  // The collection being renamed, and the name being typed for it.
+  const [renaming, setRenaming] = useState('');
+  const [newName, setNewName] = useState('');
+
+  const rename = useCallback(async () => {
+    if (!onRename || !renaming) return;
+    const others = collections.filter((c) => c.collection_uid !== renaming);
+    const verdict = checkCollectionName(newName, others);
+    if (!verdict.ok) {
+      setProblem(verdict.reason ?? 'That name will not do.');
+      return;
+    }
+    setBusy(true);
+    setProblem('');
+    try {
+      await onRename(renaming, verdict.name);
+      setRenaming('');
+    } catch (err) {
+      setProblem((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, [onRename, renaming, newName, collections]);
 
   const create = useCallback(async () => {
     const verdict = checkCollectionName(name, collections);
@@ -148,9 +175,34 @@ export function CollectionBar({
         </View>
       ) : null}
 
-      {onDelete && selected && !entries.every((e) => e.collection_uid !== selected) ? (
+      {/*
+        Not for the Main Collection: the store never deletes it, so "Delete"
+        there only jumped the selection to Everything while the chip stayed
+        -- and still queued a delete for the PC.
+      */}
+      {(onDelete || onRename) && selected && selected !== DEFAULT_COLLECTION_UID
+        && !entries.every((e) => e.collection_uid !== selected) ? (
         <View style={styles.manage}>
-          {confirming === selected ? (
+          {renaming === selected ? (
+            <>
+              <TextInput
+                style={styles.input}
+                value={newName}
+                onChangeText={setNewName}
+                placeholder="New name"
+                placeholderTextColor="#8a8f9c"
+                autoFocus
+                onSubmitEditing={() => void rename()}
+                returnKeyType="done"
+              />
+              <Pressable style={styles.make} disabled={busy} onPress={() => void rename()}>
+                <Text style={styles.makeText}>{busy ? '…' : 'Save'}</Text>
+              </Pressable>
+              <Pressable style={styles.cancel} onPress={() => setRenaming('')}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </Pressable>
+            </>
+          ) : confirming === selected ? (
             <>
               <Text style={styles.warn}>
                 Delete this collection? The cards stay in your collection —
@@ -161,7 +213,7 @@ export function CollectionBar({
                 disabled={busy}
                 onPress={() => {
                   const target = entries.find((e) => e.collection_uid === selected);
-                  if (!target) return;
+                  if (!target || !onDelete) return;
                   setBusy(true);
                   void onDelete(selected, target.name)
                     .then(() => {
@@ -181,12 +233,29 @@ export function CollectionBar({
               </Pressable>
             </>
           ) : (
-            <Pressable
-              style={styles.manageButton}
-              onPress={() => setConfirming(selected)}
-            >
-              <Text style={styles.manageText}>Delete this collection</Text>
-            </Pressable>
+            <>
+              {onRename ? (
+                <Pressable
+                  style={styles.manageButton}
+                  onPress={() => {
+                    const current = entries.find((e) => e.collection_uid === selected);
+                    setNewName(current?.name ?? '');
+                    setRenaming(selected);
+                    setConfirming('');
+                  }}
+                >
+                  <Text style={styles.manageText}>Rename</Text>
+                </Pressable>
+              ) : null}
+              {onDelete ? (
+                <Pressable
+                  style={styles.manageButton}
+                  onPress={() => setConfirming(selected)}
+                >
+                  <Text style={styles.manageText}>Delete this collection</Text>
+                </Pressable>
+              ) : null}
+            </>
           )}
         </View>
       ) : null}

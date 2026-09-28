@@ -340,6 +340,31 @@ export type CatalogueRow =
    (number | null)?, (number | null)?, string?, (number | null)?, string?];
 
 /**
+ * What the PC said about a queued photo, as `markScanTried` records it.
+ *
+ * Named, because the drain writes them and the review reads them, and a
+ * string typed twice is a string that drifts.
+ */
+export const SCAN_UNDECIDED = 'Needs a decision';
+export const SCAN_UNREADABLE = 'Could not read this one';
+
+/**
+ * Whether a queued photo is waiting on a PERSON rather than on the PC.
+ *
+ * Once the PC has answered -- it could not choose between printings, or
+ * could not read the picture at all -- sending the same picture again gets
+ * the same answer. Those need somebody to pick or discard.
+ */
+export function scanNeedsYou(row: { note?: string }): boolean {
+  return Boolean(row.note);
+}
+
+/** Whether the drain should send this one: the PC has not answered it yet. */
+export function scanToSend(row: { note?: string }): boolean {
+  return !scanNeedsYou(row);
+}
+
+/**
  * The extra lists a queued scan was headed for.
  *
  * Defensive because it is read back from storage that outlives the code
@@ -790,6 +815,16 @@ export class LocalStore {
       if (!chunk.length) continue;
       const holes = chunk.map(
         () => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      // Prices are the one field that can legitimately go away (Scryfall
+      // drops a price), so a row that CARRIES the price columns overwrites
+      // them, null included. Only a short row -- an older PC's six-field
+      // page, which has no prices at all -- keeps what is here.
+      const carriesPrices = chunk.every((r) => r.length > 7);
+      const prices = carriesPrices
+        ? `price_usd = excluded.price_usd,
+           price_usd_foil = excluded.price_usd_foil`
+        : `price_usd = COALESCE(excluded.price_usd, catalogue.price_usd),
+           price_usd_foil = COALESCE(excluded.price_usd_foil, catalogue.price_usd_foil)`;
       await this.db.run(
         `INSERT INTO catalogue
            (printing_id, name, set_code, collector_number, cmc, rarity,
@@ -799,18 +834,22 @@ export class LocalStore {
            name = excluded.name,
            set_code = excluded.set_code,
            collector_number = excluded.collector_number,
-           price_usd = excluded.price_usd,
-           price_usd_foil = excluded.price_usd_foil,
-           artist = excluded.artist,
-           released_year = excluded.released_year,
-           finishes = excluded.finishes,
+           -- A field the incoming row does not carry keeps what is here.
+           -- The PC's index page has no artist and older PCs send only six
+           -- columns; a plain overwrite blanked artist (basic-land scanning),
+           -- prices, release year (newest-first ordering) and finishes
+           -- (which printings come in foil) on every fetch from the PC.
+           ${prices},
+           artist = COALESCE(NULLIF(excluded.artist, ''), catalogue.artist),
+           released_year = COALESCE(excluded.released_year, catalogue.released_year),
+           finishes = COALESCE(NULLIF(excluded.finishes, ''), catalogue.finishes),
            cmc = excluded.cmc,
            rarity = excluded.rarity`,
         // Padded, so a page from an older desktop that sends fewer fields
         // still writes rather than throwing a bind-count error and
         // stranding the whole download.
-        // TEN per row, always. A row with fewer -- the desktop's
-        // catalogue page sends six, and every older caller does --
+        // ELEVEN per row, always. A row with fewer -- an older desktop's
+        // catalogue page sends six (current ones send all eleven) --
         // would otherwise leave holes unfilled and the NEXT row's
         // values would slide into them, so a batch of four hundred
         // printings came out shifted by two columns from the second

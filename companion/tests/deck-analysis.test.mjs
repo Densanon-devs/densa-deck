@@ -232,3 +232,18 @@ describe('drawing the extra sections from what the PC really sends', () => {
     assert.equal(bracketView({ ok: false, error: 'x' }), null);
   });
 });
+
+describe('the deck is analysed as its own format', () => {
+  test('a Modern deck is sent as Modern to every part that runs rules', async () => {
+    // Before, only the text and name went across, and the PC defaulted to
+    // Commander -- so 60-card decks were judged by Commander's rules.
+    const seen = [];
+    const api = fakeApi();
+    for (const k of ['analyze', 'goldfish', 'gauntlet']) {
+      const inner = api[k];
+      api[k] = async (t, n, fmt) => { seen.push([k, fmt]); return inner(t, n, fmt); };
+    }
+    await runAnalysis(api, DECK, 'E', 'sig', () => {}, 'modern');
+    assert.deepEqual(seen.sort(), [['analyze', 'modern'], ['gauntlet', 'modern'], ['goldfish', 'modern']]);
+  });
+});

@@ -51,6 +51,7 @@ import type {
   CatalogueSet,
 } from '../lib/protocol.ts';
 import { reporting } from './report.ts';
+import { useBackClose } from './useBackClose.ts';
 
 interface Props {
   state: AppState;
@@ -343,6 +344,7 @@ export function CardBrowser({
   const [sort, setSort] = useState<NonNullable<CardQuery['sort']>>('name');
   const [allSets, setAllSets] = useState<CatalogueSet[]>([]);
   const [pickingSet, setPickingSet] = useState(false);
+  useBackClose(pickingSet, () => setPickingSet(false));
   const [setFilter, setSetFilter] = useState('');
   const [cards, setCards] = useState<CatalogueCard[]>([]);
   const [busy, setBusy] = useState(false);
@@ -450,12 +452,21 @@ export function CardBrowser({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nearEnd]);
 
+  // The phone's own set list first -- it needs no PC and no signal -- then
+  // the PC's, which carries card counts, if it answers. Asking only the PC
+  // left a phone with no PC on "Reading the set list..." for ever.
   useEffect(() => {
     if (!pickingSet || allSets.length) return;
-    void state
-      .sets()
-      .then((r) => setAllSets(r.sets ?? []))
-      .catch(reporting('the set list', setProblem));
+    let live = true;
+    void state.localSets()
+      .then((local) => { if (live && local.length) setAllSets(local); })
+      .catch(() => {});
+    if (!state.soloForever) {
+      void state.sets()
+        .then((r) => { if (live && r.sets?.length) setAllSets(r.sets); })
+        .catch(() => {});   // the local list is already there
+    }
+    return () => { live = false; };
   }, [pickingSet, allSets.length, state]);
 
   const toggle = (list: string[], value: string) =>
@@ -643,15 +654,16 @@ export function CardBrowser({
                     <Text style={[styles.setTileCode, on && styles.setTileCodeOn]}>
                       {entry.set_code.toUpperCase()}
                     </Text>
-                    <Text style={styles.setTileCount}>{entry.cards}</Text>
+                    {entry.cards ? (
+                      <Text style={styles.setTileCount}>{entry.cards}</Text>
+                    ) : null}
                   </Pressable>
                 );
               })}
             {allSets.length === 0 ? (
               <Text style={styles.muted}>
-                {state.soloForever
-                  ? 'Reading the set list...'
-                  : 'Asking your PC for the set list...'}
+                Reading the set list... (it comes with the card index; if
+                this stays, download the index in Settings)
               </Text>
             ) : null}
           </View>
@@ -837,8 +849,11 @@ export function CardBrowser({
                 // Quick-add beats the preview, which is the whole
                 // point of the switch; without it the tap opens the
                 // card to be read first.
-                if (quickAdd) return void quickPick(card);
-                return previewOnTap ? setPreview(card) : void onPick(card);
+                // Caught and shown: an add that failed (the deck could not
+                // be saved, the index is unreadable) used to do nothing.
+                if (quickAdd) return void quickPick(card).catch(reporting('adding it', setProblem));
+                return previewOnTap ? setPreview(card)
+                  : void Promise.resolve(onPick(card)).catch(reporting('adding it', setProblem));
               }}
               /*
                 Long press always opens the card.
@@ -1084,7 +1099,8 @@ export function CardBrowser({
               {onUnpick && (countFor?.(preview) ?? 1) > 0 ? (
                 <Pressable
                   style={styles.previewButton}
-                  onPress={() => void onUnpick(preview)}
+                  onPress={() => void Promise.resolve(onUnpick(preview))
+                    .catch(reporting('taking it out', setProblem))}
                 >
                   <Text style={styles.previewButtonText}>Remove</Text>
                 </Pressable>
@@ -1092,7 +1108,8 @@ export function CardBrowser({
               <Pressable
                 style={[styles.previewButton, styles.previewAdd]}
                 disabled={!withinIdentity(preview.color_identity, identity ?? null)}
-                onPress={() => void onPick(preview)}
+                onPress={() => void Promise.resolve(onPick(preview))
+                  .catch(reporting('adding it', setProblem))}
               >
                 <Text style={styles.previewAddText}>
                   {variants.length > 1 ? 'Add any' : 'Add'}
@@ -1101,7 +1118,8 @@ export function CardBrowser({
               {variants.length > 1 && variants[showing] ? (
                 <Pressable
                   style={[styles.previewButton, styles.previewExact]}
-                  onPress={() => void onPick(preview, variants[showing])}
+                  onPress={() => void Promise.resolve(onPick(preview, variants[showing]))
+                    .catch(reporting('adding it', setProblem))}
                 >
                   <Text style={styles.previewAddText}>
                     Add this printing (

@@ -1,7 +1,7 @@
 """Combo dataset persistence + fetch.
 
 We pull the full /variants/ pagination from Commander Spellbook's backend
-into a local SQLite database (~30k rows). The fetch is idempotent and
+into a local SQLite database (~111k rows, 2026-09). The fetch is idempotent and
 refreshable on demand — the desktop app's Settings panel exposes a
 "Refresh combo data" button that re-walks the endpoint.
 

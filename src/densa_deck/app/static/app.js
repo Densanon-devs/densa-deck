@@ -149,6 +149,7 @@ function switchView(view) {
   // collection.js owns this view; it registers the hook on load so app.js
   // doesn't need to know anything about it.
   if (view === "collection" && window.__collectionActivate) window.__collectionActivate();
+  if (view === "build" && window.__builderActivate) window.__builderActivate();
   if (view === "scan" && window.__scanActivate) window.__scanActivate();
 }
 
@@ -335,8 +336,11 @@ async function bootstrap() {
       try {
         const info = await callApi("check_card_db_update");
         if (info && info.available) {
-          showCardDbUpdateBanner(info);
-          toast("Update available.", "success");
+          // The old card-DB banner is retired (gated off), so this used to
+          // toast "Update available." with nothing to click. The live
+          // "Update everything" banner is what offers it now.
+          if (typeof window.__contentCheck === "function") window.__contentCheck();
+          toast("Update available — use Update everything at the top.", "success");
         } else if (info && info.error) {
           toast("Couldn't check for updates: " + info.error, "error");
         } else {
@@ -801,7 +805,7 @@ async function loadComboStatus() {
     if (!s) return;
     const count = s.combo_count || 0;
     if (count === 0) {
-      els.combo_status.innerHTML = `<div class="card missing"><strong>Combo cache</strong><br>Empty — click <strong>Refresh combo data</strong> below to populate (~30k combos, 30-60s download).</div>`;
+      els.combo_status.innerHTML = `<div class="card missing"><strong>Combo cache</strong><br>Empty — click <strong>Refresh combo data</strong> below to populate (about 110,000 combos, one ~30 MB download, about a minute).</div>`;
       return;
     }
     // Freshness check — Commander Spellbook adds variants weekly. Prompt
@@ -967,7 +971,8 @@ async function loadMcpStatus() {
       els.mcp_verify_btn.disabled = true;
       return;
     }
-    const tierLabel = s.tier === "pro" ? "Pro tier — 28 tools available" : "Free tier — 17 tools (Pro tools unlock with a license)";
+    // No counts: they were hardcoded (28 / 17) and drifted as tools were added.
+    const tierLabel = s.tier === "pro" ? "Pro tier — every tool available" : "Free tier — the free tools; Pro tools unlock with a license";
     els.mcp_status.innerHTML = `<div class="card ready"><strong>MCP server ready</strong> &middot; <span class="status-text">${escape(tierLabel)}</span></div>`;
     els.mcp_show_config_btn.disabled = false;
     els.mcp_verify_btn.disabled = false;
@@ -1049,22 +1054,32 @@ async function loadUserPrefsIntoSettings() {
 function renderTier(tier) {
   els.tier_badge.textContent = tier.is_pro ? "Pro" : "Free";
   els.tier_badge.classList.toggle("pro", tier.is_pro);
-  // Hide Pro-only buttons when free. Save, goldfish, gauntlet are all
-  // Pro-gated; analyze stays free.
-  els.save_btn.disabled = !tier.is_pro;
+  // Goldfish and gauntlet are Pro. Save is NOT: free keeps a few decks
+  // (tiers.FREE_SAVED_DECKS), and the backend says so when the limit is
+  // reached. Disabling Save here left free users unable to save at all,
+  // while the Coach and My Decks empty states told them to save from here.
+  els.save_btn.disabled = false;
   els.goldfish_btn.disabled = !tier.is_pro;
   els.gauntlet_btn.disabled = !tier.is_pro;
   if (!tier.is_pro) {
     const hint = "Pro only — activate a license on the Settings tab";
-    els.save_btn.title = hint;
     els.goldfish_btn.title = hint;
     els.gauntlet_btn.title = hint;
+    els.save_btn.title = "Save this deck (free keeps a few; Pro keeps them all)";
   }
 }
 
 async function checkSetupBanner() {
   try {
     const status = await callApi("get_system_status");
+    // Things that went wrong while the app was loading -- a licence file
+    // moved aside as corrupt, a coach history that could not be read. The
+    // backend kept them for exactly this; nothing ever showed them.
+    const warnings = status.load_warnings || [];
+    if (warnings.length) {
+      toast(warnings.join(" • "), "error", 15000);
+      callApi("dismiss_load_warnings").catch(() => {});
+    }
     if (!status.card_database.ready) {
       els.setup_banner_body.innerHTML =
         "Setup needed: the card database isn't installed yet. " +
@@ -1170,7 +1185,7 @@ function renderAnalysis(r, target) {
 
     ${r.castability.unreliable_cards.length ? `
       <div class="panel result-section">
-        <h3>Castability warnings ${helpIcon("castability", {title: "Castability"})}</h3>
+        <h3>Castability warnings ${helpIcon("castability", {title: "Castability", anchor: "mana_base"})}</h3>
         <table class="castability-table">
           <thead><tr><th>Card</th><th>Cost</th><th>On-curve %</th><th>Bottleneck</th><th></th></tr></thead>
           <tbody>
@@ -1568,8 +1583,10 @@ async function loadIntoBuildTab(deckId) {
           "error");
     return;
   }
-  switchView("build");
+  // Load first, then show: the tab's activation then sees a deck already
+  // loaded and does not read the autosaved draft over it.
   window.__builderLoadDraft(draft);
+  switchView("build");
   const count = ["mainboard", "sideboard", "commander"].reduce(
     (n, zone) => n + Object.values(draft[zone] || {})
       .reduce((z, entry) => z + (entry.qty || 0), 0), 0);
@@ -1699,8 +1716,11 @@ async function saveEditorAsNewVersion() {
   const notes = els.editor_notes_input.value.trim();
   if (!text) { toast("Deck is empty.", "error"); return; }
   try {
+    // The second argument is the deck's NAME. Passing deck_id here renamed
+    // every deck to its id ("etrata-assassins") on each new version.
     const snap = await callApi("save_deck_version",
-      state.currentDeckId, state.currentSnapshot.deck_id,
+      state.currentDeckId,
+      state.currentSnapshot.name || state.currentSnapshot.deck_id,
       text, state.currentSnapshot.format || "commander", notes);
     // The editor never handled this because it was never gated — the check
     // lived one function away, in the Build tab's save, which delegated
@@ -2327,7 +2347,7 @@ async function refreshSettings() {
     const tier = await callApi("get_tier");
     els.tier_status.innerHTML = tier.is_pro
       ? `<strong>Pro</strong> — all features unlocked.`
-      : `<strong>Free</strong> — analysis available; Save / Export / Analyst require Pro.`;
+      : `<strong>Free</strong> — full analysis, exports and a few saved decks. Goldfish, gauntlet and the AI analyst/coach need Pro.`;
 
     // Fill version into the About panel — safe if the elt isn't found for any reason
     try {
@@ -3139,7 +3159,7 @@ async function closeCoachSession() {
 // writeups with formulas live in static/methodology.html — the "Open
 // methodology page" link below every tooltip goes there.
 const HELP = {
-  power_level: "1-10 rating averaging six weighted sub-scores (speed, interaction, combo potential, mana efficiency, win-condition quality, card quality). Tiers: jank < 3, casual 3-5, focused 5-7, optimized 7-8.5, competitive 8.5-9.5, cEDH 9.5+. Computed by densa_deck.analysis.power_level.estimate_power_level.",
+  power_level: "1-10 rating averaging six weighted sub-scores (speed, interaction, combo potential, mana efficiency, win-condition quality, card quality). Tiers: jank < 3, casual 3-4.5, focused 4.5-6, optimized 6-7.5, competitive 7.5-9, cEDH 9+. Computed by densa_deck.analysis.power_level.estimate_power_level.",
   speed: "How quickly the deck can threaten lethal / combo. Derived from mana curve, ramp density, and low-CMC threat count. Higher = kills faster.",
   interaction: "How much the deck disrupts opponents. Counts targeted removal, counterspells, and board wipes against format-specific targets (Commander wants 8-12 interaction pieces).",
   combo_potential: "Tutor density + reliable wincon engines + low-CMC win conditions. High when the deck has multiple ways to assemble a win that bypasses combat.",
@@ -3166,7 +3186,10 @@ function helpIcon(key, opts) {
   const text = HELP[key];
   if (!text) return "";
   const title = (opts && opts.title) || "How this is calculated";
-  return `<button class="help-icon" type="button" data-help-key="${escape(key)}" data-help-title="${escape(title)}" aria-label="${escape(title)}">?</button>`;
+  // Where "Full methodology" lands. Defaults to the key, but not every key
+  // has a section of its own (castability is explained under mana_base).
+  const anchor = (opts && opts.anchor) || key;
+  return `<button class="help-icon" type="button" data-help-key="${escape(key)}" data-help-anchor="${escape(anchor)}" data-help-title="${escape(title)}" aria-label="${escape(title)}">?</button>`;
 }
 
 function installHelpPopoverHandlers() {
@@ -3202,7 +3225,7 @@ function installHelpPopoverHandlers() {
         e.preventDefault();
         // Open methodology page in-app. pywebview allows loading
         // static assets relative to the window URL.
-        window.location.href = `methodology.html#${encodeURIComponent(key)}`;
+        window.location.href = `methodology.html#${encodeURIComponent(btn.dataset.helpAnchor || key)}`;
       });
       return;
     }

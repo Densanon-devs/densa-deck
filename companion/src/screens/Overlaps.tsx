@@ -37,32 +37,15 @@ export function OverlapsScreen({ state }: Props) {
   const [cards, setCards] = useState<OverlapCard[] | null>(null);
   const [problem, setProblem] = useState('');
   const [busy, setBusy] = useState(false);
-  /**
-   * Edits this phone has made that the PC has not seen.
-   *
-   * This screen shows the PC's answer while the Cards tab shows the phone's
-   * own mirror, and when those two disagree the screen looked simply wrong —
-   * "it thinks I have more than I do". Clearing cards here and not syncing is
-   * exactly how that happens, and nothing on the screen said which machine it
-   * was describing.
-   */
-  const [pending, setPending] = useState(0);
-
-  useEffect(() => state.subscribe((snapshot) => setPending(snapshot.pendingEdits)),
-            [state]);
 
   const load = useCallback(async () => {
     setBusy(true);
     setProblem('');
     try {
-      // Push what this phone knows BEFORE asking the PC what it thinks.
-      //
-      // This screen asks the PC a question about data the phone may have
-      // newer information about — cards removed here that have not reached it
-      // yet. Asking first showed the PC's stale answer, which reads as the
-      // app claiming you own things you have just got rid of. Best-effort:
-      // with no signal there is nothing to push and the PC's last answer is
-      // still the best one available, so the banner explains it instead.
+      // Exchange with the PC first, when there is anything to exchange, so
+      // edits made on the PC are counted too. The count itself is the
+      // phone's own (app-state `overlaps`), so with no signal this still
+      // answers from everything on this phone.
       if (await state.pendingCount()) {
         await state.sync().catch(() => undefined);
       }
@@ -87,29 +70,31 @@ export function OverlapsScreen({ state }: Props) {
       refreshControl={
         <RefreshControl
           refreshing={busy}
-          onRefresh={() => void load().catch(reporting('the overlaps', setProblem))}
+          // The pull always exchanges with the PC first (opening the screen
+          // only does when this phone has edits to send).
+          onRefresh={() => void (state.soloForever ? Promise.resolve() : state.sync())
+            .catch(() => undefined)
+            .then(load)
+            .catch(reporting('the overlaps', setProblem))}
           tintColor="#e4e6eb"
         />
       }
     >
       <Text style={styles.title}>In more than one list</Text>
+      {/*
+        Counted on this phone now, from its own collection and lists -- so
+        it includes edits not yet sent, and needs no PC. The old text said
+        the PC counted it and warned it was "one sync behind".
+      */}
       <Text style={styles.muted}>
-        Counted on your PC, over your whole collection — the phone mirrors
-        what you own, not how the lists overlap.
+        Counted on this phone, over your whole collection.
+        {state.soloForever ? '' : ' Pull down to bring in changes made on your PC first.'}
       </Text>
-
-      {pending > 0 ? (
-        <Text style={styles.stale}>
-          {pending} change{pending === 1 ? '' : 's'} on this phone haven’t
-          reached your PC yet, so this list is one sync behind. Cards you’ve
-          removed here can still appear until it catches up.
-        </Text>
-      ) : null}
 
       {problem ? <Text style={styles.problem}>{problem}</Text> : null}
 
       {cards === null ? (
-        <Text style={styles.muted}>Asking your PC…</Text>
+        <Text style={styles.muted}>Counting…</Text>
       ) : null}
 
       {cards !== null && cards.length === 0 && !problem ? (
@@ -129,8 +114,9 @@ export function OverlapsScreen({ state }: Props) {
             More lists want these than you own copies. Nothing is broken today;
             you would find out at the table.
           </Text>
-          {contested.map((card) => (
-            <Row key={card.item_id} card={card} warn />
+          {/* Not item_id: rows counted on the phone all carry 0. */}
+          {contested.map((card, i) => (
+            <Row key={`${card.printing_id}|${card.finish}|${i}`} card={card} warn />
           ))}
         </View>
       ) : null}
@@ -141,8 +127,8 @@ export function OverlapsScreen({ state }: Props) {
           <Text style={styles.muted}>
             You own enough copies for every list that mentions them.
           </Text>
-          {shared.map((card) => (
-            <Row key={card.item_id} card={card} />
+          {shared.map((card, i) => (
+            <Row key={`${card.printing_id}|${card.finish}|${i}`} card={card} />
           ))}
         </View>
       ) : null}
@@ -175,7 +161,6 @@ const styles = StyleSheet.create({
   sectionTitle: { color: '#e4e6eb', fontSize: 16, fontWeight: '700' },
   warnTitle: { color: '#ecc94b', fontSize: 16, fontWeight: '700' },
   muted: { color: '#8a8f9c', fontSize: 13, lineHeight: 19 },
-  stale: { color: '#ecc94b', fontSize: 13, lineHeight: 19 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

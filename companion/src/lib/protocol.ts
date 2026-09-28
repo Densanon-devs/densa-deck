@@ -25,7 +25,13 @@ export type EventKind =
   // local row id means nothing on the other device. A `removed` flag rides
   // the same kind rather than needing a second one — taking a game back is
   // a fact about that game.
-  | 'deck-game';
+  | 'deck-game'
+  // Sent and applied both ways all along (sync.ts, sync/apply.py), and
+  // missing here only as types -- `kind` is `EventKind | string`, so
+  // nothing checked. Listed so they are.
+  | 'stack-set'
+  | 'membership'
+  | 'wishlist';
 
 /**
  * One thing that happened, addressed so any device can apply it.

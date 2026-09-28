@@ -662,15 +662,22 @@ class TestTheIndexThePhonePulls:
     against.
     """
 
-    def test_it_serves_the_six_fields_and_nothing_else(self, api_with_printings):
-        """Four for matching, plus two the phone browses and sorts by rather
-        than matches on — mana value and rarity. Neither identifies a card;
-        both are filters somebody expects to work, and a filter with nothing
-        behind it silently finds nothing."""
+    def test_it_serves_every_column_the_phone_stores(self, api_with_printings):
+        """Eleven, in the phone's catalogue order (store.ts putCatalogue).
+
+        It used to be six, and the phone's upsert overwrote the other five
+        with nulls on every PC fetch -- prices, release year and finishes a
+        Scryfall download had filled in, gone (audit 2026-09-28). Artist is
+        sent as None: the desktop has no artist column, and the phone keeps
+        its own value for a null there.
+        """
         d = _data(api_with_printings.catalogue_index_page())
         assert d["rows"], d
-        assert all(len(row) == 6 for row in d["rows"]), d["rows"][0]
-        assert d["rows"][0][5], "rarity came through empty"
+        assert all(len(row) == 11 for row in d["rows"]), d["rows"][0]
+        row = d["rows"][0]
+        assert row[5], "rarity came through empty"
+        assert row[8] is None, "artist must be None, not '' -- '' would erase the phone's"
+        assert row[9] is None or isinstance(row[9], int), row[9]
 
     def test_it_reports_the_total_so_a_phone_can_show_progress(self, api_with_printings):
         d = _data(api_with_printings.catalogue_index_page())

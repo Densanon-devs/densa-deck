@@ -495,7 +495,7 @@ def main():
 
     # phone command — scan from a phone over Tailscale
     phone_parser = subparsers.add_parser(
-        "phone", help="Scan cards from your phone over Tailscale")
+        "phone", help="Scan cards from your phone (over Wi-Fi; Tailscale optional)")
     phone_subs = phone_parser.add_subparsers(dest="phone_action")
     ph_status = phone_subs.add_parser(
         "status", help="Is this machine ready to share to a phone?")
@@ -951,7 +951,7 @@ def cmd_analyze(args):
         # Probability layer (--deep) [PRO]
         if hasattr(args, "deep") and args.deep:
             if require_pro("deep_analysis"):
-                console.print("[yellow]--deep requires Pro tier.[/yellow] [dim]Set MTG_ENGINE_TIER=pro to unlock.[/dim]")
+                console.print("[yellow]--deep requires Pro tier.[/yellow] [dim]Unlock with: densa-deck license activate YOUR-KEY[/dim]")
             else:
                 _run_and_render_probability(deck, args.sims)
 
@@ -959,7 +959,7 @@ def cmd_analyze(args):
         analyst_output = None
         if hasattr(args, "with_llm") and args.with_llm:
             if require_pro("analyst"):
-                console.print("[yellow]--with-llm requires Pro tier.[/yellow] [dim]Set MTG_ENGINE_TIER=pro to unlock.[/dim]")
+                console.print("[yellow]--with-llm requires Pro tier.[/yellow] [dim]Unlock with: densa-deck license activate YOUR-KEY[/dim]")
             else:
                 version_diff = None
                 if getattr(args, "vs_previous", False):
@@ -996,7 +996,7 @@ def cmd_analyze(args):
         # Export [PRO]
         if hasattr(args, "export") and args.export:
             if require_pro("export_reports"):
-                console.print("[yellow]--export requires Pro tier.[/yellow] [dim]Set MTG_ENGINE_TIER=pro to unlock.[/dim]")
+                console.print("[yellow]--export requires Pro tier.[/yellow] [dim]Unlock with: densa-deck license activate YOUR-KEY[/dim]")
             else:
                 export_path = Path(args.export)
                 adv_dict = {
@@ -1382,6 +1382,18 @@ def cmd_save(args):
         # Save
         store = VersionStore()
         try:
+            # The same limit the desktop enforces: free keeps a few decks, and
+            # re-saving one you already have is always allowed.
+            from densa_deck.tiers import free_allowance
+            allowed = free_allowance("saved_decks")
+            existing = {d.get("deck_id") for d in store.list_decks()}
+            if allowed >= 0 and args.deck_id not in existing and len(existing) >= allowed:
+                console.print(
+                    f"[yellow]Free keeps {allowed} deck{'' if allowed == 1 else 's'}, "
+                    "and you are using them.[/yellow] Densa Deck Pro keeps as many "
+                    "as you build. Re-saving an existing deck id still works.")
+                console.print("[dim]To unlock: densa-deck license activate YOUR-KEY[/dim]")
+                sys.exit(1)
             snap = store.save_version(
                 deck_id=args.deck_id,
                 name=deck_name,
@@ -3952,7 +3964,8 @@ def cmd_combos(args):
             console.print(f"      [dim]{m.combo.spellbook_url}[/dim]")
         return
 
-    console.print("[yellow]Usage:[/yellow] densa-deck combos {refresh|status|detect <deck>}")
+    console.print("[yellow]Usage:[/yellow] densa-deck combos "
+                  "{refresh|status|detect <deck>|near-miss <deck>|density <deck>|verify <deck> <combo_id>}")
 
 
 def cmd_rule0(args):
@@ -4445,14 +4458,23 @@ def _resolve_one_printing(db, card_name: str, set_code: str | None, number: str 
 
 
 def cmd_phone(args):
-    """Share a scanning surface to your phone over Tailscale."""
+    """Share a scanning surface to your phone -- over Wi-Fi, Tailscale optional.
+
+    Rewritten to match the bridge. Until this, the command stopped dead when
+    Tailscale was missing ("Tailscale isn't installed ... Sign in first"),
+    printed an https://<tailnet-name> link that hangs unless `tailscale serve`
+    is configured, and said the bridge listened on 127.0.0.1 only. Since 0.7.0
+    the bridge binds this machine's LAN address and pairs over Wi-Fi first;
+    Tailscale is what makes the same link work away from home.
+    """
     import time
 
     from densa_deck.app.api import AppApi
     from densa_deck.app.phone import (
         build_serve_command,
         https_guidance,
-        phone_url,
+        lan_address,
+        pairing_url,
         serve_status,
         tailscale_status,
     )
@@ -4460,51 +4482,43 @@ def cmd_phone(args):
     action = getattr(args, "phone_action", None) or "status"
     ts = tailscale_status()
     serve = serve_status()
+    lan = lan_address()
+    tailnet = bool(ts.get("installed") and ts.get("running"))
 
     console.print()
-    if not ts.get("installed"):
-        console.print("[yellow]Tailscale isn't installed.[/yellow] It's what lets "
-                      "your phone reach this machine without exposing anything "
-                      "to the internet.")
-        console.print("[dim]https://tailscale.com/download[/dim]")
+    if lan:
+        console.print(f"[bold]On your Wi-Fi as:[/bold] {lan} "
+                      "[dim](a phone on the same Wi-Fi can reach this)[/dim]")
+    else:
+        console.print("[yellow]No Wi-Fi / LAN address found.[/yellow] Is this "
+                      "computer connected to a network?")
+    if tailnet:
+        console.print(f"[bold]Tailscale:[/bold] {ts.get('dns_name', '?')} "
+                      "[dim](also works away from home)[/dim]")
+        phones = ts.get("phones_online") or []
+        if phones:
+            console.print("[bold]Phone on your tailnet:[/bold] " +
+                          ", ".join(p["name"] for p in phones))
+    else:
+        console.print("[dim]Tailscale: not in use. Optional -- it lets the phone "
+                      "reach this computer away from home "
+                      "(https://tailscale.com/download).[/dim]")
+
+    if not lan and not tailnet:
         console.print()
-        return
-    if not ts.get("running"):
-        console.print(f"[yellow]Tailscale isn't connected[/yellow] "
-                      f"(state: {ts.get('backend_state', 'unknown')}). Sign in first.")
+        console.print("[yellow]Nothing a phone could reach.[/yellow] Connect "
+                      "this computer to your Wi-Fi.")
         console.print()
         return
 
-    console.print(f"[bold]This machine:[/bold] {ts.get('dns_name', '?')}")
-    phones = ts.get("phones_online") or []
-    if phones:
-        console.print("[bold]Phone online:[/bold] " +
-                      ", ".join(p["name"] for p in phones))
-    else:
-        console.print("[yellow]No phone on your tailnet right now[/yellow] — "
-                      "open the Tailscale app on your phone.")
-
-    if serve.get("configured"):
-        console.print("[green]Ready over HTTPS[/green] - the live phone camera "
-                      "will work too.")
-    else:
-        # No HTTPS is the normal, supported path: the phone reaches this
-        # machine directly on its tailnet address over plain HTTP. WireGuard
-        # already encrypts that hop; a certificate would only buy a browser
-        # secure-context (i.e. a live viewfinder) at the cost of publishing
-        # this machine's name to the public CT log forever.
-        console.print("[green]Ready[/green] - your phone connects straight over "
-                      "Tailscale, no certificate needed.")
-        console.print("[dim]Type a card, or use your phone's normal camera app. "
-                      "A live viewfinder would need HTTPS; run "
-                      "`densa-deck phone status --https-help` if you ever want "
-                      "it.[/dim]")
+    console.print("[green]Ready[/green] - no certificate needed. Type a card, "
+                  "or use your phone's normal camera app.")
 
     if action == "status":
-        if getattr(args, "https_help", False) and not serve.get("configured"):
+        if getattr(args, "https_help", False) and tailnet and not serve.get("configured"):
             guide = https_guidance(ts, getattr(args, "port", 8791))
             console.print()
-            console.print("[bold]Optional: live camera viewfinder[/bold]")
+            console.print("[bold]Optional: live camera viewfinder (Tailscale HTTPS)[/bold]")
             console.print("[dim]Everything already works without this.[/dim]")
             if guide["state"] == "https_not_enabled":
                 console.print(f"  1. {guide['headline']}: {guide['admin_url']}")
@@ -4532,21 +4546,29 @@ def cmd_phone(args):
             console.print(f"[red]{result.get('error')}[/red]")
             return
 
-        url = phone_url(ts.get("dns_name", ""), bridge.token)
+        # The same link the desktop's QR code carries: Wi-Fi first, the
+        # tailnet address when there is one, and HTTPS only when `tailscale
+        # serve` is genuinely set up (anything else hangs the phone).
+        status = bridge.status()
+        url = pairing_url(status, ts, serve, bridge.token)
         console.print()
-        console.print("[bold green]Sharing.[/bold green] Open this on your phone:")
-        console.print(f"  [bold]{url or bridge.status()['local_url']}[/bold]")
+        console.print("[bold green]Sharing.[/bold green] Open this on your phone, "
+                      "or paste it into the Densa Deck app:")
+        console.print(f"  [bold]{url or status['local_url']}[/bold]")
         console.print()
-        console.print("[dim]Listening on 127.0.0.1 only — reachable through "
-                      "Tailscale, never the local network.[/dim]")
-        console.print("[dim]Ctrl-C to stop sharing (the link dies with it).[/dim]")
+        console.print("[dim]Answers only on this computer's own addresses "
+                      "(loopback, Wi-Fi, tailnet) and only with the pairing code "
+                      "in that link.[/dim]")
+        console.print("[dim]Ctrl-C stops sharing. Your phone stays paired for "
+                      "next time.[/dim]")
         console.print()
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             console.print()
-            console.print("[green]Stopped sharing.[/green] That link no longer works.")
+            console.print("[green]Stopped sharing.[/green] Run this again to "
+                          "reconnect your phone.")
     finally:
         api.close()
 
@@ -4558,11 +4580,15 @@ def _find_group(store, name: str) -> dict:
     sync protocol needs. The CLI takes the first and the engine takes the
     second, and this is the one place that has to know both.
     """
-    for row in store.list_collections():
+    rows = store.list_collections()
+    for row in rows:
         if (row.get("name") or "").strip().lower() == (name or "").strip().lower():
             return row
+    # Named here: no command lists groups, and the one this used to point at
+    # (`collection status`) prints totals, not names.
+    names = ", ".join(sorted((r.get("name") or "") for r in rows if r.get("name")))
     raise SystemExit(f"No group called {name!r}. "
-                     "List them with: densa-deck collection status")
+                     + (f"Your groups: {names}." if names else "You have no groups yet."))
 
 
 def _cmd_collection_group(args, db, store, console):

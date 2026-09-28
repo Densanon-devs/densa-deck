@@ -1413,15 +1413,27 @@ class CollectionStore:
         Distinct from `wishlist_set(..., 0)`, which is exact and is what the
         deck-shortfall rewrite uses: that one MUST leave the other printings
         of a card alone, because a deck can legitimately want two.
+
+        An empty `deck_id` means every row for the card, whichever deck
+        wanted it -- the phone's meaning (store.ts forgetWish). It used to
+        mean only rows with no deck, so a card removed or bought on the phone
+        stayed wanted on the desktop and the two lists drifted apart
+        (audit 2026-09-28). A deck's own rows come back on that deck's next
+        save if it is still short, which is right: it still wants the card.
         """
         card_name = (card_name or "").strip()
         if not card_name:
             return 0
         with self._connect() as conn:
-            cur = conn.execute(
-                """DELETE FROM wishlist_items
-                   WHERE card_name = ? COLLATE NOCASE AND deck_id = ?""",
-                (card_name, deck_id))
+            if deck_id:
+                cur = conn.execute(
+                    """DELETE FROM wishlist_items
+                       WHERE card_name = ? COLLATE NOCASE AND deck_id = ?""",
+                    (card_name, deck_id))
+            else:
+                cur = conn.execute(
+                    """DELETE FROM wishlist_items
+                       WHERE card_name = ? COLLATE NOCASE""", (card_name,))
             conn.commit()
             return cur.rowcount
 

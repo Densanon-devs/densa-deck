@@ -341,6 +341,10 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
               await state.deleteCollection(uid);
               await load();
             }}
+            onRename={async (uid, name) => {
+              await state.renameCollection(uid, name);
+              await load();
+            }}
           />
 
           {/*
@@ -349,7 +353,12 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
             asking the PC to price the whole collection to repeat it would be
             a slow way to say nothing.
           */}
-          {chosen && chosen !== DEFAULT_COLLECTION_UID ? (
+          {/*
+            Both are PC calls (group/review, group/export). A phone with no
+            PC was shown them anyway and they could only fail, so they are
+            not offered there.
+          */}
+          {chosen && chosen !== DEFAULT_COLLECTION_UID && !state.soloForever ? (
             <View style={styles.groupBox}>
               <View style={styles.groupRow}>
                 <Pressable
@@ -357,8 +366,7 @@ export function CollectionScreen({ state, onOpenCard }: Props) {
                   onPress={() => void reviewGroup(chosen)}
                 >
                   <Text style={styles.groupBtnText}>
-                    {!reviewing ? "What's in this group?"
-                      : state.soloForever ? 'Working…' : 'Asking your PC…'}
+                    {!reviewing ? "What's in this group?" : 'Asking your PC…'}
                   </Text>
                 </Pressable>
                 <Pressable

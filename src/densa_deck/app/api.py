@@ -569,7 +569,7 @@ class AppApi:
         if db.card_count() == 0:
             return {
                 "ok": False,
-                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error": "Card database not installed. Open Settings and click Install card database.",
                 "error_type": "IngestRequired",
             }
 
@@ -879,7 +879,7 @@ class AppApi:
         if db.card_count() == 0:
             return {
                 "ok": False,
-                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error": "Card database not installed. Open Settings and click Install card database.",
                 "error_type": "IngestRequired",
             }
         if not decklist_text.strip():
@@ -1799,7 +1799,7 @@ class AppApi:
         if db.card_count() == 0:
             return {
                 "ok": False,
-                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error": "Card database not installed. Open Settings and click Install card database.",
                 "error_type": "IngestRequired",
             }
 
@@ -2190,7 +2190,7 @@ class AppApi:
         db = self._get_db()
         if db.card_count() == 0:
             return {"ok": False,
-                    "error": "Card database not ingested. Open Settings and run Setup.",
+                    "error": "Card database not installed. Open Settings and click Install card database.",
                     "error_type": "IngestRequired"}
         try:
             pool = pool_from_collection(self._get_collection_store(), db,
@@ -3929,7 +3929,7 @@ class AppApi:
     def catalogue_index_page(self, after: str = "", limit: int = 5000) -> dict:
         """A page of the index a phone needs to identify a card by itself.
 
-        Six fields: the printing id to file against, the name, set code
+        Eleven fields (see the return): the printing id to file against, the name, set code
         and collector number the OCR reads, and two the phone browses and
         sorts by rather than matches on — the mana value and the rarity.
         Neither identifies a card; both are filters somebody expects to
@@ -3956,7 +3956,8 @@ class AppApi:
         conn = self._get_db().connect()
         rows = conn.execute(
             """SELECT p.printing_id, p.name, p.set_code, p.collector_number,
-                      c.cmc, p.rarity
+                      c.cmc, p.rarity, p.price_usd, p.price_usd_foil,
+                      p.released_at, p.finishes
                FROM card_printings p
                LEFT JOIN cards c ON c.oracle_id = p.oracle_id
                WHERE p.lang = 'en' AND p.printing_id > ?
@@ -3965,9 +3966,27 @@ class AppApi:
             (str(after or ""), limit)).fetchall()
         total, = conn.execute(
             "SELECT COUNT(*) FROM card_printings WHERE lang = 'en'").fetchone()
+        # The phone's catalogue columns, in its order (store.ts putCatalogue):
+        #   id, name, set, number, cmc, rarity,
+        #   price_usd, price_usd_foil, artist, released_year, finishes
+        # Six used to be sent. The phone pads a short row with nulls and its
+        # upsert overwrites, so every PC fetch wiped the prices, release
+        # year and finishes a Scryfall download had given it -- foil
+        # availability and newest-first printing order included.
+        #
+        # Artist is the exception: the desktop's printings table has no
+        # artist column, so it goes as None. The phone must keep its own
+        # value for a null there rather than overwrite it.
+        def _year(released: str):
+            head = str(released or "")[:4]
+            return int(head) if head.isdigit() else None
+
         return {
             "rows": [[r[0], r[1], r[2] or "", r[3] or "",
-                      None if r[4] is None else float(r[4]), r[5] or ""]
+                      None if r[4] is None else float(r[4]), r[5] or "",
+                      None if r[6] is None else float(r[6]),
+                      None if r[7] is None else float(r[7]),
+                      None, _year(r[8]), r[9] or ""]
                      for r in rows],
             # Empty when the walk is done, so the caller stops on the reply
             # rather than on a count it has to keep in step with.
@@ -4144,6 +4163,7 @@ class AppApi:
                     "set_code": set_code,
                     "collector_number": number,
                     "price_usd": None,
+                    "price_usd_foil": None,
                     "found": False,
                     # Known even when no PRINTING was: the two are different
                     # questions, and a card whose art could not be resolved is
@@ -4161,6 +4181,10 @@ class AppApi:
                 "set_code": found.get("set_code") or "",
                 "collector_number": found.get("collector_number") or "",
                 "price_usd": found.get("price_usd"),
+                # The phone prices a foil slot from this. Without it a foil
+                # slot was priced as non-foil whenever the PC answered, and
+                # the answer is cached, so it stayed wrong offline too.
+                "price_usd_foil": found.get("price_usd_foil"),
                 "found": True,
                 "color_identity": identity,
                 "type_line": type_line,
@@ -4816,6 +4840,7 @@ class AppApi:
         exactly when a connection is most likely to be interrupted.
         """
         from densa_deck.collection.storage import DEFAULT_COLLECTION_UID
+        from densa_deck.sync.apply import deck_payload
         from densa_deck.sync.log import (
             KIND_COLLECTION_UPSERT,
             KIND_DECK_GAME,
@@ -4931,7 +4956,9 @@ class AppApi:
                     event_uid=f"baseline-{head}-deck-{deck_id}",
                     device=device,
                     kind=KIND_DECK_UPSERT,
-                    payload=deck,
+                    # Both shapes, like a live edit: a phone starting fresh
+                    # needs the per-zone arrays, not only the name map.
+                    payload=deck_payload(deck),
                 ).to_dict())
 
             for game in vstore.games_for_sync():
@@ -6447,7 +6474,7 @@ class AppApi:
         if db.card_count() == 0:
             return {
                 "ok": False,
-                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error": "Card database not installed. Open Settings and click Install card database.",
                 "error_type": "IngestRequired",
             }
 
@@ -7233,7 +7260,7 @@ class AppApi:
         if db.card_count() == 0:
             return {
                 "ok": False,
-                "error": "Card database not ingested. Open Settings and run Setup.",
+                "error": "Card database not installed. Open Settings and click Install card database.",
                 "error_type": "IngestRequired",
             }
         entries = parse_auto(decklist_text)

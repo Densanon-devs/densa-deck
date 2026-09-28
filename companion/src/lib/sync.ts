@@ -35,6 +35,84 @@ import type { DeckEntry } from './decks.ts';
  * deck arriving in the older shape is still a deck and refusing it would
  * make an upgrade on one device silently break sync with the other.
  */
+/** Whether a deck payload carries the phone's per-zone arrays. */
+export function hasPhoneArrays(p: Record<string, unknown>): boolean {
+  return ['commander', 'entries', 'sideboard'].some(
+    (k) => Array.isArray(p[k]) && (p[k] as unknown[]).length > 0);
+}
+
+const ZONE_ORDER = ['commander', 'companion', 'mainboard', 'sideboard', 'maybeboard'];
+
+/** Which of the phone's three zones a desktop zone becomes. */
+function phoneZone(zone: string): 'commander' | 'entries' | 'sideboard' {
+  if (zone === 'commander') return 'commander';
+  // Companion and maybeboard are outside the deck; the sideboard is the
+  // phone's one place for cards that are not in the ninety-nine.
+  if (zone === 'sideboard' || zone === 'companion' || zone === 'maybeboard') {
+    return 'sideboard';
+  }
+  return 'entries';
+}
+
+/**
+ * A desktop deck (name map, zone names, printing rows) split into the
+ * phone's zones. Mirrors sync/apply.py `phone_arrays` exactly: printing
+ * rows first, each an exact slot; then what of a card's total no row
+ * accounted for, in the first zone that lists it; then anything no zone
+ * lists, in the main deck.
+ */
+export function arraysFromDesktop(
+  decklist: Record<string, unknown>,
+  zones: Record<string, unknown>,
+  printings: unknown[],
+): { commander: DeckEntry[]; entries: DeckEntry[]; sideboard: DeckEntry[] } {
+  const out = { commander: [] as DeckEntry[], entries: [] as DeckEntry[],
+                sideboard: [] as DeckEntry[] };
+  const emitted = new Map<string, number>();
+  const zoneNames = Object.keys(zones ?? {});
+  const byZone = new Map<string, Array<Record<string, unknown>>>();
+  for (const raw of printings ?? []) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const zone = String(row.zone || 'mainboard');
+    if (!byZone.has(zone)) byZone.set(zone, []);
+    byZone.get(zone)!.push(row);
+  }
+  const ordered = [
+    ...ZONE_ORDER.filter((z) => zoneNames.includes(z)),
+    ...zoneNames.filter((z) => !ZONE_ORDER.includes(z)),
+  ];
+  for (const z of byZone.keys()) if (!ordered.includes(z)) ordered.push(z);
+  for (const zone of ordered) {
+    const target = out[phoneZone(zone)];
+    for (const row of byZone.get(zone) ?? []) {
+      const name = String(row.card_name ?? row.name ?? '').trim();
+      const qty = Number(row.quantity ?? 0);
+      if (!name || !Number.isFinite(qty) || qty <= 0) continue;
+      target.push({
+        name, qty,
+        ...(row.printing_id ? { printing_id: String(row.printing_id) } : {}),
+        ...(row.set_code ? { set_code: String(row.set_code) } : {}),
+        ...(row.collector_number ? { collector_number: String(row.collector_number) } : {}),
+      });
+      emitted.set(name, (emitted.get(name) ?? 0) + qty);
+    }
+    const listed = Array.isArray(zones?.[zone]) ? (zones[zone] as unknown[]) : [];
+    for (const name of [...new Set(listed.map(String))]) {
+      const remaining = Number(decklist?.[name] ?? 0) - (emitted.get(name) ?? 0);
+      if (remaining > 0) {
+        target.push({ name, qty: remaining });
+        emitted.set(name, (emitted.get(name) ?? 0) + remaining);
+      }
+    }
+  }
+  for (const [name, qty] of Object.entries(decklist ?? {})) {
+    const remaining = Number(qty) - (emitted.get(name) ?? 0);
+    if (Number.isFinite(remaining) && remaining > 0) out.entries.push({ name, qty: remaining });
+  }
+  return out;
+}
+
 export function entriesFromSync(raw: unknown): DeckEntry[] {
   if (Array.isArray(raw)) {
     const out: DeckEntry[] = [];
@@ -356,14 +434,45 @@ export class SyncEngine {
         // Which lists a card is in. Addressed by natural key on both sides:
         // local row ids cannot travel, because two devices scanning the same
         // card offline each mint their own.
+        //
+        // The payload's `collection_uid` is the LIST being joined, not the
+        // collection the stack is filed in, so it cannot be fed to
+        // stackKey(): that built a key no stack has, and every membership
+        // from the desktop -- the whole first-sync baseline included --
+        // landed nowhere. Resolve the stack the way the desktop does
+        // (sync/apply.py _apply_membership): printing, finish, condition,
+        // language, location, in whichever collection it is filed.
         const payload = event.payload as unknown as StackDelta & {
           member?: boolean;
         };
-        const key = stackKey(payload);
         const uid = String(event.payload.collection_uid ?? '');
         if (!uid) return false;
-        if (event.payload.member) await this.store.addMembership(key, uid);
-        else await this.store.removeMembership(key, uid);
+        const matches = (await this.store.stacksByPrinting(payload.printing_id))
+          .filter((s) =>
+            (s.finish || 'nonfoil') === (payload.finish || 'nonfoil')
+            && (s.condition || 'NM') === (payload.condition || 'NM')
+            && (s.language || 'en') === (payload.language || 'en')
+            && (s.location || '') === (payload.location || ''));
+        // No stack yet (its delta may still be on the way): keep the old
+        // key, which is right in the one case it ever was -- a card filed
+        // in the very list it joins.
+        //
+        // Keys are RECOMPUTED from each matched row's own fields, the row's
+        // filing collection included, rather than read back from the row.
+        // A key is joined with NULs, and a driver that returns TEXT up to
+        // the first NUL (node:sqlite does) hands back a truncated key that
+        // matches nothing -- the same bug by another route.
+        const keys = matches.length
+          ? matches.map((s) => stackKey({
+              printing_id: s.printing_id, finish: s.finish, condition: s.condition,
+              language: s.language, location: s.location,
+              collection_uid: s.collection_uid,
+            }))
+          : [stackKey(payload)];
+        for (const key of keys) {
+          if (event.payload.member) await this.store.addMembership(key, uid);
+          else await this.store.removeMembership(key, uid);
+        }
         await remember();
         return true;
       }
@@ -413,21 +522,25 @@ export class SyncEngine {
           await remember();
           return false;
         }
-        // The commander, from whichever shape the sender speaks. The phone
-        // sends its own list; the desktop describes zones by name, and the
-        // commander is the one zone whose contents change what the rest of
-        // the deck is allowed to be.
-        const zones = (payload.zones ?? {}) as Record<string, unknown>;
-        const commander = entriesFromSync(payload.commander)
-          .concat(
-            Array.isArray(zones.commander)
-              ? (zones.commander as unknown[]).map((name) => ({
-                  name: String(name), qty: 1,
-                }))
-              : [],
-          );
+        // The phone's per-zone arrays when the sender wrote them -- a phone,
+        // or a desktop from this version on. An older desktop sends only its
+        // map + zone names + printing rows; those are split into zones here
+        // by the desktop's own rule, where before the whole map landed in
+        // the main deck (sideboard, companion and maybeboard included) and
+        // every chosen printing was dropped.
+        const shaped = hasPhoneArrays(payload)
+          ? {
+              commander: entriesFromSync(payload.commander),
+              entries: entriesFromSync(payload.entries),
+              sideboard: entriesFromSync(payload.sideboard),
+            }
+          : arraysFromDesktop(
+              (payload.decklist ?? {}) as Record<string, unknown>,
+              (payload.zones ?? {}) as Record<string, unknown>,
+              Array.isArray(payload.printings) ? payload.printings as unknown[] : [],
+            );
         const seenCommander = new Set<string>();
-        const uniqueCommander = commander.filter((entry) => {
+        const uniqueCommander = shaped.commander.filter((entry) => {
           const key = entry.name.trim().toLowerCase();
           if (!key || seenCommander.has(key)) return false;
           seenCommander.add(key);
@@ -438,9 +551,9 @@ export class SyncEngine {
           deck_id: deckId,
           name: String(payload.name ?? 'Untitled'),
           format: String(payload.format ?? ''),
-          decklist: entriesFromSync(payload.entries ?? payload.decklist)
+          decklist: shaped.entries
             .filter((e) => !seenCommander.has(e.name.trim().toLowerCase())),
-          sideboard: entriesFromSync(payload.sideboard),
+          sideboard: shaped.sideboard,
           commander: uniqueCommander,
           notes: String(payload.notes ?? ''),
           // When the DECK was edited, not when the event was written. They
@@ -566,9 +679,33 @@ export class SyncEngine {
     notes: string;
     updated_at: string;
   }): Promise<void> {
+    // The desktop's map is the total across EVERY zone -- its sideboard lives
+    // in the same map, told apart by `zones`. Counting only the deck and the
+    // commander made every sideboard card a zero there, and the sideboard
+    // vanished on the PC.
     const asMap: Record<string, number> = {};
-    for (const entry of [...(deck.decklist ?? []), ...(deck.commander ?? [])]) {
+    for (const entry of [...(deck.decklist ?? []), ...(deck.commander ?? []),
+                         ...(deck.sideboard ?? [])]) {
       asMap[entry.name] = (asMap[entry.name] ?? 0) + entry.qty;
+    }
+    // Which printing each slot named, the desktop's way. Without it a
+    // desktop that read only the map saved `printings=[]` and every chosen
+    // printing on the PC deck was wiped by the next phone edit.
+    const printings: Array<Record<string, unknown>> = [];
+    const zoned: Array<[string, DeckEntry[]]> = [
+      ['commander', deck.commander ?? []],
+      ['mainboard', deck.decklist ?? []],
+      ['sideboard', deck.sideboard ?? []],
+    ];
+    for (const [zone, list] of zoned) {
+      for (const e of list) {
+        if (!e.set_code && !e.printing_id) continue;
+        printings.push({
+          card_name: e.name, quantity: e.qty, zone,
+          set_code: e.set_code ?? '', collector_number: e.collector_number ?? '',
+          ...(e.printing_id ? { printing_id: e.printing_id } : {}),
+        });
+      }
     }
     await this.log('deck-upsert', {
       deck_id: deck.deck_id,
@@ -578,6 +715,7 @@ export class SyncEngine {
       // The map counts the commander too — it is a card in the deck, and a
       // desktop reading only this would otherwise receive a 99-card deck.
       decklist: asMap,
+      printings,
       entries: deck.decklist ?? [],
       sideboard: deck.sideboard ?? [],
       commander: deck.commander ?? [],

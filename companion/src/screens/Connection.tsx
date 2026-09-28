@@ -67,6 +67,12 @@ interface Props {
    * with nothing to press.
    */
   onDisconnectPc?: () => void;
+  /**
+   * The new cards were downloaded. The "New cards available" banner lives in
+   * App and was only ever set, by the startup check -- so after downloading
+   * them here it went on saying so until the app restarted.
+   */
+  onIndexUpdated?: () => void;
 }
 
 /**
@@ -94,6 +100,7 @@ function allowanceLine(tier: TierSnapshot): string {
 
 export function ConnectionScreen({
   state, onClose, standalone: told = false, onConnectPc, onDisconnectPc,
+  onIndexUpdated,
 }: Props) {
   /*
     Whether there is a PC in this phone's life, asked rather than told.
@@ -246,6 +253,7 @@ export function ConnectionScreen({
       await state.refreshIndex();
       setBehind(false);
       setMissing([]);
+      onIndexUpdated?.();
     } catch (err) {
       setProblem((err as Error).message);
     } finally {

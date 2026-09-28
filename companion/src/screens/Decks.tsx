@@ -44,6 +44,7 @@ import { useDeckAnalysis, type DeckInput } from './useDeckAnalysis.ts';
 import { clearCached } from '../lib/deck-analysis.ts';
 import { reporting } from './report.ts';
 import { usePullToSync } from './usePullToSync.ts';
+import { useBackClose } from './useBackClose.ts';
 import {
   DeckStore,
   addToDeck,
@@ -473,6 +474,19 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   // flash: "saved" that vanishes is indistinguishable from nothing happening.
   const [savedToPc, setSavedToPc] = useState('');
   const [problem, setProblem] = useState('');
+  /**
+   * Run a tap's work and show its failure on this screen.
+   *
+   * The deck's buttons were `void doIt()` with nothing to catch what went
+   * wrong, so a save or an add that failed simply did nothing -- the free
+   * deck limit, a storage error, all silent.
+   */
+  const act = useCallback(
+    (what: string, work: () => Promise<unknown>) => {
+      void work().catch(reporting(what, setProblem));
+    },
+    [],
+  );
   const [browsing, setBrowsing] = useState(false);
   /**
    * The scanner, open inside this deck.
@@ -483,6 +497,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * sometimes the other would need reading before it could be used.
    */
   const [scanning, setScanning] = useState(false);
+  useBackClose(scanning, () => setScanning(false));
   // Which half the grid and the +/- act on. The text box always shows
   // both, because that is what a decklist IS.
   const [zone, setZone] = useState<'main' | 'side'>('main');
@@ -516,6 +531,10 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * reliably record it.
    */
   const [record, setRecord] = useState<DeckRecord | null>(null);
+  // The result just logged, so a mis-tap can be taken back. forgetGame
+  // existed (offline, and told to the PC) with no button anywhere, so a
+  // Win tapped for a Loss was permanent on the phone.
+  const [lastGame, setLastGame] = useState<{ uid: string; result: string } | null>(null);
   const [logging, setLogging] = useState('');
   /**
    * Which sections are folded away.
@@ -649,7 +668,8 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       setLogging(result);
       setProblem('');
       try {
-        await state.logGame(deckId, result);
+        const uid = await state.logGame(deckId, result);
+        setLastGame({ uid, result });
         setRecord(await decks.recordFor(deckId));
       } catch (err) {
         setProblem(
@@ -667,6 +687,18 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
     },
     [state, decks, deckId],
   );
+
+  const undoGame = useCallback(async () => {
+    if (!lastGame) return;
+    setProblem('');
+    try {
+      await state.forgetGame(deckId, lastGame.uid);
+      setLastGame(null);
+      setRecord(await decks.recordFor(deckId));
+    } catch (err) {
+      reporting('taking the result back', setProblem)(err);
+    }
+  }, [state, decks, deckId, lastGame]);
 
   /**
    * The colours this deck may play.
@@ -804,19 +836,19 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
    * name still means "any printing", which is what it always meant.
    */
   const change = useCallback(
-    async (card: string | DeckEntry, delta: 1 | -1) => {
+    async (card: string | DeckEntry, delta: 1 | -1, count = 1) => {
       if (!deck) return;
       const edit = delta > 0 ? addToDeck : removeFromDeck;
       const next: Deck =
         zone === 'side'
           ? {
               ...deck,
-              sideboard: edit(deck.sideboard ?? [], card),
+              sideboard: edit(deck.sideboard ?? [], card, count),
               updated_at: new Date().toISOString(),
             }
           : {
               ...deck,
-              decklist: edit(deck.decklist, card),
+              decklist: edit(deck.decklist, card, count),
               updated_at: new Date().toISOString(),
             };
       await state.saveDeck(next);
@@ -828,7 +860,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
   );
 
   const add = useCallback(
-    (card: string | DeckEntry) => change(card, 1),
+    (card: string | DeckEntry, count = 1) => change(card, 1, count),
     [change],
   );
 
@@ -985,7 +1017,9 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
       return;
     }
     setShowAnalysis(true);
-    await ana.run(deckInput);
+    // A run that fails leaves nothing to show; left open, the sheet popped
+    // up by itself later on the next deck that had a cached analysis.
+    if (!(await ana.run(deckInput))) setShowAnalysis(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deckInput, ana.analysis, thinking]);
 
@@ -1026,11 +1060,15 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
         state={state}
         deck={{
           name: deck?.name ?? 'this deck',
-          onCard: async (slot) => {
+          onCard: async (slot, added) => {
             // Through the same edit the browser and the text box use,
             // so a scanned card is a deck slot like any other and the
             // deck/board toggle still decides where it lands.
-            await add(slot);
+            //
+            // As many as were filed. With "How many" at 10 the scanner
+            // filed ten into the collection and the deck gained one,
+            // because the count was dropped here.
+            await add(slot, Math.max(1, added || slot.qty || 1));
           },
         }}
         onClose={() => setScanning(false)}
@@ -1155,7 +1193,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                 styles.formatOption,
                 deck?.format === f.value && styles.formatOptionOn,
               ]}
-              onPress={() => void changeFormat(f.value)}
+              onPress={() => act('changing the format', () => changeFormat(f.value))}
             >
               <Text style={styles.formatOptionText}>{f.label}</Text>
               <Text style={styles.formatSize}>{f.size}</Text>
@@ -1243,7 +1281,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                   </Text>
                 </Pressable>
                 <Pressable style={styles.commanderBtn}
-                           onPress={() => void clearCommander()}>
+                           onPress={() => act('clearing the commander', clearCommander)}>
                   <Text style={styles.commanderBtnText}>Clear</Text>
                 </Pressable>
               </View>
@@ -1365,6 +1403,13 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
           </Pressable>
         ))}
       </View>
+      {lastGame ? (
+        <Pressable onPress={() => void undoGame()} hitSlop={8}>
+          <Text style={styles.undoGame}>
+            Logged a {lastGame.result}  ·  Undo
+          </Text>
+        </Pressable>
+      ) : null}
 
       {/* Over the line, not blocked at it. Half of deckbuilding is holding
           a pile that is not legal yet. */}
@@ -1456,11 +1501,11 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
                   key={entryKey(entry)}
                   style={styles.tile}
                   onPress={() => {
-                    if (pickingArt) return void chooseCover(entry);
-                    if (pickingCommander) return void chooseCommander(entry);
-                    return void add(entry);
+                    if (pickingArt) return act('choosing the picture', () => chooseCover(entry));
+                    if (pickingCommander) return act('choosing the commander', () => chooseCommander(entry));
+                    return act('adding it', () => add(entry));
                   }}
-                  onLongPress={() => void drop(entry)}
+                  onLongPress={() => act('taking it out', () => drop(entry))}
                 >
                   <Image
                     source={artSource(facts?.printing_id ?? '', 'small')}
@@ -1533,7 +1578,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             A line with a set and number — 1 Sol Ring (CMM) 410 — means that
             exact printing. A bare name means any of them.
           </Text>
-          <Pressable style={styles.primary} onPress={save}>
+          <Pressable style={styles.primary} onPress={() => act('saving the deck', save)}>
             <Text style={styles.primaryText}>Save deck</Text>
           </Pressable>
         </>
@@ -1660,6 +1705,7 @@ export function DeckScreen({ state, decks, deckId, onBack }: Props) {
             analysis={ana.analysis}
             running={thinking}
             onBracket={(t) => void ana.bracket(t)}
+            bracketErrors={ana.bracketErrors}
             onClose={() => setShowAnalysis(false)}
           />
         ) : null}
@@ -1936,7 +1982,8 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 8,
-  },
+  },
+  undoGame: { color: '#4a90e2', fontSize: 13, marginTop: -4, marginBottom: 6 },
   recordText: {
     color: '#68d391',
     fontSize: 14,

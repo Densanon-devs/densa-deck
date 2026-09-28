@@ -34,7 +34,7 @@ import {
 } from 'react-native';
 
 import type { AppState } from '../lib/app-state.ts';
-import { DeckStore, parseDecklist } from '../lib/decks.ts';
+import { DeckStore, deckZonesFromText } from '../lib/decks.ts';
 import type { Deck } from '../lib/decks.ts';
 import type {
   BuiltDeck,
@@ -122,7 +122,9 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   const analyse = useCallback(
     async (deck: DeckInput) => {
       setShowAnalysis(true);
-      await ana.run(deck);
+      // A run that fails leaves nothing to show; left open, the sheet popped
+      // up by itself later on the next deck that had a cached analysis.
+      if (!(await ana.run(deck))) setShowAnalysis(false);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state],
@@ -143,13 +145,12 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
         Object.entries(detail.decklist ?? {})
           .map(([name, qty]) => `${qty} ${name}`)
           .join('\n');
-      const { cards, sideboard } = parseDecklist(text);
       const copy: Deck = {
         deck_id: uuid(),
         name: `${detail.name || detail.deck_id} (from PC)`,
         format: detail.format || '',
-        decklist: cards,
-        sideboard,
+        // The commander zone too: it was dropped here.
+        ...deckZonesFromText(text),
         notes: '',
         updated_at: new Date().toISOString(),
       };
@@ -176,14 +177,13 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
   /** Keep a built deck as a deck on this phone, so it can be edited. */
   const keepBuilt = useCallback(async () => {
     if (!built) return;
-    const { cards, sideboard } = parseDecklist(built.decklist_text);
     const shelf = shelves.find((c) => c.collection_uid === pickedShelf);
     const deck: Deck = {
       deck_id: uuid(),
       name: `${shelf?.name ?? 'Collection'} deck`,
       format: built.format,
-      decklist: cards,
-      sideboard,
+      // With its commander, which the builder wrote under its own header.
+      ...deckZonesFromText(built.decklist_text),
       notes: '',
       updated_at: new Date().toISOString(),
     };
@@ -297,7 +297,9 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
           <View style={styles.row}>
             <Pressable
               style={[styles.secondary, styles.grow]}
-              onPress={() => void keepBuilt()}
+              // Caught: at the free deck limit saveDeck says so, and that
+              // message used to go nowhere -- the button just did nothing.
+              onPress={() => void keepBuilt().catch(reporting('keeping the deck', setProblem))}
             >
               <Text style={styles.secondaryText}>Keep as a deck</Text>
             </Pressable>
@@ -392,6 +394,7 @@ export function PcDecksScreen({ state, decks, onOpenLocal }: Props) {
           analysis={ana.analysis}
           running={thinking}
           onBracket={(t) => void ana.bracket(t)}
+          bracketErrors={ana.bracketErrors}
           onClose={() => setShowAnalysis(false)}
         />
       ) : null}
@@ -474,7 +477,7 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 11,
     lineHeight: 16,
-  },
+  },
 });
 
 /** A PC deck as the analysis sees it: cached under its PC id. */
