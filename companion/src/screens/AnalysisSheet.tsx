@@ -8,12 +8,12 @@
 
 import React, { useState } from 'react';
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Modal, Pressable, ScrollView, Share, StyleSheet, Text, View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  analysisView, bracketView, BRACKETS, comboLines, gauntletView, goldfishView,
+  analysisView, bracketView, BRACKETS, comboLines, gauntletView, goldfishView, rule0View,
   type Bar, type ComboLine, type Tone,
 } from '../lib/analysis-view.ts';
 import type { DeckAnalysis, Part } from '../lib/deck-analysis.ts';
@@ -44,6 +44,7 @@ export function AnalysisSheet({
   const gauntlet = gauntletView(r.gauntlet);
   const combos = comboLines(r.combos, 'combos');
   const near = comboLines(r.nearMiss, 'near_combos');
+  const table = rule0View(r.rule0);
   const [target, setTarget] = useState('');
   const fit = target ? bracketView(analysis.brackets[target]) : null;
   const status = (part: Part) => ({
@@ -209,6 +210,34 @@ export function AnalysisSheet({
               near.length ? (
                 <More items={near} render={(c) => <ComboRow key={c.cards.join('+')} line={c} />} />
               ) : <Text style={styles.small}>Nothing is one card from a combo.</Text>
+            ) : null}
+          </PartSection>
+
+          {/* What to tell the table before the game. The phone could ask the
+              PC for this worksheet all along and never showed it. */}
+          <PartSection title="Rule 0 — for the table" {...status('rule0')}>
+            {table ? (
+              <>
+                {table.headline ? <Text style={styles.grade}>{table.headline}</Text> : null}
+                {table.facts.map((f) => (
+                  <Text key={f.label} style={styles.text}>
+                    <Text style={styles.small}>{f.label}: </Text>{f.value}
+                  </Text>
+                ))}
+                {table.notable.length ? (
+                  <Text style={styles.small}>Worth mentioning: {table.notable.join(', ')}</Text>
+                ) : null}
+                {table.combos.map((c) => <Bullet key={c} mark="∞" colour={TONE.ok} text={c} />)}
+                {table.notes.map((t) => <Bullet key={t} mark="•" colour="#8a8f9c" text={t} />)}
+                {table.text ? (
+                  <Pressable
+                    style={styles.shareBtn}
+                    onPress={() => void Share.share({ message: table.text }).catch(() => undefined)}
+                  >
+                    <Text style={styles.shareText}>Share with the table</Text>
+                  </Pressable>
+                ) : null}
+              </>
             ) : null}
           </PartSection>
 
@@ -509,4 +538,10 @@ const styles = StyleSheet.create({
   chipText: { color: '#c9ced9', fontSize: 13 },
   chipTextOn: { color: '#e4e6eb', fontWeight: '700' },
   footer: { color: '#8a8f9c', fontSize: 12, textAlign: 'center', marginTop: 4 },
+  shareBtn: {
+    alignSelf: 'flex-start', marginTop: 6,
+    borderColor: '#4a90e2', borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 7,
+  },
+  shareText: { color: '#9cc9ef', fontWeight: '600' },
 });

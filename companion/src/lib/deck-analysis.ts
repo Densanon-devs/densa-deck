@@ -19,8 +19,11 @@ import { ProRequired } from './client.ts';
 export const ANALYSIS_CACHE_VERSION = 1;
 
 /** The parts, in the order the sheet shows them. */
-export type Part = 'basic' | 'combos' | 'nearMiss' | 'goldfish' | 'gauntlet';
-export const PARTS: Part[] = ['basic', 'combos', 'nearMiss', 'goldfish', 'gauntlet'];
+export type Part = 'basic' | 'combos' | 'nearMiss' | 'goldfish' | 'gauntlet' | 'rule0';
+// rule0 was added later. An analysis cached before it simply lacks the
+// part, and refreshMissing fetches it on the next open -- no cache version
+// bump, no stats thrown away.
+export const PARTS: Part[] = ['basic', 'combos', 'nearMiss', 'goldfish', 'gauntlet', 'rule0'];
 
 export interface DeckAnalysis {
   v: number;
@@ -42,6 +45,7 @@ export interface AnalysisApi {
   goldfish(text: string, name: string, format?: string): Promise<unknown>;
   gauntlet(text: string, name: string, format?: string): Promise<unknown>;
   bracketFit(text: string, target: string): Promise<unknown>;
+  rule0(text: string): Promise<unknown>;
 }
 
 export interface CacheIo {
@@ -165,6 +169,7 @@ export async function runAnalysis(
     run('nearMiss', () => api.nearMissCombos(text)),
     run('goldfish', () => api.goldfish(text, name, format)),
     run('gauntlet', () => api.gauntlet(text, name, format)),
+    run('rule0', () => api.rule0(text)),
   ]);
   a.at = new Date().toISOString();
   return a;
@@ -207,6 +212,7 @@ export async function refreshMissing(
     nearMiss: () => api.nearMissCombos(text),
     goldfish: () => api.goldfish(text, name, format),
     gauntlet: () => api.gauntlet(text, name, format),
+    rule0: () => api.rule0(text),
   };
   await Promise.all(wanted.map(async (p) => {
     try {

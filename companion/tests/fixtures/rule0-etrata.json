@@ -1,0 +1,25 @@
+{
+ "deck_name": "Deck",
+ "archetype": "stax",
+ "color_identity": "BU",
+ "power_overall": 5.7,
+ "power_tier": "focused",
+ "bracket": "3-optimized",
+ "avg_kill_turn": 0.0,
+ "fastest_kill_turn": 0,
+ "interaction_count": 18,
+ "interaction_density": "heavy",
+ "combo_lines": [],
+ "notable_cards": [
+  "Etrata, Deadly Fugitive",
+  "Lazav, Familiar Stranger",
+  "Lazav, Wearer of Faces",
+  "Lazav, the Multifarious",
+  "Ramses, Assassin Lord"
+ ],
+ "pre_game_notes": [],
+ "land_count": 36,
+ "ramp_count": 4,
+ "draw_count": 9,
+ "rendered_text": "Deck:            Deck\nColors:          BU\nArchetype:       stax\nPower:           5.7/10 (focused)\nBracket:         3-optimized\nLands / Ramp:    36 / 4\nCard draw:       9\nInteraction:     18 (heavy)\nNotable cards:\n  - Etrata, Deadly Fugitive\n  - Lazav, Familiar Stranger\n  - Lazav, Wearer of Faces\n  - Lazav, the Multifarious\n  - Ramses, Assassin Lord\n"
+}

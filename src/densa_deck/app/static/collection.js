@@ -964,9 +964,13 @@
         </div>`).join("")}
       <p class="subtle">${escape((d.set_code || "").toUpperCase())} ${escape(d.rarity || "")}</p>
       ${legal ? `<p class="subtle">Legal: ${legal}</p>` : ""}
-      ${d.scryfall_url ? `<p><a href="${escape(d.scryfall_url)}" target="_blank" rel="noreferrer">Rulings and printings on Scryfall</a></p>` : ""}
+      <p class="card-detail-links">
+        ${d.scryfall_url ? `<a href="${escape(d.scryfall_url)}" target="_blank" rel="noreferrer">Printings on Scryfall</a>` : ""}
+        <a href="#" id="card-buy-link">Buy on TCGplayer</a>
+      </p>
       <p class="subtle card-detail-credit">Card images and data from Scryfall.
         Not affiliated with Wizards of the Coast.</p>
+      <div id="card-rulings"></div>
       <div id="card-price-history"></div>
       <div id="card-synergy" class="card-synergy"></div>`;
 
@@ -974,12 +978,61 @@
     // shown nowhere. Drawn before the synergy panel because it is about the
     // printing on screen rather than about the deck.
     void renderPriceHistory(printingId, cardName || d.name || "");
+    void renderRulings(cardName || d.name || "");
+
+    // A buy link that was built for the Build tab's pricing panel and never
+    // wired to anything: the card view is where you decide to buy one.
+    const buy = e("card-buy-link");
+    if (buy) buy.addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      try {
+        const r = await callApi("tcgplayer_url_for_card", cardName || d.name || "");
+        if (r && r.tcgplayer_url) await callApi("open_external", r.tcgplayer_url);
+      } catch (err) {
+        toast("Could not open TCGplayer: " + err.message, "warn");
+      }
+    });
 
     // Loaded AFTER the card text is on screen, and never awaited by it. The
     // synergy report parses a decklist and walks the combo cache; making the
     // art and the rules text wait on that would turn a fast panel into a
     // slow one for the sake of a section further down.
     void renderSynergy(cardName || d.name || "");
+  }
+
+  /**
+   * The card's official rulings, when they have been downloaded.
+   *
+   * Settings has always offered the rulings download (~5 MB) and nothing
+   * ever showed them. Not downloaded: a one-line pointer, not silence.
+   */
+  async function renderRulings(cardName) {
+    const host = e("card-rulings");
+    if (!host || !cardName) return;
+    let r;
+    try {
+      r = await callApi("get_card_rulings", cardName);
+    } catch (err) {
+      return;                      // a card view is not worth breaking over
+    }
+    if (!r || !r.installed) {
+      host.innerHTML = `<p class="subtle">Official rulings: download them once in
+        <strong>Settings &rarr; Official rulings</strong> to see them here.</p>`;
+      return;
+    }
+    const rows = r.rulings || [];
+    if (!rows.length) {
+      host.innerHTML = `<p class="subtle">No official rulings for this card.</p>`;
+      return;
+    }
+    host.innerHTML = `
+      <div class="card-rulings">
+        <h4>Rulings (${rows.length})</h4>
+        ${rows.map(x => `
+          <p class="card-ruling"><span class="subtle">${escape(x.published_at || "")}</span>
+            ${escape(x.comment || "")}</p>`).join("")}
+        ${r.attribution ? `<p class="subtle card-detail-credit">${escape(r.attribution)}</p>` : ""}
+      </div>`;
   }
 
   /**

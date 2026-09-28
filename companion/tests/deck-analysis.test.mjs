@@ -14,16 +14,17 @@ import { describe, test } from 'node:test';
 import { ProRequired } from '../src/lib/client.ts';
 import {
   addBracket, cacheKey, clearCached, deckSignature, readCached,
-  refreshMissing, runAnalysis, writeCached,
+  PARTS, refreshMissing, runAnalysis, writeCached,
 } from '../src/lib/deck-analysis.ts';
 import {
-  bracketView, comboLines, gauntletView, goldfishView,
+  bracketView, comboLines, gauntletView, goldfishView, rule0View,
 } from '../src/lib/analysis-view.ts';
 
 const fixture = (name) => JSON.parse(
   readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf-8'));
 const BASIC = fixture('analysis-etrata.json');
 const PRO = fixture('analysis-etrata-pro.json');
+const RULE0 = fixture('rule0-etrata.json');
 
 const DECK = 'Commander:\n1 Etrata, the Silencer\n\nMainboard:\n1 Sol Ring\n35 Island\n';
 
@@ -48,6 +49,7 @@ function fakeApi({ pro = true, failing = [] } = {}) {
     goldfish: proOnly('goldfish', PRO.goldfish),
     gauntlet: proOnly('gauntlet', PRO.gauntlet),
     bracketFit: async (_t, target) => ({ ...PRO.bracket, target_label: target }),
+    rule0: answer('rule0', RULE0),
   };
 }
 
@@ -97,7 +99,7 @@ describe('running it', () => {
     await runAnalysis(fakeApi(), DECK, 'Etrata', 'sig',
                       (a) => seen.push(Object.keys(a.results).length));
     assert.equal(seen[0], 1);
-    assert.equal(seen.at(-1), 5);
+    assert.equal(seen.at(-1), PARTS.length);
   });
 
   test('one part failing does not blank the rest', async () => {
@@ -245,5 +247,36 @@ describe('the deck is analysed as its own format', () => {
     }
     await runAnalysis(api, DECK, 'E', 'sig', () => {}, 'modern');
     assert.deepEqual(seen.sort(), [['analyze', 'modern'], ['gauntlet', 'modern'], ['goldfish', 'modern']]);
+  });
+});
+
+describe('Rule 0, for the table', () => {
+  test('it is part of every analysis, free included', async () => {
+    const a = await runAnalysis(fakeApi({ pro: false }), DECK, 'E', 's', () => {});
+    assert.ok(a.results.rule0, 'the worksheet never reached the phone');
+    assert.ok(!a.locked.includes('rule0'), 'Rule 0 is free on the desktop');
+  });
+
+  test('an analysis cached before Rule 0 existed fetches it on the next open', async () => {
+    // No cache version bump: the stats already saved are kept, and only the
+    // missing part is asked for.
+    const old = await runAnalysis(fakeApi(), DECK, 'E', 's', () => {});
+    delete old.results.rule0;
+    const api = fakeApi();
+    const now = await refreshMissing(api, DECK, 'E', old, () => {});
+    assert.deepEqual(api.calls, ['rule0']);
+    assert.ok(now.results.rule0);
+    assert.deepEqual(now.results.goldfish, old.results.goldfish);
+  });
+
+  test('it reads as the table would hear it, from a real worksheet', () => {
+    const v = rule0View(RULE0);
+    assert.match(v.headline, /^Bracket 3 \(Optimized\)/);
+    assert.match(v.headline, /power 5\.7, focused/);
+    assert.ok(v.facts.some((f) => f.label === 'Interaction' && /heavy/.test(f.value)));
+    assert.ok(v.notable.length > 0);
+    assert.ok(v.text.includes('Bracket'), 'nothing to share');
+    assert.equal(rule0View({}), null);
+    assert.equal(rule0View({ ok: false, error: 'x' }), null);
   });
 });

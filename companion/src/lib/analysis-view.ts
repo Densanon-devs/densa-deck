@@ -400,3 +400,53 @@ export function bracketView(raw: unknown): BracketView | null {
     recommendations: list<string>(b.recommendations).map(str).filter(Boolean),
   };
 }
+
+// ---------------------------------------------------------------- rule 0
+
+export interface Rule0View {
+  headline: string;              // "Bracket 3 (Optimized) - power 5.7, focused"
+  facts: Array<{ label: string; value: string }>;
+  notable: string[];
+  combos: string[];
+  notes: string[];
+  text: string;                  // the worksheet as plain text, for sharing
+}
+
+/**
+ * The pre-game conversation, as the table will hear it.
+ *
+ * Built from the desktop's Rule 0 worksheet (`build_rule0_worksheet`),
+ * which the phone could ask for all along and never showed.
+ */
+export function rule0View(raw: unknown): Rule0View | null {
+  const r = obj(raw);
+  if (!Object.keys(r).length || (r.ok === false)) return null;
+  const bracketLabel = str(r.bracket);
+  const bracket = BRACKETS.find((b) => b.label === bracketLabel);
+  const power = num(r.power_overall);
+  const headline = [
+    bracket ? `Bracket ${bracketLabel.split('-')[0]} (${bracket.name})` : bracketLabel,
+    power ? `power ${power.toFixed(1)}${r.power_tier ? `, ${str(r.power_tier)}` : ''}` : '',
+  ].filter(Boolean).join(' \u00b7 ');
+  const facts: Rule0View['facts'] = [];
+  if (r.archetype) facts.push({ label: 'Plays as', value: sentence(str(r.archetype)) });
+  if (r.color_identity) facts.push({ label: 'Colours', value: str(r.color_identity) });
+  if (r.interaction_count !== undefined) {
+    facts.push({
+      label: 'Interaction',
+      value: `${num(r.interaction_count)}${r.interaction_density ? ` (${str(r.interaction_density)})` : ''}`,
+    });
+  }
+  if (num(r.fastest_kill_turn) > 0) {
+    facts.push({ label: 'Can win by', value: `turn ${num(r.fastest_kill_turn)}` });
+  }
+  return {
+    headline,
+    facts,
+    notable: list<string>(r.notable_cards).map(str).filter(Boolean),
+    combos: list<unknown>(r.combo_lines).map((c) =>
+      typeof c === 'string' ? c : str(obj(c).short_label || obj(c).label)).filter(Boolean),
+    notes: list<string>(r.pre_game_notes).map(str).filter(Boolean),
+    text: str(r.rendered_text),
+  };
+}
