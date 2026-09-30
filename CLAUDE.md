@@ -3,14 +3,16 @@
 Commercial MTG deck analysis platform. Two halves that ship separately:
 
 * **Desktop** (`src/densa_deck/`) — the engine, the analysis, the licence.
-  **0.7.0**, built and installed 2026-09-24, at
-  `G:\My Drive\Densanon LLC\DensaDeck\DensaDeck-Desktop-0.7.0-windows.zip`.
-  NOT yet cut as a GitHub Release and the version manifest is NOT bumped —
-  both of those publish to customers and are a deliberate manual step.
+  **0.7.0, RELEASED 2026-09-29**: GitHub Release `v0.7.0` (Setup exe + zip),
+  and the update feed `toolkit.densanon.com/densa-deck-version.json` points at
+  it. How to cut the next one: `RELEASE.md` (authoritative).
 * **Android companion** (`companion/`) — an Expo/React Native app that is a
   real product in its own right, not a remote control. Offline-first: it
   holds its own copy of the card index, scans and identifies cards with no
-  PC, and builds decks. **0.57.0 / versionCode 137.** Branch
+  PC, and builds decks. **0.63.0 / versionCode 143, RELEASED 2026-09-29** as
+  GitHub Release `companion-v0.63.0` with feed
+  `densa-deck-mobile-version.json`; 0.63.0 is the first build that checks it.
+  Branch
   `feature/companion-app`, dropped to the same Drive folder.
 * **Guide** — `toolkit.densanon.com/densa-deck-help.html`, everything both
   halves do with each entry tagged Free / Needs a PC / Pro. Settings links
@@ -174,10 +176,12 @@ Tier detection order: `MTG_ENGINE_TIER` env var → saved license file → `conf
 - **Product page:** `toolkit.densanon.com/densa-deck.html`
 - **Success page:** `toolkit.densanon.com/densa-deck-success.html`
 - **Version manifest:** `toolkit.densanon.com/densa-deck-version.json`
-- **Binary release:** GitHub Release on `densanon-devs/densa-deck`, asset
-  `Densa-Deck-<version>-windows.zip` (folder mode, ~122 MB unzipped, ~65 MB
-  zipped). **0.7.0 is built and on Drive but NOT released** — cutting the
-  Release and bumping the version manifest publish to customers.
+- **Binary release:** GitHub Releases on `densanon-devs/densa-deck`, linked by
+  PINNED tag (`vX.Y.Z` desktop: Setup exe + zip; `companion-vX.Y.Z`: APK),
+  never `/releases/latest/`. Feeds in densanon-toolkit:
+  `densa-deck-version.json`, `densa-deck-mobile-version.json`. Current:
+  v0.7.0 and companion-v0.63.0 (2026-09-29). Pushing a feed is what reaches
+  customers. Full procedure: `RELEASE.md`.
 - **Desktop install on this box:** `%LOCALAPPDATA%\Programs\Densa Deck`,
   with Desktop + Start Menu shortcuts that run `densa-deck app` (the bare
   exe is the CLI and opens a console). Installed FROM the shipped zip, so
