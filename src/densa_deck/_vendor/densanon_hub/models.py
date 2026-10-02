@@ -222,6 +222,11 @@ class ModelService:
                  "n_ctx": e.get("n_ctx"), "loaded": mid == self._loaded_id}
                 for mid, e in cat.items()]}
         if op == "health":
+            # Healthy means able to answer. With nothing catalogued the first
+            # real request would fail, and a connection test should say so
+            # rather than pass and leave the user with a bare 404 later.
+            if not read_catalog(self.home):
+                raise ModelError(503, "no models are installed in any Densanon app on this PC")
             return {"status": "ok", "loaded": self._loaded_id}
         if body.get("stream"):
             raise ModelError(400, "streaming is not supported by the shared model service yet")

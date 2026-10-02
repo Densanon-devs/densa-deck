@@ -166,13 +166,26 @@ class HubMember:
             return self._set(BLOCKED, self._who_holds_port())
         if status == 200:
             self._note(reply)
+            if self.server is None:
+                # The newer hub we stepped down for is up, so the reason to
+                # hold back from the port is gone. Leaving the hold in place
+                # made a host killed soon after a takeover take five seconds
+                # to replace instead of one.
+                self._defer_bind_until = 0.0
             if self.server is None and self._newer_than(reply):
                 return self._take_over()
             return self._set(HOST if self.server else MEMBER)
         if status == 409:
             return self._set(CONFLICT, f"{self.prefix} is held by {reply.get('app', 'another app')}")
         if status is None:
-            return  # the host left between our bind attempt and now; next tick
+            # The host left between our bind attempt and now. Try the port
+            # again at once rather than a lease interval later.
+            if self.server is None and time.monotonic() >= self._defer_bind_until and self._host():
+                status, reply = self._post("register", self._lease())
+                if status == 200:
+                    self._note(reply)
+                    self._set(HOST)
+            return
         # Something answered, but not as a hub we can register with.
         self._set(BLOCKED, self._who_holds_port())
 
