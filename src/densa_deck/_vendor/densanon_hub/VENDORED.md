@@ -1,6 +1,6 @@
-# Vendored copy of densanon-hub 0.2.3
+# Vendored copy of densanon-hub 0.2.4
 
-From densanon-devs/densanon-hub at `3c163eb4457f1ac04af763392c8f16976b7dca55`.
+From densanon-devs/densanon-hub at `2268fee8daa33f6bd2d14908c3d2110ebba23d41`.
 
 Do not edit these files here. Change them upstream and re-run
 `python scripts/vendor.py <this directory's parent>` from the densanon-hub repo.

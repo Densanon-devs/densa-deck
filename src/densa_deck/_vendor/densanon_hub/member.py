@@ -252,12 +252,16 @@ class HubMember:
     def _post(self, action: str, payload: dict) -> tuple[int | None, dict]:
         """POST to the hub. Status None means nothing is listening."""
         data = json.dumps(payload).encode()
-        conn = http.client.HTTPConnection("127.0.0.1", self.hub_port, timeout=3.0)
+        # Half a second to connect, then three to answer. A loopback connect
+        # to a live hub completes in the kernel at once, busy or not (the
+        # backlog takes it), while a refused one on Windows is retried for
+        # about two seconds. Waiting that out is what made a handoff between
+        # real apps take two seconds rather than one.
+        conn = http.client.HTTPConnection("127.0.0.1", self.hub_port, timeout=0.5)
         try:
             conn.connect()
+            conn.sock.settimeout(3.0)
         except OSError:
-            # Refused, or on Windows a timeout: a refused loopback connect
-            # there is retried for a couple of seconds before it fails.
             conn.close()
             return None, {}
         try:
