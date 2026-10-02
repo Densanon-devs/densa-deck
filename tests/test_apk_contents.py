@@ -85,7 +85,7 @@ SCREENS = {
     "colour match toggle": "these colours and no others",
     # Cards reads the phone, Shared reads the PC. When they disagree the
     # screen looked simply wrong; now it says which machine it is describing.
-    "shared says whose answer it is": "Counted on your PC",
+    "shared says whose answer it is": "Counted on this phone",
     # Both sides' totals side by side. When the phone says nothing and the PC
     # says four hundred, every screen is individually right and the app still
     # looks broken; this is the only place that can say which is which.
