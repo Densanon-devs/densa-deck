@@ -307,3 +307,17 @@ describe('saving what was learned', () => {
     assert.equal(JSON.parse(store.meta.get('pairing')).token, 'other');
   });
 });
+
+describe('the QR link\'s local address', () => {
+  test('one on your own network is kept', () => {
+    const p = parsePairingUrl('http://100.64.1.2:8792/scan?t=tok&lan=http://192.168.1.20:8792');
+    assert.equal(p.lanUrl, 'http://192.168.1.20:8792');
+  });
+
+  test('one off your networks is dropped, so the token never goes there', () => {
+    const p = parsePairingUrl('http://100.64.1.2:8792/scan?t=tok&lan=http://203.0.113.9:8792');
+    assert.ok(p);
+    assert.equal(p.lanUrl, undefined);
+    assert.equal(p.baseUrl, 'http://100.64.1.2:8792');
+  });
+});

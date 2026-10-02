@@ -349,8 +349,11 @@ export function parsePairingUrl(raw: string): Pairing | null {
     // one from /health on any successful contact — including over the tunnel,
     // which is the path that always works and so is the right one to carry
     // the news.
+    // Held to the same rule as the main address, which Pair checks before
+    // saving: the probe path sends the token to whatever this names, so a
+    // link whose `lan` points off your own networks loses it here.
     const lan = url.searchParams.get('lan');
-    const lanUrl = lan ? lan.replace(/\/+$/, '') : undefined;
+    const lanUrl = lan && isAllowedHost(lan) ? lan.replace(/\/+$/, '') : undefined;
     const pairing: Pairing = lanUrl ? { baseUrl, token, lanUrl } : { baseUrl, token };
 
     // The shared Densanon hub, from desktops new enough to have joined one.

@@ -52,6 +52,7 @@ class HubMember:
         home: Path | None = None,
         on_change=None,
         tls: bool = True,
+        address_for=None,
     ):
         self.app = app
         self.prefix = prefix
@@ -62,6 +63,9 @@ class HubMember:
         self.home = home
         self.on_change = on_change
         self._tls_wanted = tls
+        # Where "lan" and "tailnet" are on this machine. Replaceable so tests
+        # and tools can stand in addresses without patching module state.
+        self._address_for = address_for or netutil.address_for
         self.role = STARTING
         self.detail = ""
         self.server: HubServer | None = None
@@ -96,10 +100,16 @@ class HubMember:
             self.server = None
         self._set(STOPPED)
 
-    def set_exposure(self, exposure) -> None:
-        """Change which networks this app answers on, effective on the next renewal."""
+    def set_exposure(self, exposure) -> bool:
+        """Change which networks this app answers on, now.
+
+        Returns True when the hub has the new exposure. False means it is not
+        part of a hub at the moment (blocked, or the host just went); the
+        next renewal carries the change anyway, so nothing needs retrying.
+        """
         self.exposure = list(exposure)
         self._tick()
+        return self.role in (HOST, MEMBER)
 
     def status(self) -> dict:
         return {
@@ -120,7 +130,7 @@ class HubMember:
             return {}
         out = {}
         for kind in self.exposure:
-            address = netutil.address_for(kind)
+            address = self._address_for(kind)
             if address:
                 out[kind] = f"http://{address}:{self.hub_port}{self.prefix}"
                 if self.tls:
@@ -200,7 +210,8 @@ class HubMember:
         }
 
     def _host(self) -> bool:
-        server = HubServer(self._secret, self.hub_port, home=self.home, tls=self._tls_wanted)
+        server = HubServer(self._secret, self.hub_port, home=self.home, tls=self._tls_wanted,
+                           address_for=self._address_for)
         try:
             server.start()
         except OSError:
