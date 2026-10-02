@@ -124,6 +124,11 @@ def _default_loader(entry: dict):
                  n_gpu_layers=entry.get("n_gpu_layers", 0), verbose=False)
 
 
+def _default_vocab_loader(path: str):
+    from llama_cpp import Llama
+    return Llama(model_path=path, vocab_only=True, verbose=False)
+
+
 def llama_available() -> bool:
     try:
         import llama_cpp  # noqa: F401
@@ -401,7 +406,7 @@ class SharedLlama:
     def __init__(self, model_id: str, model_path: str | os.PathLike, *, n_ctx: int = 4096,
                  n_gpu_layers: int = 0, app: str = "app", provide: bool = True,
                  home: Path | None = None, hub_port_: int | None = None, timeout: float = 900.0,
-                 loader=None):
+                 loader=None, vocab_loader=None):
         self._n_ctx = n_ctx
         self._home = home
         self._hub_port = hub_port_ or hub_port()
@@ -414,6 +419,16 @@ class SharedLlama:
                                        n_gpu_layers=n_gpu_layers, home=home)
         self._provider = ensure_provider(app, home=home, loader=loader) if provide else None
         self._no_hub_until = 0.0
+        # Counting tokens needs only the vocabulary. When another app holds the
+        # model, each count would otherwise be a trip through the hub (7.7 ms
+        # measured; a 2,000-line transcript took 15 s). A vocabulary-only load
+        # is exact, adds about 49 MB on the CPU build, and counts in 0.1 ms. It
+        # is made on the first count, so an app that never counts never pays.
+        if vocab_loader is None and loader is None and llama_available():
+            vocab_loader = _default_vocab_loader
+        self._vocab_loader = vocab_loader
+        self._vocab = None
+        self._vocab_lock = threading.Lock()
 
     # -- llama_cpp.Llama surface --------------------------------------------
 
@@ -424,14 +439,44 @@ class SharedLlama:
         return self._call("chat", "/v1/chat/completions", {"messages": messages or [], **kw})
 
     def tokenize(self, text: bytes, add_bos: bool = True, special: bool = False) -> list[int]:
+        vocab = self._local_vocab()
+        if vocab is not None:
+            return list(vocab.tokenize(text, add_bos=add_bos, special=special))
         out = self._call("tokenize", "/tokenize", {
             "content_b64": base64.b64encode(text).decode("ascii"),
             "add_bos": add_bos, "special": special})
         return out["tokens"]
 
     def detokenize(self, tokens) -> bytes:
+        vocab = self._local_vocab()
+        if vocab is not None:
+            return vocab.detokenize(list(tokens))
         out = self._call("detokenize", "/detokenize", {"tokens": list(tokens)})
         return base64.b64decode(out["content_b64"])
+
+    def _serving_here(self) -> bool:
+        p = self._provider
+        return p is not None and p.member is not None and p.member.role in ("host", "member")
+
+    def _local_vocab(self):
+        """The vocabulary-only tokenizer, when it is worth having.
+
+        Not when this process serves the model (the loaded model answers
+        in-process already), and never at the cost of a failure: any problem
+        loading it falls back to asking the service.
+        """
+        if self._vocab_loader is None or self._serving_here():
+            return None
+        if self._vocab is None:
+            with self._vocab_lock:
+                if self._vocab is None and self._vocab_loader is not None:
+                    try:
+                        self._vocab = self._vocab_loader(self._entry["path"])
+                    except Exception as exc:
+                        log.warning("no local tokenizer for %s: %s", self.model_id, exc)
+                        self._vocab_loader = None
+                        return None
+        return self._vocab
 
     def n_ctx(self) -> int:
         return int(read_catalog(self._home).get(self.model_id, {}).get("n_ctx") or self._n_ctx)
