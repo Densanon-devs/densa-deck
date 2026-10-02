@@ -365,8 +365,15 @@ SOM &bull; EN"></textarea>
     toast._t = setTimeout(() => t.classList.add("hidden"), 3200);
   }
 
+  // Served from the shared Densanon hub this page lives under /deck, and its
+  // API calls must go there too. The hub can also route a bare /api/ by a
+  // cookie, but that is one cookie for every app on the hub; the page's own
+  // address is the answer that cannot be overwritten. "/scan" and "/" give
+  // "", which is the direct 8791 case.
+  const BASE = location.pathname.replace(/\/(scan\/?)?$/, "");
+
   async function api(route, payload) {
-    const r = await fetch("/api/" + route, {
+    const r = await fetch(BASE + "/api/" + route, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Densa-Token": TOKEN },
       body: JSON.stringify(payload || {}),

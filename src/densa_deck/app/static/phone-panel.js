@@ -124,6 +124,9 @@
                 "<a href=\"#\" id=\"phone-ts-link\">tailscale.com/download</a></span>");
     }
 
+    const hubRow = hubLine(s.hub || bridge.hub, bridge.running);
+    if (hubRow) rows.push(hubRow);
+
     const serve = s.serve || {};
     const reachable = bridge.reachable_from_phone;
     if (!reachable && bridge.running) {
@@ -152,6 +155,34 @@
       ev.preventDefault();
       callApi("open_external", "https://tailscale.com/download").catch(() => {});
     });
+  }
+
+  // One line on the shared Densanon hub: the port every Densanon app on this
+  // PC can share. Only said while sharing, and never in warning colours --
+  // the phone works through Densa Deck's own ports whatever this says.
+  function hubLine(hub, running) {
+    if (!running || !hub) return "";
+    const port = hub.port || 8770;
+    if (hub.reachable) {
+      return "<strong>Shared Densanon hub:</strong> on, port " + escape(String(port)) +
+             " <span class=\"subtle\">— your phone can reach Densa Deck there too.</span>";
+    }
+    if (hub.role === "starting") {
+      return "<span class=\"subtle\">Shared Densanon hub: starting.</span>";
+    }
+    if (hub.role === "blocked") {
+      return "<span class=\"subtle\">Shared Densanon hub: port " + escape(String(port)) +
+             " is used by another program, so your phone uses Densa Deck's own ports.</span>";
+    }
+    if (hub.role === "conflict") {
+      return "<span class=\"subtle\">Shared Densanon hub: another app is using " +
+             "Densa Deck's place on it, so your phone uses Densa Deck's own ports.</span>";
+    }
+    if (hub.joined) {
+      return "<span class=\"subtle\">Shared Densanon hub: on, for this computer only " +
+             "(no network address).</span>";
+    }
+    return "<span class=\"subtle\">Shared Densanon hub: not in use.</span>";
   }
 
   function renderShare(s) {

@@ -48,6 +48,16 @@ mutate someone's inventory. So:
     No deletion of decks or collections, no licence, no fee model, no
     catalogue downloads. The full AppApi is never reachable from the phone;
   * it is **off by default** and stops when the desktop app closes.
+
+## The shared Densanon hub
+
+While sharing, the bridge also registers `/deck` on the Densanon hub (port
+8770, shared by every Densanon app on this PC; see `_vendor/densanon_hub`).
+The hub strips the prefix and forwards to the companion server's loopback
+listener, so `http://<pc>:8770/deck/api/...` is the same surface, under the
+same token, as `http://<pc>:8792/api/...`. The old ports stay: phones paired
+before the hub learn its address from the QR and from `/health`, and fall
+back to 8791/8792 whenever the hub is not there.
 """
 
 from __future__ import annotations
@@ -66,6 +76,13 @@ DEFAULT_PORT = 8791
 # the certificate exists for a browser API, and Android refuses a self-signed
 # one with no way to override it from JavaScript.
 COMPANION_PORT = 8792
+
+# Densa Deck's route on the shared Densanon hub (port 8770, one port for every
+# Densanon app on this PC). Joined ALONGSIDE 8791/8792, never instead of them:
+# phones paired before the hub existed only know those two ports, and they
+# keep working while they learn the hub address from the QR and /health.
+HUB_APP = "densa-deck"
+HUB_PREFIX = "/deck"
 
 # Tailscale hands out addresses in 100.64.0.0/10 (CGNAT). A listener on one of
 # those is reachable *only* by devices already authenticated onto the tailnet
@@ -238,8 +255,15 @@ class PhoneBridge:
     """Owns the loopback server and the pairing token."""
 
     def __init__(self, api, port: int = DEFAULT_PORT, use_tls: bool = True,
-                 companion_port: int = COMPANION_PORT, bind_lan: bool = True):
+                 companion_port: int = COMPANION_PORT, bind_lan: bool = True,
+                 join_hub: bool = True):
         self._api = api
+        # Also reachable through the shared Densanon hub while sharing. The
+        # member is None whenever the bridge is stopped, so nothing about the
+        # hub outlives the window either.
+        self.join_hub = bool(join_hub)
+        self.hub = None
+        self.hub_backend_port = 0
         self.port = int(port)
         self.companion_port = int(companion_port)
         self.companion_hosts: list[str] = []
@@ -281,12 +305,7 @@ class PhoneBridge:
             # effect of stopping the bridge, because "I closed the app" and "I
             # want that phone locked out" are different intentions.
             self.token = load_or_create_token()
-            bridge = self
-
-            class Handler(_PhoneHandler):
-                pass
-
-            Handler.bridge = bridge
+            Handler = self._handler_class()
 
             hosts = [BIND_HOST]
             dns_name = ""
@@ -374,7 +393,100 @@ class PhoneBridge:
                 self._threads.append(thread)
                 self.companion_hosts.append(host)
 
+            if self.join_hub:
+                self._join_hub(tailnet=any(is_tailnet_address(h) for h in hosts))
+
             return {"ok": True, **self.status()}
+
+    def _join_hub(self, *, tailnet: bool) -> None:
+        """Register `/deck` on the shared Densanon hub, or host the hub.
+
+        The hub forwards to a PLAIN loopback port, because it is the hub that
+        speaks TLS to the phone now. That is the companion server's loopback
+        listener when it bound; when 8792 was taken, a loopback-only listener
+        on a free port stands in, so losing the old port does not also cost
+        the hub route.
+
+        Exposure mirrors what this bridge already does on its own ports: the
+        LAN only when LAN binding is on and found an address, the tailnet
+        only when there is one. The hub cannot widen that.
+
+        Never fatal. If the hub cannot be joined, or another program holds
+        its port (`blocked`), the phone keeps using 8791/8792 exactly as it
+        did before the hub existed.
+        """
+        try:
+            from densa_deck import __version__
+            from densa_deck._vendor.densanon_hub import HubMember
+
+            backend = self.companion_port if BIND_HOST in self.companion_hosts else 0
+            if not backend:
+                spare = ThreadingHTTPServer((BIND_HOST, 0), self._handler_class())
+                spare.daemon_threads = True
+                thread = threading.Thread(target=spare.serve_forever, daemon=True)
+                thread.start()
+                self._servers.append(spare)
+                self._threads.append(thread)
+                backend = spare.server_address[1]
+            exposure = []
+            if self.lan_host:
+                exposure.append("lan")
+            if tailnet:
+                exposure.append("tailnet")
+            member = HubMember(HUB_APP, HUB_PREFIX, backend, exposure=exposure,
+                               app_version=__version__)
+            member.start()
+            self.hub = member
+            self.hub_backend_port = backend
+        except Exception:
+            self.hub = None
+            self.hub_backend_port = 0
+
+    def _handler_class(self):
+        """The request handler bound to this bridge, for one more listener."""
+        bridge = self
+
+        class Handler(_PhoneHandler):
+            pass
+
+        Handler.bridge = bridge
+        return Handler
+
+    def hub_status(self) -> dict:
+        """Whether a phone can reach this app through the shared hub.
+
+        `reachable` is the plain answer the panel shows. `blocked` means some
+        other program sits on the hub's port, and the phone uses Densa Deck's
+        own ports instead, which is a working setup, not a fault.
+        """
+        member = self.hub
+        if member is None:
+            return {"joined": False, "reachable": False, "role": "off",
+                    "detail": "", "port": 0, "urls": {}, "tls": False}
+        try:
+            role = member.role
+            # A member that holds the hub port is hosting, whatever its first
+            # lease said. The hub opens its LAN listener inside the first
+            # registration, and on Windows the address lookup in that bind
+            # can outlast the member's three-second wait, which it reports as
+            # `blocked` until the next renewal two seconds later. Saying
+            # "another program has the port" for that is simply wrong.
+            if role == "blocked" and getattr(member, "server", None) is not None:
+                role = "starting"
+            urls = member.urls()
+            return {
+                "joined": role in ("host", "member"),
+                # Reachable FROM A PHONE: joined, with a network address.
+                "reachable": bool(urls),
+                "role": role,
+                "detail": member.detail,
+                "port": member.hub_port,
+                "urls": urls,
+                "tls": bool(member.tls),
+            }
+        except Exception:
+            return {"joined": False, "reachable": False, "role": "error",
+                    "detail": "", "port": 0, "urls": {}, "tls": False}
 
     def stop(self) -> dict:
         """Stop serving. The pairing survives — see `unpair` to revoke it.
@@ -400,6 +512,15 @@ class PhoneBridge:
                     "unpaired": True}
 
     def _shutdown_all(self) -> None:
+        # Leave the hub first, so it stops forwarding before the listener it
+        # forwards to goes away. If this app was hosting, another Densanon
+        # app still running takes the port over within a couple of seconds.
+        member, self.hub, self.hub_backend_port = self.hub, None, 0
+        if member is not None:
+            try:
+                member.stop()
+            except Exception:
+                pass
         self.ssl_context = None
         self.cert_paths = None
         for server in self._servers:
@@ -438,6 +559,7 @@ class PhoneBridge:
             "token": self.token,
             "local_url": (f"http://{BIND_HOST}:{self.port}/scan?t={self.token}"
                           if self.token else ""),
+            "hub": self.hub_status(),
         }
 
     # -------------------------------------------------------------- routing
@@ -1111,6 +1233,24 @@ class _PhoneHandler(BaseHTTPRequestHandler):
         return self.bridge is not None and self.bridge.check_token(
             self._token_from_request())
 
+    def _peer_address(self) -> str:
+        """The phone's address, including when the shared hub relayed it.
+
+        Through the hub every request arrives from 127.0.0.1, which would
+        tell a phone it was on Wi-Fi when the tunnel carried it. The hub
+        writes the real address into X-Forwarded-For for anything from the
+        LAN or tailnet, and drops a client's own copy, so it is believed only
+        on a loopback connection that the hub marked as relayed. A direct
+        connection to 8791/8792 from the network cannot set it.
+        """
+        peer = self.client_address[0] if self.client_address else ""
+        if peer.startswith("127.") and self.headers.get(
+                "X-Densanon-Listener", "") in ("lan", "tailnet"):
+            forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            if forwarded:
+                return forwarded
+        return peer
+
     # ----------------------------------------------------------------- GET
 
     def do_GET(self):
@@ -1127,13 +1267,18 @@ class _PhoneHandler(BaseHTTPRequestHandler):
             # The caller's source address AS THIS SERVER SAW IT. The only
             # honest answer to "which path did we take": dialling a LAN URL
             # and arriving from CGNAT means the packets took the tunnel.
-            body["peer"] = self.client_address[0] if self.client_address else ""
+            body["peer"] = self._peer_address()
             token = (parse_qs(parsed.query).get("token") or [""])[0]
             if self.bridge is not None and self.bridge.check_token(token):
                 # This machine's CURRENT LAN address, so a phone whose stored
                 # one has gone stale can find its way home without re-pairing.
                 body["lan"] = self.bridge.lan_host
                 body["device"] = getattr(self.bridge, "device_name", "")
+                # Where the shared hub answers for this app, by network. Sent
+                # on every contact, through any path, for the same reason as
+                # `lan`: a phone keeps learning the hub address when the PC's
+                # address moves. Empty when the hub is not joined.
+                body["hub"] = self.bridge.hub_status().get("urls", {})
             self._json(200, body)
             return
 
@@ -1498,15 +1643,32 @@ def pairing_url(bridge_status: dict, ts: dict, serve: dict, token: str) -> str:
 
     scheme = bridge_status.get("scheme", "http")
     port = bridge_status.get("port", DEFAULT_PORT)
-    url = f"{scheme}://{host}:{port}/scan?t={token}"
+    companion_port = bridge_status.get("companion_port")
+    has_api = bool(companion_port and bridge_status.get("companion_hosts"))
+
+    # The shared Densanon hub, when this app has joined it. Its HTTPS address
+    # is preferred for the BROWSER page once the hub has a certificate: one
+    # port for every Densanon app, and the same secure context (live camera)
+    # 8791 gives. Only when `api` is also in the link, though -- a phone too
+    # old to know the hub falls back to the link's own origin when `api` is
+    # missing, and the hub's origin without `/deck` is not Densa Deck.
+    hub = bridge_status.get("hub") or {}
+    hub_urls = hub.get("urls") or {}
+    hub_page = ""
+    if hub.get("tls") and has_api:
+        preferred = ("tailnet_https", "lan_https") if tailnet else ("lan_https", "tailnet_https")
+        hub_page = next((hub_urls[k] for k in preferred if hub_urls.get(k)), "")
+    if hub_page:
+        url = f"{hub_page}/scan?t={token}"
+    else:
+        url = f"{scheme}://{host}:{port}/scan?t={token}"
 
     # The native app cannot use the TLS port: Android refuses a self-signed
     # certificate and offers no way to override it from JavaScript. Carrying
     # the plain endpoint in the SAME link means one QR code serves both the
     # web page and the app — the browser ignores the extra parameters, and
     # the app does not have to guess at port arithmetic to find its way home.
-    companion_port = bridge_status.get("companion_port")
-    if companion_port and bridge_status.get("companion_hosts"):
+    if has_api:
         url += f"&api=http://{host}:{companion_port}"
         # And the LAN address, which the app TRIES FIRST. It is a starting
         # point rather than a fact: a DHCP lease moves, and the phone
@@ -1518,6 +1680,15 @@ def pairing_url(bridge_status: dict, ts: dict, serve: dict, token: str) -> str:
         # next lease change with nothing able to tell it the new address.
         if lan:
             url += f"&lan=http://{lan}:{companion_port}"
+
+    # The hub's plain addresses for the native app, which tries them first
+    # and falls back to `lan` / `api` above. New parameters rather than a
+    # change to old ones, so a phone that predates the hub reads this link
+    # exactly as it always did.
+    if hub_urls.get("lan"):
+        url += f"&hub={hub_urls['lan']}"
+    if hub_urls.get("tailnet"):
+        url += f"&hubts={hub_urls['tailnet']}"
     return url
 
 
