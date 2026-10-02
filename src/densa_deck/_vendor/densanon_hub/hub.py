@@ -93,6 +93,7 @@ class HubServer:
         self._ssl_ctx: ssl.SSLContext | None = None
         self._tls_hosts: list[str] | None = None
         self._tls_lock = threading.Lock()
+        self._listen_lock = threading.Lock()
         self._address_for = address_for
         self._routes: dict[str, Route] = {}
         self._lock = threading.Lock()
@@ -178,6 +179,10 @@ class HubServer:
         again, and a network that only appears later, like Tailscale coming
         up after login, is picked up on the next pass.
         """
+        with self._listen_lock:
+            self._sync_listeners_locked()
+
+    def _sync_listeners_locked(self) -> None:
         with self._lock:
             wanted = set().union(*(r.exposure for r in self._routes.values()))
         changed = False
@@ -230,7 +235,9 @@ class HubServer:
             )
             self._routes[prefix] = route
         if not held or held.exposure != frozenset(exposure):
-            self._sync_listeners()
+            # Opening a listener can be slow; the registering app should not
+            # wait for it. The reaper would get there within a second anyway.
+            threading.Thread(target=self._sync_listeners, daemon=True).start()
         # idle_seconds lets an app with nothing on screen decide to exit.
         return 200, {**self.identity(), "idle_seconds": round(now - route.last_used, 1),
                      "tls": self.tls_ready}
@@ -240,7 +247,7 @@ class HubServer:
         with self._lock:
             for prefix in [p for p, r in self._routes.items() if r.app == app]:
                 del self._routes[prefix]
-        self._sync_listeners()
+        threading.Thread(target=self._sync_listeners, daemon=True).start()
         return 200, {"ok": True}
 
     def routes(self) -> list[dict]:

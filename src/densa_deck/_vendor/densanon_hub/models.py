@@ -74,28 +74,48 @@ def read_catalog(home: Path | None = None) -> dict:
 
 
 def register_model(model_id: str, path: str | os.PathLike, *, n_ctx: int = 4096,
-                   n_gpu_layers: int = 0, home: Path | None = None) -> None:
+                   n_gpu_layers: int = 0, home: Path | None = None) -> str:
     """Add a model to the shared catalog, or widen its context if it is there.
 
     Two apps can use one model with different context sizes; the service
     loads it once with the larger, which serves both.
+
+    Returns the id actually used. Ids come from file names, and two different
+    files can share a name (``analyst.gguf``). Same size is taken as the same
+    model, shipped as two copies, and shares one entry; a different size gets
+    its own id, so one app never silently loads another app's model.
     """
     cat = read_catalog(home)
+    resolved = str(Path(path).resolve())
+    held = cat.get(model_id)
+    if held and held.get("path") != resolved and Path(held["path"]).is_file():
+        if _size(held["path"]) == _size(resolved):
+            resolved = held["path"]  # the same model; keep the copy already listed
+        else:
+            model_id = f"{model_id}-{_size(resolved)}"
     before = cat.get(model_id) or {}
     entry = dict(before)
     entry.update({
-        "path": str(Path(path).resolve()),
+        "path": resolved,
         "n_ctx": max(int(n_ctx), int(entry.get("n_ctx") or 0)),
         "n_gpu_layers": int(n_gpu_layers) if "n_gpu_layers" not in before else before["n_gpu_layers"],
     })
     if before == entry:
-        return
+        return model_id
     cat[model_id] = entry
     target = _catalog_path(home)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{CATALOG}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(cat, indent=2), encoding="utf-8")
     os.replace(tmp, target)
+    return model_id
+
+
+def _size(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return -1
 
 
 def _default_loader(entry: dict):
@@ -205,6 +225,17 @@ class ModelService:
             return {"status": "ok", "loaded": self._loaded_id}
         if body.get("stream"):
             raise ModelError(400, "streaming is not supported by the shared model service yet")
+        if op in ("tokenize", "detokenize"):
+            # Tokenizing reads only the vocabulary, so it need not queue behind
+            # a generation. Apps count tokens line by line while building a
+            # prompt, and making each count wait for a long answer elsewhere
+            # would stall them. Only when the model is already resident; a
+            # load or swap still takes the lock.
+            model, loaded_id = self._model, self._loaded_id
+            if model is not None and body.get("model") in (None, loaded_id):
+                entry = read_catalog(self.home).get(loaded_id, {"n_ctx": 0})
+                self._last_used = time.monotonic()
+                return self._run(op, body, loaded_id, model, entry)
         with self._lock:
             model_id, model, entry = self._model_for(body.get("model"))
             self._last_used = time.monotonic()
@@ -366,7 +397,6 @@ class SharedLlama:
                  n_gpu_layers: int = 0, app: str = "app", provide: bool = True,
                  home: Path | None = None, hub_port_: int | None = None, timeout: float = 900.0,
                  loader=None):
-        self.model_id = model_id
         self._n_ctx = n_ctx
         self._home = home
         self._hub_port = hub_port_ or hub_port()
@@ -375,8 +405,10 @@ class SharedLlama:
         self._loader = loader or _default_loader
         self._entry = {"path": str(Path(model_path).resolve()), "n_ctx": n_ctx,
                        "n_gpu_layers": n_gpu_layers}
-        register_model(model_id, model_path, n_ctx=n_ctx, n_gpu_layers=n_gpu_layers, home=home)
+        self.model_id = register_model(model_id, model_path, n_ctx=n_ctx,
+                                       n_gpu_layers=n_gpu_layers, home=home)
         self._provider = ensure_provider(app, home=home, loader=loader) if provide else None
+        self._no_hub_until = 0.0
 
     # -- llama_cpp.Llama surface --------------------------------------------
 
@@ -405,11 +437,20 @@ class SharedLlama:
         body = {**body, "model": self.model_id}
         if "grammar" in body and not isinstance(body["grammar"], (str, type(None))):
             raise TypeError("pass the grammar as GBNF text, not a LlamaGrammar object")
-        reply = self._via_hub(path, body)
-        if reply is not None:
-            return reply
-        if self._provider is not None:
-            return self._provider.service.call(op, body)
+        provider = self._provider
+        # When this process holds /models, going out through the hub would
+        # only come straight back in.
+        if provider is not None and provider.member is not None and provider.member.role in ("host", "member"):
+            return provider.service.call(op, body)
+        if time.monotonic() >= self._no_hub_until:
+            reply = self._via_hub(path, body)
+            if reply is not None:
+                return reply
+            # A refused connect on Windows takes about two seconds; do not
+            # pay it on every call while there is no hub.
+            self._no_hub_until = time.monotonic() + 10.0
+        if provider is not None:
+            return provider.service.call(op, body)
         return self._call_local(op, body)
 
     def _via_hub(self, path: str, body: dict) -> dict | None:
@@ -425,6 +466,8 @@ class SharedLlama:
             return None
         finally:
             conn.close()
+        if not (resp.getheader("Server") or "").startswith("DensanonHub"):
+            return None  # some other program has the port
         if resp.status == 502 or (resp.status == 404 and b'"not_found"' in raw):
             return None  # no provider holds /models right now, or it just left
         try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import socketserver
 import ssl
 import sys
 from http.server import ThreadingHTTPServer
@@ -34,7 +35,14 @@ class ExclusiveServer(ThreadingHTTPServer):
     def server_bind(self):
         if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # Bind without HTTPServer.server_bind, which looks the address up with
+        # socket.getfqdn(). On a LAN address that reverse lookup took five
+        # seconds on a real machine, long enough for the app that had just won
+        # the port to time out registering with itself.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
     def finish_request(self, request, client_address):
         ctx = self.ssl_context

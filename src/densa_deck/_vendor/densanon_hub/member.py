@@ -51,6 +51,7 @@ class HubMember:
         hub_port_: int | None = None,
         home: Path | None = None,
         on_change=None,
+        tls: bool = True,
     ):
         self.app = app
         self.prefix = prefix
@@ -60,6 +61,7 @@ class HubMember:
         self.hub_port = hub_port_ or hub_port()
         self.home = home
         self.on_change = on_change
+        self._tls_wanted = tls
         self.role = STARTING
         self.detail = ""
         self.server: HubServer | None = None
@@ -149,16 +151,21 @@ class HubMember:
         # while a refused loopback connect on Windows takes about two seconds,
         # and that delay would be added to every handoff.
         if self.server is None and time.monotonic() >= self._defer_bind_until and self._host():
-            status, _ = self._post("register", self._lease())
-            return self._set(HOST if status == 200 else BLOCKED)
+            status, reply = self._post("register", self._lease())
+            if status == 200:
+                self._note(reply)
+                return self._set(HOST)
+            # We hold the port, so whatever went wrong is ours and passing:
+            # stay "starting" and register on the next tick. Reporting
+            # "blocked" here sent apps back to their own ports for nothing.
+            return
 
         status, reply = self._post("register", self._lease())
         if status == 200 and reply.get("service") != "densanon-hub":
             # Something answered 200 to anything, which is not a hub.
             return self._set(BLOCKED, self._who_holds_port())
         if status == 200:
-            self.idle_seconds = float(reply.get("idle_seconds") or 0.0)
-            self.tls = bool(reply.get("tls"))
+            self._note(reply)
             if self.server is None and self._newer_than(reply):
                 return self._take_over()
             return self._set(HOST if self.server else MEMBER)
@@ -169,6 +176,10 @@ class HubMember:
         # Something answered, but not as a hub we can register with.
         self._set(BLOCKED, self._who_holds_port())
 
+    def _note(self, reply: dict) -> None:
+        self.idle_seconds = float(reply.get("idle_seconds") or 0.0)
+        self.tls = bool(reply.get("tls"))
+
     def _lease(self) -> dict:
         return {
             "app": self.app, "prefix": self.prefix, "port": self.port,
@@ -176,7 +187,7 @@ class HubMember:
         }
 
     def _host(self) -> bool:
-        server = HubServer(self._secret, self.hub_port, home=self.home)
+        server = HubServer(self._secret, self.hub_port, home=self.home, tls=self._tls_wanted)
         try:
             server.start()
         except OSError:
