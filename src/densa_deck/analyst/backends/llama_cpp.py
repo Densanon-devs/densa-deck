@@ -34,8 +34,9 @@ class LlamaCppBackend:
 
     Lazy-loads the model on first `generate()` call so constructing the backend
     (which might happen just to answer "is PIE available?") doesn't pay the
-    model-load cost. The underlying `Llama` object is cached for the process
-    lifetime — callers pay the load once per CLI invocation.
+    model-load cost. The model is reached through the shared Densanon model
+    service (`SharedLlama`), which loads it once for every Densanon app on
+    this PC and unloads it when idle; alone, it loads in-process as before.
 
     Sampling defaults target determinism: low temperature, nucleus sampling
     disabled. Deterministic-ish output is good for the verifier/retry loop
@@ -51,6 +52,7 @@ class LlamaCppBackend:
         temperature: float = 0.2,
         seed: int = 42,
         n_gpu_layers: int = 0,
+        loader=None,
     ):
         self._model_path = Path(
             model_path
@@ -71,6 +73,9 @@ class LlamaCppBackend:
         # overrides to -1 when CUDA is available.
         self._n_gpu_layers = n_gpu_layers
         self._llama = None  # Lazy-initialised on first generate()
+        # Only for tests: stands in for llama.cpp's loader inside the shared
+        # model service, so no test ever loads a real model.
+        self._loader = loader
 
     @property
     def model_path(self) -> Path:
@@ -92,6 +97,11 @@ class LlamaCppBackend:
             prompt=prompt,
             max_tokens=max_tokens,
             temperature=self._temperature,
+            # Per call, not at load: the shared model service loads a model
+            # once for every app, so a load-time seed would be whichever app
+            # loaded it first. Passing it here is what keeps "same seed, same
+            # prompt, same output" true.
+            seed=self._seed,
             # Stop on the [OUTPUT] / [INPUT] markers so the model doesn't
             # hallucinate continued "template" exchanges after its answer.
             stop=["[INPUT]", "[OUTPUT]", "[EXAMPLE]", "[/EXAMPLE]"],
@@ -112,20 +122,35 @@ class LlamaCppBackend:
                 "Set MTG_ANALYST_MODEL or place a GGUF file at "
                 f"{DEFAULT_MODEL_PATH}."
             )
-        try:
-            from llama_cpp import Llama
-        except ImportError as e:
-            raise ImportError(
-                "llama-cpp-python is not installed. "
-                "Install with: pip install 'densa-deck[analyst]'"
-            ) from e
-        kwargs = dict(
-            model_path=str(self._model_path),
+        if self._loader is None:
+            try:
+                import llama_cpp  # noqa: F401
+            except ImportError as e:
+                raise ImportError(
+                    "llama-cpp-python is not installed. "
+                    "Install with: pip install 'densa-deck[analyst]'"
+                ) from e
+        # The shared Densanon model service rather than a private
+        # llama_cpp.Llama: one app on this PC holds one model for every
+        # Densanon app, loaded on demand and unloaded when idle, so Densa Deck
+        # and another app using a model at once cost one model's memory. With
+        # no service reachable it serves in-process, exactly as before.
+        #
+        # Built here, on first use, and not in __init__: constructing it
+        # writes the model into the shared catalogue and may start this
+        # process's model provider, neither of which "is the analyst
+        # available?" should cause.
+        #
+        # n_threads has no equivalent: thread count is a load-time option the
+        # service owns. Nothing passes it today; the argument is kept so old
+        # callers still construct.
+        from densa_deck._vendor.densanon_hub.models import SharedLlama
+
+        self._llama = SharedLlama(
+            self._model_path.stem,
+            self._model_path,
             n_ctx=self._n_ctx,
-            seed=self._seed,
-            verbose=False,
             n_gpu_layers=self._n_gpu_layers,
+            app="densa-deck",
+            loader=self._loader,
         )
-        if self._n_threads is not None:
-            kwargs["n_threads"] = self._n_threads
-        self._llama = Llama(**kwargs)

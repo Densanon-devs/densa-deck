@@ -268,6 +268,17 @@ class AppApi:
                 bridge.stop()
             except Exception:
                 pass
+        # And hand the shared model service on, if the analyst started one
+        # here. Leaving cleanly lets another Densanon app take over /models
+        # at once rather than after its lease runs out. Looked up rather
+        # than imported, so a session that never used the analyst pays nothing.
+        import sys
+        shared_models = sys.modules.get("densa_deck._vendor.densanon_hub.models")
+        if shared_models is not None:
+            try:
+                shared_models.stop_provider()
+            except Exception:
+                pass
         # Best-effort join of any live background threads. Bounded to a
         # generous-but-finite timeout so a stuck thread can't prevent the
         # app from closing — the user's Alt-F4 still wins, we just get one
@@ -4592,6 +4603,10 @@ class AppApi:
             # HTTPS — not "HTTPS is set up".
             "ready": bool(url),
             "uses_https": bool(serve.get("configured")),
+            # Whether the phone can also reach this app through the shared
+            # Densanon hub (one port for every Densanon app on this PC).
+            # Never required: the bridge's own ports work either way.
+            "hub": status.get("hub") or {},
         }
 
     @_safe

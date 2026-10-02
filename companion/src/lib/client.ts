@@ -14,7 +14,7 @@
 
 import { isApiError } from './protocol.ts';
 import type { ApiError } from './protocol.ts';
-import { checkHost } from './hosts.ts';
+import { checkHost, isAllowedHost } from './hosts.ts';
 import { Reachability, makeProbe } from './reach.ts';
 import type { Probe, Via } from './reach.ts';
 
@@ -54,11 +54,22 @@ export interface Pairing {
   token: string;
   /** Optional LAN address, tried when the tailnet is unavailable. */
   lanUrl?: string;
+  /**
+   * The same desktop through the shared Densanon hub, e.g.
+   * http://192.168.1.40:8770/deck — same `/api/...` paths, same token.
+   * Tried first; the two addresses above are the fallback. Absent from
+   * pairings made before the hub, which keep working exactly as they did.
+   */
+  hubUrl?: string;
+  /** The hub on the tailnet, e.g. http://100.64.1.2:8770/deck. */
+  hubTunnelUrl?: string;
+  /** Set when the hub failed and the desktop's own port worked. */
+  preferDirect?: boolean;
 }
 
 /** What one address did when asked. */
 export interface EndpointReport {
-  label: 'Wi-Fi' | 'Tailscale';
+  label: 'Wi-Fi' | 'Tailscale' | 'Wi-Fi (Densanon hub)' | 'Tailscale (Densanon hub)';
   url: string;
   ok: boolean;
   /** How the desktop saw this phone, which is the only honest path signal. */
@@ -71,6 +82,12 @@ export interface ClientOptions {
   fetchImpl?: typeof fetch;
   /** Overridable so tests can drive resolution without a network. */
   probe?: Probe;
+  /**
+   * Told when the addresses change — a healed LAN address, a hub address
+   * learned from /health, or which kind of address works — so the app can
+   * save them and start the next launch from what worked.
+   */
+  onPairingChange?: (pairing: Pairing) => void;
 }
 
 export class DesktopClient {
@@ -80,6 +97,7 @@ export class DesktopClient {
   private reach: Reachability;
   /** Which path the last successful call took, for the UI to show. */
   private lastVia: Via = null;
+  private onPairingChange?: (pairing: Pairing) => void;
 
   constructor(pairing: Pairing, options: ClientOptions = {}) {
     this.pairing = pairing;
@@ -87,14 +105,29 @@ export class DesktopClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
     // LAN first, tunnel when away — and the LAN address heals itself when the
     // desktop's DHCP lease moves, which it does.
+    this.onPairingChange = options.onPairingChange;
     this.reach = new Reachability(
       {
         lanUrl: pairing.lanUrl,
         tunnelUrl: pairing.baseUrl,
+        hubLanUrl: pairing.hubUrl,
+        hubTunnelUrl: pairing.hubTunnelUrl,
+        preferDirect: pairing.preferDirect,
         token: pairing.token,
       },
       options.probe ?? makeProbe(this.fetchImpl),
     );
+  }
+
+  /** The pairing as it stands now, with whatever the probes have learned. */
+  currentPairing(): Pairing {
+    const e = this.reach.current();
+    const out: Pairing = { baseUrl: this.pairing.baseUrl, token: this.pairing.token };
+    if (e.lanUrl) out.lanUrl = e.lanUrl;
+    if (e.hubLanUrl) out.hubUrl = e.hubLanUrl;
+    if (e.hubTunnelUrl) out.hubTunnelUrl = e.hubTunnelUrl;
+    if (e.preferDirect) out.preferDirect = true;
+    return out;
   }
 
   /** Which path the last call took: 'lan', 'tunnel', or null if unknown. */
@@ -108,7 +141,9 @@ export class DesktopClient {
   }
 
   async call<T>(route: string, payload: Record<string, unknown> = {}): Promise<T> {
+    const before = JSON.stringify(this.currentPairing());
     const resolved = await this.reach.resolve();
+    this.reportChange(before);
     if (!resolved.url) throw new Unreachable('No desktop address configured.');
     this.lastVia = resolved.via;
 
@@ -137,6 +172,17 @@ export class DesktopClient {
       throw new Error(data.error);
     }
     return data as T;
+  }
+
+  private reportChange(before: string): void {
+    if (!this.onPairingChange) return;
+    const now = this.currentPairing();
+    if (JSON.stringify(now) === before) return;
+    try {
+      this.onPairingChange(now);
+    } catch {
+      // Saving is a convenience for the next launch; it must never fail a call.
+    }
   }
 
   private async withTimeout(
@@ -172,14 +218,19 @@ export class DesktopClient {
    * endpoint rather than stop at the first that answers.
    */
   async diagnose(): Promise<EndpointReport[]> {
-    const { lanUrl, tunnelUrl } = this.reach.current();
-    const targets: Array<{ label: EndpointReport['label']; url?: string }> = [
+    const { lanUrl, tunnelUrl, hubLanUrl, hubTunnelUrl } = this.reach.current();
+    const targets: Array<{ label: EndpointReport['label']; url?: string; optional?: boolean }> = [
       { label: 'Wi-Fi', url: lanUrl },
       { label: 'Tailscale', url: tunnelUrl },
+      // Only reported when known: a desktop that predates the hub, or has
+      // not joined one, has no hub address, and that is not a fault.
+      { label: 'Wi-Fi (Densanon hub)', url: hubLanUrl, optional: true },
+      { label: 'Tailscale (Densanon hub)', url: hubTunnelUrl, optional: true },
     ];
 
     const reports: EndpointReport[] = [];
     for (const target of targets) {
+      if (!target.url && target.optional) continue;
       if (!target.url) {
         reports.push({
           label: target.label,
@@ -300,7 +351,18 @@ export function parsePairingUrl(raw: string): Pairing | null {
     // the news.
     const lan = url.searchParams.get('lan');
     const lanUrl = lan ? lan.replace(/\/+$/, '') : undefined;
-    return lanUrl ? { baseUrl, token, lanUrl } : { baseUrl, token };
+    const pairing: Pairing = lanUrl ? { baseUrl, token, lanUrl } : { baseUrl, token };
+
+    // The shared Densanon hub, from desktops new enough to have joined one.
+    // Absent from older links, which therefore parse exactly as before. Held
+    // to the same rule as everything that carries the token -- the tailnet,
+    // the local network or this machine -- and dropped rather than refused
+    // otherwise, since the addresses above still pair the phone.
+    const hub = url.searchParams.get('hub');
+    if (hub && isAllowedHost(hub)) pairing.hubUrl = hub.replace(/\/+$/, '');
+    const hubts = url.searchParams.get('hubts');
+    if (hubts && isAllowedHost(hubts)) pairing.hubTunnelUrl = hubts.replace(/\/+$/, '');
+    return pairing;
   } catch {
     return null;
   }

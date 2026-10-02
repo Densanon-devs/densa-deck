@@ -144,6 +144,36 @@ export async function deviceId(
 }
 
 /**
+ * Save what a running client has learned about the desktop's addresses.
+ *
+ * A healed LAN address, a hub address from /health, which kind of address
+ * worked -- so the next launch starts from what works instead of paying a
+ * timeout to rediscover it.
+ *
+ * Guarded, because it runs behind the user's back on a network callback:
+ * it writes only over the SAME pairing (same token). If the user has since
+ * chosen standalone or paired another desktop, the stored record is not
+ * this one, and putting the old address back is exactly the bug
+ * `chooseStandalone` exists to prevent.
+ */
+export async function rememberPairing(
+  store: MetaStore,
+  pairing: Pairing,
+): Promise<boolean> {
+  if (await isStandalone(store)) return false;
+  const raw = await store.getMeta(PAIRING_KEY);
+  if (!raw) return false;
+  try {
+    const stored = JSON.parse(raw) as Pairing;
+    if (!stored.token || stored.token !== pairing.token) return false;
+  } catch {
+    return false;
+  }
+  await store.setMeta(PAIRING_KEY, JSON.stringify(pairing));
+  return true;
+}
+
+/**
  * Where a phone should try to reach a desktop, best first.
  *
  * The tailnet address works from anywhere the tailnet reaches, which is the

@@ -79,6 +79,7 @@ import type {
 import { DeckStore, entryKey, resolveSlots, wishlistFromDecks } from './decks.ts';
 import type { Deck, DeckEntry, SlotFacts, WishlistRow } from './decks.ts';
 import type { Via } from './reach.ts';
+import { rememberPairing } from './pairing.ts';
 import {
   DEFAULT_COLLECTION_UID, LocalStore, SCAN_UNDECIDED, SCAN_UNREADABLE,
   scanNeedsYou, scanToSend,
@@ -2612,7 +2613,15 @@ export function buildAppState(
   // exist.
   plainFetch?: typeof fetch,
 ): AppState {
-  const client = new DesktopClient(pairing, fetchImpl ? { fetchImpl } : {});
+  const client = new DesktopClient(pairing, {
+    ...(fetchImpl ? { fetchImpl } : {}),
+    // What the probes learn -- a hub address, a moved LAN lease, which
+    // address works -- is saved, so the next launch starts from it.
+    // Fire-and-forget: a save that fails costs one slower first call later.
+    onPairingChange: (learned) => {
+      rememberPairing(store, learned).catch(() => {});
+    },
+  });
   // The engine needs the deck store to APPLY deck events; without one it
   // remembers them and does nothing, which is recoverable but means a deck
   // built on the PC never appears here.

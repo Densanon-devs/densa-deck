@@ -42,3 +42,36 @@ def _no_real_combo_bulk_download(monkeypatch):
         raise RuntimeError("bulk combo download disabled in tests")
 
     monkeypatch.setattr(combo_data, "_download_bulk", offline)
+
+
+@pytest.fixture(autouse=True)
+def _keep_tests_off_the_real_densanon_hub(tmp_path_factory, monkeypatch):
+    """Give every test its own Densanon hub home and port.
+
+    The phone bridge joins the shared hub when it starts, and the analyst's
+    model goes through the shared model service. Both read
+    `DENSANON_HUB_HOME` and `DENSANON_HUB_PORT` when used, so without this a
+    test would register routes on, or take over, the real hub on 8770 and
+    write its secret, certificate and model catalogue into the developer's
+    real `~/.densanon`. The home redirect above already moves `~`, but the
+    port is the part a running Densanon app would actually see.
+    """
+    import socket
+
+    monkeypatch.setenv("DENSANON_HUB_HOME", str(tmp_path_factory.mktemp("densanon-hub")))
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    finally:
+        probe.close()
+    monkeypatch.setenv("DENSANON_HUB_PORT", str(port))
+    yield
+    # A test that reached the analyst may have started this process's model
+    # provider, which is a process-wide singleton with a lease thread. Stop
+    # it so it cannot outlive the test, or carry one test's fake loader into
+    # the next.
+    import sys
+    shared_models = sys.modules.get("densa_deck._vendor.densanon_hub.models")
+    if shared_models is not None:
+        shared_models.stop_provider()

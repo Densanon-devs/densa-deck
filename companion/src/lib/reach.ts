@@ -29,13 +29,19 @@
 
 export type Via = 'lan' | 'tunnel' | null;
 
-/** What `/health` answers with. Both extra fields may be absent. */
+/** What `/health` answers with. Every extra field may be absent. */
 export interface Health {
   ok: boolean;
   /** Our own source address, as the desktop saw it. */
   peer?: string;
   /** The desktop's CURRENT LAN address. */
   lan?: string;
+  /**
+   * Where the shared Densanon hub answers for Densa Deck right now, by
+   * network: `http://<pc>:8770/deck`. Absent from desktops that predate the
+   * hub, and empty while the desktop has not joined one.
+   */
+  hub?: { lan?: string; tailnet?: string };
 }
 
 /**
@@ -82,6 +88,20 @@ export interface Endpoints {
   lanUrl?: string;
   /** The tailnet address, reachable from anywhere. */
   tunnelUrl?: string;
+  /**
+   * The same desktop through the shared Densanon hub (one port, 8770, for
+   * every Densanon app on the PC), on the local network and the tailnet.
+   * Tried before the two above, which stay as the fallback: the hub is only
+   * there while some Densanon app on the PC is hosting it.
+   */
+  hubLanUrl?: string;
+  hubTunnelUrl?: string;
+  /**
+   * Set once the hub failed and Densa Deck's own port answered, so the next
+   * probe does not spend a timeout on the hub first. Cleared the moment the
+   * hub answers, or the desktop reports a hub address we did not have.
+   */
+  preferDirect?: boolean;
   token: string;
 }
 
@@ -133,26 +153,41 @@ export class Reachability {
    * instead of a configuration one.
    */
   async resolve(): Promise<Resolution> {
-    const { lanUrl, tunnelUrl, token } = this.endpoints;
-    if (!lanUrl && !tunnelUrl) return { url: null, via: null };
+    const { lanUrl, tunnelUrl, hubLanUrl, hubTunnelUrl, token } = this.endpoints;
+    if (!lanUrl && !tunnelUrl && !hubLanUrl && !hubTunnelUrl) {
+      return { url: null, via: null };
+    }
 
     if (this.active && this.now() - this.active.at < CACHE_MS) {
       return { url: this.active.url, via: this.active.via };
     }
 
-    const tunnelHost = hostOf(tunnelUrl);
+    const tunnelHost = hostOf(tunnelUrl || hubTunnelUrl);
+    let hubFailed = false;
 
-    for (const url of [lanUrl, tunnelUrl]) {
-      if (!url) continue;
+    for (const candidate of this.candidates()) {
+      const { url, onLan, hub } = candidate;
       const health = await this.probe(url, token);
-      if (!health) continue;
+      if (!health) {
+        if (hub) hubFailed = true;
+        continue;
+      }
       const via = viaOf(health, url, tunnelHost);
 
-      if (url === lanUrl) {
+      // Remember which kind of address worked. The hub answering clears the
+      // preference; Densa Deck's own port answering after the hub did not
+      // sets it, so the next probe goes straight to what works.
+      if (hub) this.endpoints = { ...this.endpoints, preferDirect: false };
+      else if (hubFailed) this.endpoints = { ...this.endpoints, preferDirect: true };
+
+      // New hub addresses are worth trying, so they reset the preference.
+      const learnedHub = this.adoptHubHints(health, onLan);
+
+      if (onLan) {
         // The stored LAN address works — leave it alone. Adopting the
         // desktop's own idea of its address here would move a working
         // multi-NIC setup onto an interface we may not be able to reach.
-        this.active = { url, via, at: this.now() };
+        this.active = learnedHub ? null : { url, via, at: this.now() };
         return { url, via };
       }
 
@@ -162,12 +197,59 @@ export class Reachability {
       // Having just learned a new LAN address, drop the cache so the very
       // next call re-probes and comes home, rather than sitting on the tunnel
       // for the full window.
-      this.active = healed ? null : { url, via, at: this.now() };
+      this.active = healed || learnedHub ? null : { url, via, at: this.now() };
       return { url, via, healedLanHost: healed || undefined };
     }
 
     this.active = null;
-    return { url: lanUrl || tunnelUrl || null, via: null };
+    // Densa Deck's own ports first here: they are the addresses every
+    // desktop has, so they make the more honest "this is what failed".
+    return { url: lanUrl || tunnelUrl || hubLanUrl || hubTunnelUrl || null, via: null };
+  }
+
+  /**
+   * The addresses to try, in order. The local network before the tunnel,
+   * always; within each, the hub first unless it has just failed us.
+   */
+  private candidates(): Array<{ url: string; onLan: boolean; hub: boolean }> {
+    const { lanUrl, tunnelUrl, hubLanUrl, hubTunnelUrl, preferDirect } = this.endpoints;
+    const pair = (hubUrl: string | undefined, direct: string | undefined, onLan: boolean) => {
+      const both = [
+        { url: hubUrl, onLan, hub: true },
+        { url: direct, onLan, hub: false },
+      ];
+      return preferDirect ? both.reverse() : both;
+    };
+    return [...pair(hubLanUrl, lanUrl, true), ...pair(hubTunnelUrl, tunnelUrl, false)]
+      .filter((c): c is { url: string; onLan: boolean; hub: boolean } => !!c.url);
+  }
+
+  /**
+   * Take the hub addresses the desktop reports.
+   *
+   * The tailnet one whenever we have none, or it changed: tailnet addresses
+   * do not move on their own, so a different one is news. The LAN one when
+   * we have none, or when we did not arrive over the LAN (ours is stale) --
+   * the same rule as the plain LAN address, for the same multi-NIC reason.
+   * Only plain `http://` on a private or tailnet address, like everything
+   * else that carries the token.
+   */
+  private adoptHubHints(health: Health, arrivedOnLan: boolean): boolean {
+    const hints = health.hub || {};
+    let learned = false;
+    const lan = validHubUrl(hints.lan, isPrivateLanAddr);
+    if (lan && lan !== this.endpoints.hubLanUrl &&
+        (!this.endpoints.hubLanUrl || !arrivedOnLan)) {
+      this.endpoints = { ...this.endpoints, hubLanUrl: lan };
+      learned = true;
+    }
+    const tailnet = validHubUrl(hints.tailnet, isTunnelAddr);
+    if (tailnet && tailnet !== this.endpoints.hubTunnelUrl) {
+      this.endpoints = { ...this.endpoints, hubTunnelUrl: tailnet };
+      learned = true;
+    }
+    if (learned) this.endpoints = { ...this.endpoints, preferDirect: false };
+    return learned;
   }
 
   /**
@@ -186,6 +268,14 @@ export class Reachability {
     this.endpoints = { ...this.endpoints, lanUrl: url };
     return fresh;
   }
+}
+
+/** A hub URL the phone may use, or "": http, an allowed host, a port, a path. */
+function validHubUrl(raw: string | undefined, hostOk: (ip: string) => boolean): string {
+  const url = (raw || '').trim().replace(/\/+$/, '');
+  const match = /^http:\/\/([0-9.]+):(\d{1,5})(\/[a-z0-9-]+)$/.exec(url);
+  if (!match || !hostOk(match[1] ?? '')) return '';
+  return url;
 }
 
 function hostOf(url?: string): string {
