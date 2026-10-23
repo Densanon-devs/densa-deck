@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "densa-deck"
-version = "0.7.0"
+version = "0.7.1"
 description = "MTG deck analysis, goldfish testing, matchup simulation, and player insight engine"
 requires-python = ">=3.11"
 license = "MIT"
@@ -22,6 +22,10 @@ dev = [
 ]
 desktop = [
     "pyinstaller>=6.0",
+    # The frozen app ships certifi's cacert.pem and ignores the Windows trust
+    # store, so this pin IS the app's CA list. 2026.10.19 removed the
+    # compromised eMudhra/emSign roots (keys leaked Oct 2026).
+    "certifi>=2026.10.19",
     # GUI shell for the desktop app (Stage A). pywebview wraps a native
     # OS webview + exposes a Python API to the HTML/JS frontend. Smaller
     # than Electron (~20 MB overhead vs ~150 MB) and doesn't need a

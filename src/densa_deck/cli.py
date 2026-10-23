@@ -2350,8 +2350,12 @@ def _pull_analyst_model(model_key: str):
             f"[cyan]Downloading {model_key} (~{spec['size_mb']} MB) to {dest_file}...[/cyan]"
         )
         try:
-            # urlretrieve is simple; for nicer UX we could wire Rich Progress here.
-            urllib.request.urlretrieve(spec["url"], dest_file)
+            # Not urlretrieve: it cannot take a context, and the default one
+            # trusts the Windows ROOT store (see densa_deck/tls.py).
+            from densa_deck.tls import ssl_context
+            with urllib.request.urlopen(spec["url"], context=ssl_context()) as resp:
+                with open(dest_file, "wb") as out:
+                    shutil.copyfileobj(resp, out)
         except Exception as e:
             console.print(f"[red]Download failed: {e}[/red]")
             if dest_file.exists():
