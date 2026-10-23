@@ -43,7 +43,21 @@ def check_pyinstaller():
             print(f"  {mod:<28} {what}")
         print("Install with: pip install -e .[desktop,mcp]")
         return False
+    # The frozen app trusts the certifi bundle it ships, never Windows' store,
+    # so a stale certifi keeps distrusted CAs alive in every install until the
+    # next build. 2026.10.19 dropped the compromised eMudhra/emSign roots.
+    import certifi
+    if tuple(int(x) for x in certifi.__version__.split(".")) < _MIN_CERTIFI:
+        print(f"ERROR: certifi {certifi.__version__} is too old; need >= "
+              f"{'.'.join(map(str, _MIN_CERTIFI))}. pip install -U certifi")
+        return False
     return True
+
+
+_MIN_CERTIFI = (2026, 10, 19)
+# Root labels that must not be in the shipped cacert.pem.
+_DISTRUSTED_CA_LABELS = ("emSign ECC Root CA - G3", "emSign Root CA - C1",
+                         "emSign ECC Root CA - C3")
 
 
 _REQUIRED_OPTIONAL = [
@@ -151,6 +165,23 @@ def verify():
             print(f"    {line}")
         return False
     print("  MCP server: OK.")
+
+    # The CA bundle the frozen app actually carries.
+    bundles = list((DIST_DIR / "densa-deck").rglob("cacert.pem"))
+    if not bundles:
+        print("ERROR: no cacert.pem in the build -- TLS would fail everywhere.")
+        return False
+    from cryptography import x509  # bundled anyway (phone TLS cert)
+    for pem in bundles:
+        # Decode subjects rather than grep labels: botocore's bundle has none.
+        subjects = [c.subject.rfc4514_string()
+                    for c in x509.load_pem_x509_certificates(pem.read_bytes())]
+        bad = [label for label in _DISTRUSTED_CA_LABELS
+               if any(f"CN={label}," in subj for subj in subjects)]
+        if bad:
+            print(f"ERROR: {pem} still trusts distrusted roots: {bad}")
+            return False
+    print(f"  CA bundle: {len(bundles)} cacert.pem, no distrusted roots.")
 
     print("Binary verified successfully.")
     return True

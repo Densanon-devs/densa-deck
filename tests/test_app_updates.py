@@ -17,6 +17,8 @@ FEED = {"version": "9.9.9", "releaseDate": "2026-10-01",
         "downloadUrl": "https://github.com/Densanon-devs/densa-deck/releases/download/v9.9.9/Densa-Deck-Setup-9.9.9.exe",
         "changelog": ["x"]}
 
+_seen_contexts: list = []
+
 
 @pytest.fixture
 def api(tmp_path):
@@ -29,8 +31,9 @@ def api(tmp_path):
 def network(monkeypatch):
     calls = []
 
-    def fake_urlopen(url, timeout=None):
+    def fake_urlopen(url, timeout=None, context=None):
         calls.append(url)
+        _seen_contexts.append(context)
         return io.BytesIO(json.dumps(FEED).encode())
 
     import urllib.request
@@ -73,3 +76,18 @@ def test_the_setting_persists_and_other_prefs_are_untouched(api):
     prefs = _d(api.get_user_preferences())
     assert prefs["check_app_updates"] is False
     assert prefs["auto_check_card_db"] is True
+
+
+def test_the_check_trusts_only_the_shipped_ca_bundle(api, network):
+    # urllib's default context also loads the Windows ROOT store, which kept
+    # the compromised eMudhra intermediates reachable (Sectigo cross-sign)
+    # after certifi dropped them. The check must trust certifi alone.
+    import certifi
+    from cryptography import x509
+
+    _seen_contexts.clear()
+    api.check_for_updates_now()
+    ctx = _seen_contexts[-1]
+    assert ctx is not None
+    bundle = x509.load_pem_x509_certificates(open(certifi.where(), "rb").read())
+    assert ctx.cert_store_stats()["x509_ca"] == len(bundle)

@@ -1641,7 +1641,8 @@ class AppApi:
             return {"current": current, "latest": None,
                     "update_available": False, "disabled": True}
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            from densa_deck.tls import ssl_context
+            with urllib.request.urlopen(url, timeout=5, context=ssl_context()) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             return {
